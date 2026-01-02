@@ -1,37 +1,11 @@
 #!/usr/bin/env bash
 # Mock curl for testing
-
-source "${BATS_TEST_DIRNAME}/../test_helper.bash" 2>/dev/null || true
-[[ -n "${MOCK_CALL_LOG:-}" ]] && record_mock_call "curl" "$@"
-
-# Parse arguments
-url=""
-is_post=false
-for arg in "$@"; do
-    if [[ "$arg" == "-X" ]] || [[ "$arg" == "--request" ]]; then
-        is_post=true
-    elif [[ "$arg" =~ ^http ]]; then
-        url="$arg"
-    fi
-done
-
-# Mock health check
-if [[ "$url" =~ /health$ ]]; then
-    echo "ok"
+if [[ "$*" == *"/health"* ]]; then
+    echo "OK"
+    exit 0
+elif [[ "$*" == *"/inference"* ]]; then
+    echo '{"text":"Mock transcription"}'
+    exit 0
+else
     exit 0
 fi
-
-# Mock inference endpoint
-if [[ "$url" =~ /inference$ ]] && [[ "$is_post" == "true" ]]; then
-    # Return mock whisper response
-    cat "${BATS_TEST_DIRNAME}/../fixtures/whisper-response.json" 2>/dev/null || echo '{"text":"This is a test transcription"}'
-    exit 0
-fi
-
-# Mock server not available
-if [[ "$url" =~ http://localhost:9999 ]]; then
-    exit 1
-fi
-
-# Default success for other URLs
-exit 0
