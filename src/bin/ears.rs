@@ -4,7 +4,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ears::{AudioFeedback, Config, DeviceManager, Notifications, Recorder, State, TextInput, WhisperClient};
+use ears::{
+    AudioFeedback, Config, DeviceManager, Notifications, Recorder, State, TextInput, WhisperClient,
+};
 use std::time::Duration;
 
 #[derive(Parser)]

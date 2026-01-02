@@ -32,10 +32,7 @@ impl WhisperClient {
             .build()
             .expect("Failed to build HTTP client");
 
-        Self {
-            server_url,
-            client,
-        }
+        Self { server_url, client }
     }
 
     /// Check if the whisper server is healthy
@@ -79,10 +76,7 @@ impl WhisperClient {
             .context("Failed to send transcription request")?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
-                "Whisper server returned error: {}",
-                response.status()
-            );
+            anyhow::bail!("Whisper server returned error: {}", response.status());
         }
 
         // Parse response

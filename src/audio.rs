@@ -82,7 +82,10 @@ impl DeviceManager {
         // Handle last entry
         if is_source {
             if let (Some(name), Some(desc)) = (current_node, current_desc) {
-                devices.push(AudioDevice { name, description: desc });
+                devices.push(AudioDevice {
+                    name,
+                    description: desc,
+                });
             }
         }
 
@@ -129,11 +132,7 @@ impl DeviceManager {
         }
 
         let selection = String::from_utf8_lossy(&output.stdout);
-        let device_name = selection
-            .trim()
-            .split('\t')
-            .next()
-            .map(|s| s.to_string());
+        let device_name = selection.trim().split('\t').next().map(|s| s.to_string());
 
         Ok(device_name)
     }
