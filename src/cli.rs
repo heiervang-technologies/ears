@@ -5,6 +5,10 @@ use clap::{Parser, Subcommand};
 #[command(name = "ears")]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+    /// Launch interactive TUI mode
+    #[arg(short = 't', long = "tui")]
+    pub tui: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }

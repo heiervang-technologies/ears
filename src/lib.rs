@@ -7,6 +7,7 @@
 pub mod lock;
 pub mod process;
 pub mod state;
+pub mod tui;
 
 // Iteration 4: Whisper integration
 pub mod whisper;
