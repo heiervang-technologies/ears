@@ -1,5 +1,7 @@
+mod audio;
 mod cli;
 mod config;
+mod recording;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -39,16 +41,81 @@ fn main() -> Result<()> {
 }
 
 fn select_device() -> Result<()> {
-    // This will be implemented in Iteration 3: Audio Recording & Device Management
-    eprintln!("Device selection not yet implemented");
-    eprintln!("This functionality will be added in Iteration 3");
+    // List available devices
+    let devices = audio::list_devices().context("Failed to list audio devices")?;
+
+    if devices.is_empty() {
+        eprintln!("No audio input devices found");
+        anyhow::bail!("No audio input devices available");
+    }
+
+    // Use fzf for interactive selection
+    let selected = audio::select_device_interactive(&devices)
+        .context("Failed to run device selection")?;
+
+    let device_name = match selected {
+        Some(name) => name,
+        None => {
+            eprintln!("No device selected");
+            return Ok(());
+        }
+    };
+
+    // Find the device to get its description
+    let device = devices
+        .iter()
+        .find(|d| d.name == device_name)
+        .context("Selected device not found in list")?;
+
+    // Save to config
+    let mut config = Config::load().context("Failed to load configuration")?;
+    config.device = device_name.clone();
+    config.save().context("Failed to save configuration")?;
+
+    println!("Selected: {}", device.description);
+    println!("Device ID: {}", device_name);
+    println!("Saved to: {}", config.config_dir.join("device").display());
+
     Ok(())
 }
 
 fn list_devices() -> Result<()> {
-    // This will be implemented in Iteration 3: Audio Recording & Device Management
-    eprintln!("Device listing not yet implemented");
-    eprintln!("This functionality will be added in Iteration 3");
+    let devices = audio::list_devices().context("Failed to list audio devices")?;
+
+    if devices.is_empty() {
+        println!("No audio input devices found");
+        return Ok(());
+    }
+
+    // Format and print device list
+    let formatted = audio::format_device_list(&devices);
+
+    // Use column command to align output nicely
+    use std::process::{Command, Stdio};
+    use std::io::Write;
+
+    let child = Command::new("column")
+        .arg("-t")
+        .arg("-s")
+        .arg("\t")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn();
+
+    match child {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(formatted.as_bytes());
+            }
+            let _ = child.wait();
+        }
+        Err(_) => {
+            // If column is not available, just print the raw output
+            println!("{}", formatted);
+        }
+    }
+
     Ok(())
 }
 

@@ -155,6 +155,7 @@ dependencies = [
  "anyhow",
  "clap",
  "directories",
+ "libc",
  "serde",
  "serial_test",
  "tempfile",
