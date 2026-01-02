@@ -68,8 +68,7 @@ fn show_current() -> Result<()> {
 
 fn set_server(url_str: &str) -> Result<()> {
     // Parse and validate URL
-    let url = Url::parse(url_str)
-        .with_context(|| format!("Invalid server URL: {}", url_str))?;
+    let url = Url::parse(url_str).with_context(|| format!("Invalid server URL: {}", url_str))?;
 
     // Validate URL scheme
     if !matches!(url.scheme(), "http" | "https") {
