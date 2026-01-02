@@ -39,6 +39,7 @@ impl FileLock {
             .create(true)
             .write(true)
             .read(true)
+            .truncate(false)
             .open(&lock_path)?;
 
         Ok(Self {

@@ -45,11 +45,7 @@ impl ProcessManager {
     }
 
     /// Spawn a new pw-record process
-    pub fn spawn_recording(
-        &self,
-        device: &str,
-        output_file: &Path,
-    ) -> Result<u32, ProcessError> {
+    pub fn spawn_recording(&self, device: &str, output_file: &Path) -> Result<u32, ProcessError> {
         // Build the command
         let mut cmd = Command::new("timeout");
         cmd.arg(self.timeout.as_secs().to_string())
@@ -65,9 +61,9 @@ impl ProcessManager {
             .arg(output_file);
 
         // Spawn the process
-        let child = cmd.spawn().map_err(|e| {
-            ProcessError::SpawnFailed(format!("Failed to spawn pw-record: {}", e))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| ProcessError::SpawnFailed(format!("Failed to spawn pw-record: {}", e)))?;
 
         let pid = child.id();
 
@@ -133,9 +129,8 @@ impl ProcessManager {
     pub fn terminate(&self, pid: u32) -> Result<(), ProcessError> {
         let pid = Pid::from_raw(pid as i32);
 
-        signal::kill(pid, Signal::SIGTERM).map_err(|e| {
-            ProcessError::SignalFailed(format!("Failed to send SIGTERM: {}", e))
-        })?;
+        signal::kill(pid, Signal::SIGTERM)
+            .map_err(|e| ProcessError::SignalFailed(format!("Failed to send SIGTERM: {}", e)))?;
 
         Ok(())
     }
@@ -144,9 +139,8 @@ impl ProcessManager {
     pub fn kill(&self, pid: u32) -> Result<(), ProcessError> {
         let pid = Pid::from_raw(pid as i32);
 
-        signal::kill(pid, Signal::SIGKILL).map_err(|e| {
-            ProcessError::SignalFailed(format!("Failed to send SIGKILL: {}", e))
-        })?;
+        signal::kill(pid, Signal::SIGKILL)
+            .map_err(|e| ProcessError::SignalFailed(format!("Failed to send SIGKILL: {}", e)))?;
 
         Ok(())
     }
