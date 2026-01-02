@@ -29,9 +29,7 @@ impl Config {
         let config_dir = project_dirs.config_dir().to_path_buf();
         let state_dir = std::env::var("XDG_RUNTIME_DIR")
             .map(|p| PathBuf::from(p).join("ears"))
-            .unwrap_or_else(|_| {
-                PathBuf::from("/tmp").join(format!("ears-{}", std::process::id()))
-            });
+            .unwrap_or_else(|_| PathBuf::from("/tmp").join(format!("ears-{}", std::process::id())));
 
         Ok(Self {
             whisper_server: Url::parse("http://127.0.0.1:8178")
@@ -72,8 +70,7 @@ impl Config {
         let mut config = Self::from_env()?;
 
         // Ensure config directory exists
-        fs::create_dir_all(&config.config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(&config.config_dir).context("Failed to create config directory")?;
 
         // Load server URL if file exists
         let server_file = config.config_dir.join("server");
@@ -97,8 +94,7 @@ impl Config {
         }
 
         // Ensure state directory exists
-        fs::create_dir_all(&config.state_dir)
-            .context("Failed to create state directory")?;
+        fs::create_dir_all(&config.state_dir).context("Failed to create state directory")?;
 
         Ok(config)
     }
@@ -110,8 +106,7 @@ impl Config {
     /// - `~/.config/ears/device` for audio device name
     pub fn save(&self) -> Result<()> {
         // Ensure config directory exists
-        fs::create_dir_all(&self.config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
 
         // Save server URL
         let server_file = self.config_dir.join("server");
@@ -120,8 +115,7 @@ impl Config {
 
         // Save device
         let device_file = self.config_dir.join("device");
-        fs::write(&device_file, &self.device)
-            .context("Failed to write device config file")?;
+        fs::write(&device_file, &self.device).context("Failed to write device config file")?;
 
         Ok(())
     }

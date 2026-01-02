@@ -41,11 +41,7 @@ impl Recording {
     /// * `device` - The target audio device name (from pw-cli)
     /// * `output_file` - Path where the recording will be saved
     /// * `config` - Recording configuration (sample rate, channels, etc.)
-    pub fn start(
-        device: &str,
-        output_file: PathBuf,
-        config: RecordingConfig,
-    ) -> Result<Self> {
+    pub fn start(device: &str, output_file: PathBuf, config: RecordingConfig) -> Result<Self> {
         // Build the pw-record command
         let mut cmd = Command::new("timeout");
         cmd.arg(config.timeout_secs.to_string())
@@ -63,9 +59,7 @@ impl Recording {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let process = cmd
-            .spawn()
-            .context("Failed to start recording process")?;
+        let process = cmd.spawn().context("Failed to start recording process")?;
 
         Ok(Self {
             process,
@@ -122,8 +116,7 @@ pub fn validate_recording_file(path: &PathBuf) -> Result<()> {
         anyhow::bail!("Recording file does not exist: {}", path.display());
     }
 
-    let metadata = std::fs::metadata(path)
-        .context("Failed to read recording file metadata")?;
+    let metadata = std::fs::metadata(path).context("Failed to read recording file metadata")?;
 
     if metadata.len() == 0 {
         anyhow::bail!("Recording file is empty");
