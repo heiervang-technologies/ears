@@ -17,7 +17,12 @@ fn create_test_audio_file() -> PathBuf {
     let temp_dir = std::env::temp_dir();
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
     let thread_id = std::thread::current().id();
-    let audio_path = temp_dir.join(format!("test_audio_{}_{:?}_{}.wav", std::process::id(), thread_id, unique_id));
+    let audio_path = temp_dir.join(format!(
+        "test_audio_{}_{:?}_{}.wav",
+        std::process::id(),
+        thread_id,
+        unique_id
+    ));
 
     // Create a minimal WAV file (44 bytes header + some data)
     // This is a valid WAV file structure, though the audio data is just zeros
@@ -262,7 +267,11 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
     // Cleanup
     cleanup_test_audio_file(&audio_path);
 
-    assert!(result.is_ok(), "Expected retry to eventually succeed, got: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Expected retry to eventually succeed, got: {:?}",
+        result
+    );
     assert_eq!(result.unwrap(), "Success after retry");
 }
 
