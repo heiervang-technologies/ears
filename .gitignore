@@ -28,3 +28,9 @@ logs/
 dist/
 build/
 *.egg-info/
+
+
+# Added by cargo
+
+/target
+Cargo.lock
