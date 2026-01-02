@@ -7,9 +7,37 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
+use ears::{
+    AudioFeedback, Notifications, ProcessManager, State as StateEnum, StateManager, TextInput,
+    WhisperClient,
+};
+use std::time::Duration;
 use url::Url;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize tracing/logging
+    let config = Config::load().unwrap_or_else(|_| Config::new().expect("Failed to create config"));
+
+    // Set up debug logging to file
+    let log_file_path = config.state_dir.join("debug.log");
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::sync::Arc::new(log_file))
+            .with_ansi(false)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+    }
+
+    tracing::info!("ears started");
+
     let cli = Cli::parse();
 
     // Handle TUI flag first
@@ -35,10 +63,8 @@ fn main() -> Result<()> {
             }
         }
         None => {
-            // No command provided - this is the main toggle behavior
-            // This will be implemented in later iterations
-            eprintln!("Toggle recording/transcription - not yet implemented");
-            eprintln!("This functionality will be added in future iterations");
+            // Main toggle logic
+            handle_toggle().await?;
         }
     }
 
@@ -175,6 +201,163 @@ fn show_server() -> Result<()> {
     } else {
         println!("(using default)");
     }
+
+    Ok(())
+}
+
+/// Main toggle logic: start recording or stop and transcribe
+async fn handle_toggle() -> Result<()> {
+    let config = Config::load().context("Failed to load configuration")?;
+
+    // Create state manager
+    let mut state_mgr =
+        StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
+
+    // Load current state from disk
+    state_mgr.load_state().context("Failed to load state")?;
+
+    // Create process manager
+    let pid_file = config.state_dir.join("recording.pid");
+    let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(120));
+
+    // Clean up any stale state
+    process_mgr.cleanup_stale().ok();
+
+    // Check if we're currently recording
+    let is_recording = process_mgr.is_recording_alive().unwrap_or(false);
+
+    if is_recording {
+        stop_and_transcribe(&config, &process_mgr).await
+    } else {
+        start_recording(&config, &mut state_mgr, &process_mgr).await
+    }
+}
+
+/// Start a new recording
+async fn start_recording(
+    config: &Config,
+    state_mgr: &mut StateManager,
+    process_mgr: &ProcessManager,
+) -> Result<()> {
+    tracing::info!("Starting recording");
+
+    // Check server health
+    let client = WhisperClient::new(config.whisper_server.clone());
+    if client.health_check().await.is_err() {
+        tracing::error!("Whisper server health check failed");
+        AudioFeedback::beep_error().ok();
+        Notifications::error("Whisper server not running!").ok();
+        anyhow::bail!("Whisper server not available");
+    }
+
+    // Clean up any old audio file
+    let audio_file = config.state_dir.join("recording.wav");
+    if audio_file.exists() {
+        std::fs::remove_file(&audio_file).ok();
+    }
+
+    // Transition to Recording state
+    state_mgr
+        .transition(StateEnum::Recording)
+        .context("Failed to transition to Recording state")?;
+
+    // Start recording
+    let pid = process_mgr
+        .spawn_recording(&config.device, &audio_file)
+        .context("Failed to start recording")?;
+
+    // Play start beep
+    AudioFeedback::beep_start().ok();
+
+    tracing::info!("Recording started (PID: {})", pid);
+
+    Ok(())
+}
+
+/// Stop recording and transcribe
+async fn stop_and_transcribe(config: &Config, process_mgr: &ProcessManager) -> Result<()> {
+    tracing::info!("Stopping recording and transcribing");
+
+    // Get the PID
+    let pid = match process_mgr.read_pid()? {
+        Some(pid) => pid,
+        None => {
+            AudioFeedback::beep_error().ok();
+            Notifications::info("No active recording").ok();
+            tracing::warn!("No recording PID found");
+            return Ok(());
+        }
+    };
+
+    // Check if process is still alive
+    if !process_mgr.is_process_alive(pid) {
+        AudioFeedback::beep_error().ok();
+        Notifications::info("No active recording").ok();
+        process_mgr.cleanup_stale().ok();
+        tracing::warn!("Recording process not alive (PID: {})", pid);
+        return Ok(());
+    }
+
+    // Stop the recording process
+    process_mgr
+        .stop_recording()
+        .context("Failed to stop recording")?;
+
+    // Wait for file to be fully written
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Check if audio file exists and has content
+    let audio_file = config.state_dir.join("recording.wav");
+    if !audio_file.exists() {
+        AudioFeedback::beep_error().ok();
+        Notifications::error("Recording file is empty or missing").ok();
+        tracing::error!("Audio file not found: {}", audio_file.display());
+        anyhow::bail!("Audio file not found");
+    }
+
+    let metadata = tokio::fs::metadata(&audio_file).await?;
+    if metadata.len() == 0 {
+        AudioFeedback::beep_error().ok();
+        Notifications::error("Recording file is empty").ok();
+        std::fs::remove_file(&audio_file).ok();
+        tracing::error!("Audio file is empty");
+        anyhow::bail!("Audio file is empty");
+    }
+
+    tracing::info!("Audio file size: {} bytes", metadata.len());
+
+    // Transcribe
+    let client = WhisperClient::new(config.whisper_server.clone());
+    match client.transcribe(&audio_file).await {
+        Ok(text) if !text.is_empty() => {
+            tracing::info!("Transcription successful: {}", text);
+
+            // Type the text
+            TextInput::type_text(&text)?;
+
+            // Play success beep
+            AudioFeedback::beep_done().ok();
+        }
+        Ok(_) => {
+            // Empty transcription (silence)
+            AudioFeedback::beep_error().ok();
+            Notifications::info("No speech detected").ok();
+            tracing::info!("No speech detected");
+        }
+        Err(e) => {
+            AudioFeedback::beep_error().ok();
+            Notifications::error(&format!("Transcription failed: {}", e)).ok();
+            tracing::error!("Transcription failed: {}", e);
+
+            // Clean up audio file
+            std::fs::remove_file(&audio_file).ok();
+
+            return Err(e.into());
+        }
+    }
+
+    // Clean up audio file
+    std::fs::remove_file(&audio_file).ok();
 
     Ok(())
 }
