@@ -50,8 +50,8 @@ fn select_device() -> Result<()> {
     }
 
     // Use fzf for interactive selection
-    let selected = audio::select_device_interactive(&devices)
-        .context("Failed to run device selection")?;
+    let selected =
+        audio::select_device_interactive(&devices).context("Failed to run device selection")?;
 
     let device_name = match selected {
         Some(name) => name,
@@ -91,8 +91,8 @@ fn list_devices() -> Result<()> {
     let formatted = audio::format_device_list(&devices);
 
     // Use column command to align output nicely
-    use std::process::{Command, Stdio};
     use std::io::Write;
+    use std::process::{Command, Stdio};
 
     let child = Command::new("column")
         .arg("-t")
@@ -135,8 +135,7 @@ fn show_current() -> Result<()> {
 
 fn set_server(url_str: &str) -> Result<()> {
     // Parse and validate URL
-    let url = Url::parse(url_str)
-        .with_context(|| format!("Invalid server URL: {}", url_str))?;
+    let url = Url::parse(url_str).with_context(|| format!("Invalid server URL: {}", url_str))?;
 
     // Validate URL scheme
     if !matches!(url.scheme(), "http" | "https") {

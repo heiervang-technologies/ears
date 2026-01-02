@@ -4,6 +4,7 @@ use std::process::{Child, Command, Stdio};
 
 /// Audio recording format configuration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RecordingConfig {
     /// Sample rate in Hz (whisper.cpp prefers 16kHz)
     pub sample_rate: u32,
@@ -27,6 +28,7 @@ impl Default for RecordingConfig {
 }
 
 /// Represents an active recording session
+#[allow(dead_code)]
 pub struct Recording {
     /// The child process running pw-record
     process: Child,
@@ -41,11 +43,8 @@ impl Recording {
     /// * `device` - The target audio device name (from pw-cli)
     /// * `output_file` - Path where the recording will be saved
     /// * `config` - Recording configuration (sample rate, channels, etc.)
-    pub fn start(
-        device: &str,
-        output_file: PathBuf,
-        config: RecordingConfig,
-    ) -> Result<Self> {
+    #[allow(dead_code)]
+    pub fn start(device: &str, output_file: PathBuf, config: RecordingConfig) -> Result<Self> {
         // Build the pw-record command
         let mut cmd = Command::new("timeout");
         cmd.arg(config.timeout_secs.to_string())
@@ -63,9 +62,7 @@ impl Recording {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let process = cmd
-            .spawn()
-            .context("Failed to start recording process")?;
+        let process = cmd.spawn().context("Failed to start recording process")?;
 
         Ok(Self {
             process,
@@ -74,6 +71,7 @@ impl Recording {
     }
 
     /// Get the process ID of the recording
+    #[allow(dead_code)]
     pub fn pid(&self) -> u32 {
         self.process.id()
     }
@@ -81,6 +79,7 @@ impl Recording {
     /// Stop the recording and wait for the process to finish
     ///
     /// Returns Ok(()) if the recording was stopped successfully
+    #[allow(dead_code)]
     pub fn stop(mut self) -> Result<()> {
         // Try to kill the process gracefully
         #[cfg(unix)]
@@ -107,6 +106,7 @@ impl Recording {
     }
 
     /// Check if the recording process is still running
+    #[allow(dead_code)]
     pub fn is_running(&mut self) -> bool {
         match self.process.try_wait() {
             Ok(Some(_)) => false,
@@ -117,13 +117,13 @@ impl Recording {
 }
 
 /// Validate that a recording file exists and has content
+#[allow(dead_code)]
 pub fn validate_recording_file(path: &PathBuf) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("Recording file does not exist: {}", path.display());
     }
 
-    let metadata = std::fs::metadata(path)
-        .context("Failed to read recording file metadata")?;
+    let metadata = std::fs::metadata(path).context("Failed to read recording file metadata")?;
 
     if metadata.len() == 0 {
         anyhow::bail!("Recording file is empty");

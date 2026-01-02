@@ -144,9 +144,7 @@ pub fn select_device_interactive(devices: &[AudioDevice]) -> Result<Option<Strin
             .context("Failed to write to fzf stdin")?;
     }
 
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for fzf")?;
+    let output = child.wait_with_output().context("Failed to wait for fzf")?;
 
     if !output.status.success() {
         // User cancelled selection
