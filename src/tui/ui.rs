@@ -56,7 +56,12 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let title = Line::from(vec![
-        Span::styled("ears ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "ears ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("v1.0.0", Style::default().fg(Color::DarkGray)),
         Span::raw(" │ Status: "),
         Span::styled(status_char.to_string(), Style::default().fg(status_color)),
@@ -102,8 +107,15 @@ fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
     let text = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Current State: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(if app.is_recording { "Recording" } else { "Idle" }),
+            Span::styled(
+                "Current State: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(if app.is_recording {
+                "Recording"
+            } else {
+                "Idle"
+            }),
         ]),
         Line::from(vec![
             Span::styled("Model: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -136,7 +148,10 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
     let text = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Server URL: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Server URL: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(&app.server),
         ]),
         Line::from(""),
@@ -146,7 +161,10 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Audio Device: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Audio Device: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(&app.device),
         ]),
         Line::from(""),
