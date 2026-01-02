@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Mark Sverdhei <mark.sverdhei@heiervang.com>"]
 description = "A production-grade speech recognition daemon for Linux"
 license = "MIT"
+repository = "https://github.com/heiervang-technologies/ears"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

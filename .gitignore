@@ -29,7 +29,6 @@ dist/
 build/
 *.egg-info/
 
-
-# Added by cargo
-
-/target
+# Rust
+/target/
+Cargo.lock
