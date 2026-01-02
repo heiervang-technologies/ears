@@ -35,6 +35,7 @@ impl FileLock {
         }
 
         // Open or create the lock file
+        // We don't truncate because we just use this file for locking
         let file = OpenOptions::new()
             .create(true)
             .write(true)
