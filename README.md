@@ -1,115 +1,351 @@
-# Snail Core Template
+# ears
 
-Template repository for setting up a Snail AI agent on your GitHub repository.
+A production-grade speech recognition daemon for Linux that integrates whisper.cpp with your desktop workflow.
 
-## Quick Start
+## Features
 
-1. **Create a new repository from this template**
-   - Click the green "Use this template" button above
-   - Choose a name for your repository
-   - Click "Create repository"
+- **Push-to-talk interface**: Press once to start recording, press again to transcribe
+- **Whisper.cpp integration**: Leverages GPU-accelerated whisper.cpp server
+- **PipeWire audio**: Native support for modern Linux audio stack
+- **Configurable devices**: Easy microphone selection with fzf
+- **Audio feedback**: Beep sounds for start/stop confirmation
+- **Desktop notifications**: System notifications for errors and status
+- **Direct text input**: Automatically types transcribed text using ydotool
+- **State management**: Proper locking and cleanup of recording sessions
+- **Timeout protection**: Automatically stops runaway recordings after 2 minutes
 
-2. **Configure your credentials**
-   - After creation, a GitHub issue will automatically be created with setup instructions
-   - Follow the instructions in that issue to configure the required secrets
+## Architecture
 
-3. **Customize your agent**
-   - Edit `.github/workflows/mention-trigger.yml` to change the agent username from `@marksverdhai` to your agent's username
-   - Update the `agent_name` parameter to match
+```
+┌─────────────────┐
+│  Keyboard       │
+│  Shortcut       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐     ┌──────────────┐     ┌─────────────┐
+│  ears daemon    │────▶│  PipeWire    │────▶│ Audio       │
+│  (toggle)       │     │  Recording   │     │ Device      │
+└────────┬────────┘     └──────────────┘     └─────────────┘
+         │
+         │ (on second press)
+         ▼
+┌─────────────────┐     ┌──────────────┐     ┌─────────────┐
+│  whisper.cpp    │────▶│  ydotool     │────▶│ Active      │
+│  Server         │     │  (type text) │     │ Window      │
+└─────────────────┘     └──────────────┘     └─────────────┘
+```
 
-4. **Test your agent**
-   - Create an issue and mention your agent (e.g., `@your-agent help me with...`)
-   - The agent should respond within a few minutes
+## Prerequisites
 
-## Required Secrets
+- Linux with PipeWire audio system
+- [whisper.cpp server](https://github.com/ggerganov/whisper.cpp) running
+- `ydotool` for text input
+- `notify-send` for notifications
+- `paplay` for audio feedback
+- `fzf` for device selection
+- `jq` for JSON parsing
+- `curl` for API communication
 
-These are provided as organization secrets in heiervang-technologies:
+### Installing Dependencies
 
-| Secret | Description |
-|--------|-------------|
-| `HAI_GH_PAT` | GitHub Personal Access Token with `repo` and `workflow` scopes |
-| `HEI_DOCKER_PAT` | Docker Hub PAT for pulling snail images (read-only access) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token for authentication |
+```bash
+# Ubuntu/Debian
+sudo apt install pipewire ydotool libnotify-bin pulseaudio-utils fzf jq curl
 
-## Included Workflows
+# Arch Linux
+sudo pacman -S pipewire ydotool libnotify pulseaudio fzf jq curl
+```
 
-### Mention Trigger (`mention-trigger.yml`)
+### Setting up whisper.cpp Server
 
-Triggers the snail agent when mentioned in:
-- Issue bodies
-- Issue comments
-- Pull request review comments
+1. Clone and build whisper.cpp:
+```bash
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+make server
+```
 
-### Setup Check (`setup-check.yml`)
+2. Download a model:
+```bash
+bash ./models/download-ggml-model.sh base.en
+```
 
-Automatically runs on first push to verify:
-- Required secrets are configured
-- PAT has sufficient repository permissions
-- Claude credentials are valid
+3. Start the server:
+```bash
+./server -m models/ggml-base.en.bin -p 8178
+```
 
-Creates an issue with detailed setup instructions if anything is missing.
+For GPU acceleration with CUDA:
+```bash
+make server WHISPER_CUDA=1
+./server -m models/ggml-base.en.bin -p 8178 --gpu
+```
+
+### Setting up ydotool
+
+ydotool requires running as a background service:
+
+```bash
+# Start the daemon
+ydotoold &
+
+# Or enable as a systemd user service
+systemctl --user enable ydotool
+systemctl --user start ydotool
+```
+
+## Installation
+
+```bash
+git clone https://github.com/heiervang-technologies/ears
+cd ears
+./install.sh
+```
+
+This will:
+- Install `ears` to `~/.local/bin/ears`
+- Create config directory at `~/.config/ears`
+- Create sounds directory at `~/.local/share/ears-sounds`
+
+Make sure `~/.local/bin` is in your PATH:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## Configuration
+
+### Whisper Server
+
+Set the whisper.cpp server URL:
+```bash
+ears --server http://localhost:8178
+```
+
+View current server:
+```bash
+ears --server
+```
+
+Config is stored in: `~/.config/ears/server`
+
+### Microphone Device
+
+List available devices:
+```bash
+ears --list
+```
+
+Select device interactively:
+```bash
+ears --select
+```
+
+Show current device:
+```bash
+ears --current
+```
+
+Config is stored in: `~/.config/ears/device`
+
+## Usage
+
+### Basic Operation
+
+Bind a keyboard shortcut to run `ears` (no arguments). Then:
+
+1. **Press shortcut once** - Starts recording (you'll hear a beep)
+2. **Speak your message**
+3. **Press shortcut again** - Stops recording and transcribes
+4. **Text is typed** into your active window
+
+### Keyboard Shortcut Setup
+
+#### GNOME/Ubuntu
+```bash
+# Settings → Keyboard → Custom Shortcuts
+# Add new shortcut:
+#   Name: ears
+#   Command: /home/yourusername/.local/bin/ears
+#   Shortcut: Your preferred key combo
+```
+
+#### KDE Plasma
+```bash
+# System Settings → Shortcuts → Custom Shortcuts
+# Edit → New → Global Shortcut → Command/URL
+#   Trigger: Your preferred key combo
+#   Action: /home/yourusername/.local/bin/ears
+```
+
+#### i3/Sway
+```bash
+# Add to config:
+bindsym $mod+Shift+v exec ears
+```
+
+### Command-Line Options
+
+```
+Usage: ears [OPTION]
+
+Without options: Toggle recording/transcription
+
+Options:
+  -s, --select       Select audio device with fzf
+  -l, --list         List available audio devices
+  -c, --current      Show current device
+  --server [URL]     Show or set whisper server URL
+  -h, --help         Show this help
+```
 
 ## How It Works
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Your Repository                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   @agent help me fix this bug                                        │
-│         │                                                            │
-│         ▼                                                            │
-│   ┌─────────────────────┐                                            │
-│   │ mention-trigger.yml │                                            │
-│   └──────────┬──────────┘                                            │
-│              │                                                       │
-│              │ Uses reusable workflow                                │
-│              ▼                                                       │
-│   ┌─────────────────────────────────────────────────────────────┐   │
-│   │           heiervang-technologies/core                        │   │
-│   │               spawn-agent.yml                                │   │
-│   │                                                              │   │
-│   │   ┌─────────────┐     ┌─────────────┐     ┌────────────┐    │   │
-│   │   │ Pull snail  │────▶│ Run Claude  │────▶│ Post       │    │   │
-│   │   │ container   │     │ in container│     │ results    │    │   │
-│   │   └─────────────┘     └─────────────┘     └────────────┘    │   │
-│   └─────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+### State Management
 
-## Adding Assignment Trigger
+ears uses lock files and PID tracking to maintain state:
+- **Lock file**: `$XDG_RUNTIME_DIR/ears/lock` - Prevents concurrent instances
+- **PID file**: `$XDG_RUNTIME_DIR/ears/recording.pid` - Tracks recording process
+- **Audio file**: `$XDG_RUNTIME_DIR/ears/recording.wav` - Temporary recording storage
 
-To also trigger the agent when issues/PRs are assigned, copy the assignment trigger workflow from the core repository:
+### Audio Recording
 
-```bash
-# From the heiervang-technologies/core repo, copy:
-# .github/workflows/assignment-trigger.yml
-```
+- Records at 16kHz, mono, signed 16-bit PCM (whisper.cpp's preferred format)
+- Uses PipeWire's `pw-record` with explicit device targeting
+- 2-minute timeout prevents runaway recordings
+- Cleans up stale processes automatically
 
-Then update the assignee filter to match your agent's username.
+### Transcription Flow
+
+1. Stops the recording process
+2. Waits 300ms for file to be fully written
+3. Validates audio file exists and has content
+4. POSTs audio to whisper.cpp server
+5. Extracts text from JSON response
+6. Filters out whisper.cpp silence artifacts ("Thank you.")
+7. Types text using ydotool
+8. Cleans up temporary files
+
+### Noise Filtering
+
+ears filters common whisper.cpp false positives:
+- Empty transcriptions
+- The phrase "Thank you." (common silence artifact)
+
+## Custom Sounds
+
+Place custom WAV files in `~/.local/share/ears-sounds/`:
+- `start.wav` - Played when recording starts
+- `done.wav` - Played when transcription completes
+- `bell.wav` - Played on errors
+
+Falls back to system sounds if custom sounds aren't found.
 
 ## Troubleshooting
 
-### "Setup Required" issue keeps appearing
+### "Whisper server not running!"
+- Ensure whisper.cpp server is running
+- Check server URL: `ears --server`
+- Test server: `curl http://localhost:8178/health`
 
-- Ensure all three secrets are available (org secrets or repo secrets)
-- Verify the `HAI_GH_PAT` has `repo` and `workflow` scopes
-- Check that the PAT belongs to an account with write access to the repo
+### "No active recording"
+- Recording may have timed out (2 minute limit)
+- Check state: `ls $XDG_RUNTIME_DIR/ears/`
+- View logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
 
-### Agent doesn't respond to mentions
+### "Transcription failed"
+- Check whisper.cpp server logs
+- Verify audio file was created: `ls -lh $XDG_RUNTIME_DIR/ears/recording.wav`
+- Test manually: `curl -X POST http://localhost:8178/inference -F "file=@/path/to/recording.wav" -F "response_format=json"`
 
-1. Check the Actions tab for workflow runs
-2. Look for errors in the workflow logs
-3. Verify the agent username matches what's in the workflow file
-4. Ensure the PAT hasn't expired
+### Text isn't being typed
+- Ensure ydotool daemon is running: `pgrep ydotoold`
+- Test ydotool: `ydotool type "test"`
+- Check permissions (ydotool may need special setup)
 
-### Authentication errors
+### Wrong microphone being used
+- List devices: `ears --list`
+- Select correct device: `ears --select`
+- Verify: `ears --current`
 
-If you see "authentication error" in the workflow logs:
-- Your Claude OAuth token may have expired
-- Refresh the `CLAUDE_CODE_OAUTH_TOKEN` secret with a new token from Claude Code
+### Audio quality issues
+- Check microphone input level in system settings
+- Test with: `pw-record --target YOUR_DEVICE test.wav` (Ctrl+C after a few seconds)
+- Play back: `paplay test.wav`
+
+## Performance Notes
+
+- Recording uses minimal CPU (PipeWire handles it)
+- Transcription speed depends on whisper.cpp server (GPU recommended)
+- State management is instant (lock files are very fast)
+- Audio feedback is non-blocking (plays in background)
+
+## Development
+
+### Project Structure
+
+```
+ears/
+├── bin/
+│   └── ears           # Main executable script
+├── sounds/            # Optional custom sound files
+├── install.sh         # Installation script
+├── README.md          # This file
+├── CLAUDE.md          # Agent instructions
+└── .github/           # GitHub workflows (from template)
+```
+
+### Running from Source
+
+```bash
+cd ears
+./bin/ears
+```
+
+### Debugging
+
+Enable debug logging by checking `$XDG_RUNTIME_DIR/ears/debug.log`:
+```bash
+tail -f $XDG_RUNTIME_DIR/ears/debug.log
+```
+
+### Testing
+
+Test individual components:
+
+```bash
+# List devices
+./bin/ears --list
+
+# Test server connection
+curl -sf http://localhost:8178/health
+
+# Test recording (5 seconds)
+timeout 5 pw-record --target YOUR_DEVICE test.wav
+
+# Test transcription
+curl -X POST http://localhost:8178/inference \
+  -F "file=@test.wav" \
+  -F "response_format=json" | jq
+```
+
+## Security Considerations
+
+- Audio is sent to whisper.cpp server (defaults to localhost)
+- Configure `--server` to point to your server only
+- Audio files are stored temporarily in `$XDG_RUNTIME_DIR` (cleared on logout)
+- No audio is saved permanently by default
+- Lock file prevents multiple recording sessions
 
 ## License
 
 MIT
+
+## Credits
+
+Originally developed as `asr` for personal use, now production-ready as `ears`.
+
+Built with:
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - Fast whisper inference
+- [PipeWire](https://pipewire.org/) - Modern Linux audio
+- [ydotool](https://github.com/ReimuNotMoe/ydotool) - Generic input automation
