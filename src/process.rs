@@ -280,7 +280,7 @@ mod tests {
         let manager = ProcessManager::new(&pid_file, Duration::from_secs(120));
 
         // Spawn a long-running process (sleep)
-        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
         let pid = child.id();
 
         manager.write_pid(pid).unwrap();
@@ -303,6 +303,9 @@ mod tests {
         // Process should be dead (or at least the PID file should be cleaned up)
         // We check PID file deletion as the main success criteria
         assert!(manager.read_pid().unwrap().is_none());
+
+        // Wait on the child to prevent zombie processes
+        let _ = child.wait();
     }
 
     #[test]
