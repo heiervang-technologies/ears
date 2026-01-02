@@ -12,6 +12,11 @@ use url::Url;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Handle TUI flag first
+    if cli.tui {
+        return ears::tui::run();
+    }
+
     match cli.command {
         Some(Commands::Select) => {
             select_device()?;
