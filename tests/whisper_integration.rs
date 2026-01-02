@@ -162,9 +162,7 @@ async fn test_transcribe_filters_thank_you() {
 #[tokio::test]
 async fn test_transcribe_file_not_found() {
     let client = WhisperClient::new("http://localhost:8178");
-    let result = client
-        .transcribe("/nonexistent/path/audio.wav")
-        .await;
+    let result = client.transcribe("/nonexistent/path/audio.wav").await;
 
     assert!(result.is_err());
     match result {
@@ -231,10 +229,7 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
     // First two requests fail, third succeeds
     Mock::given(method("POST"))
         .and(path("/inference"))
-        .respond_with(
-            ResponseTemplate::new(500)
-                .append_header("X-Retry", "1"),
-        )
+        .respond_with(ResponseTemplate::new(500).append_header("X-Retry", "1"))
         .up_to_n_times(2)
         .mount(&mock_server)
         .await;
@@ -242,8 +237,7 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
     Mock::given(method("POST"))
         .and(path("/inference"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"text": "Success after retry"}"#),
+            ResponseTemplate::new(200).set_body_string(r#"{"text": "Success after retry"}"#),
         )
         .mount(&mock_server)
         .await;

@@ -52,6 +52,7 @@ pub struct WhisperClient {
     /// Base URL of the whisper.cpp server
     server_url: String,
     /// Maximum number of retry attempts
+    #[allow(dead_code)]
     max_retries: u32,
     /// Initial backoff delay in milliseconds
     initial_backoff_ms: u64,
@@ -179,12 +180,10 @@ impl WhisperClient {
         // Perform transcription with retry logic
         let backoff = self.create_backoff();
         let text = retry(backoff, || async {
-            self.transcribe_internal(path)
-                .await
-                .map_err(|e| {
-                    warn!("Transcription attempt failed: {}", e);
-                    backoff::Error::transient(e)
-                })
+            self.transcribe_internal(path).await.map_err(|e| {
+                warn!("Transcription attempt failed: {}", e);
+                backoff::Error::transient(e)
+            })
         })
         .await?;
 
@@ -277,7 +276,7 @@ impl WhisperClient {
         ];
 
         // Check if the entire text is just a silence artifact
-        if silence_patterns.iter().any(|&pattern| trimmed == pattern) {
+        if silence_patterns.contains(&trimmed) {
             debug!("Filtered silence artifact: {}", trimmed);
             return String::new();
         }
@@ -320,8 +319,7 @@ mod tests {
 
     #[test]
     fn test_client_with_custom_retry() {
-        let client =
-            WhisperClient::with_retry_config("http://localhost:8178", 5, 200, 10000);
+        let client = WhisperClient::with_retry_config("http://localhost:8178", 5, 200, 10000);
         assert_eq!(client.max_retries, 5);
         assert_eq!(client.initial_backoff_ms, 200);
         assert_eq!(client.max_backoff_ms, 10000);
