@@ -9,10 +9,15 @@ use std::path::PathBuf;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Creates a temporary test audio file
+/// Creates a temporary test audio file with a unique name to avoid conflicts in parallel tests
 fn create_test_audio_file() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let temp_dir = std::env::temp_dir();
-    let audio_path = temp_dir.join(format!("test_audio_{}.wav", std::process::id()));
+    let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let thread_id = std::thread::current().id();
+    let audio_path = temp_dir.join(format!("test_audio_{}_{:?}_{}.wav", std::process::id(), thread_id, unique_id));
 
     // Create a minimal WAV file (44 bytes header + some data)
     // This is a valid WAV file structure, though the audio data is just zeros
@@ -246,13 +251,18 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
     let audio_path = create_test_audio_file();
 
     // Create client with retry enabled
-    let client = WhisperClient::with_retry_config(mock_server.uri(), 3, 10, 100);
+    // Use more generous backoff times to avoid timing-based flakiness:
+    // - 50ms initial backoff (was 10ms)
+    // - 500ms max backoff (was 100ms)
+    // This gives the retry logic enough time to execute reliably
+    // while still completing quickly (~50ms + ~100ms + ~200ms = ~350ms total)
+    let client = WhisperClient::with_retry_config(mock_server.uri(), 3, 50, 500);
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
     cleanup_test_audio_file(&audio_path);
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "Expected retry to eventually succeed, got: {:?}", result);
     assert_eq!(result.unwrap(), "Success after retry");
 }
 
