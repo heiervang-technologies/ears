@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Mock notify-send for testing
+
+source "${BATS_TEST_DIRNAME}/../test_helper.bash" 2>/dev/null || true
+[[ -n "${MOCK_CALL_LOG:-}" ]] && record_mock_call "notify-send" "$@"
+
+# Record notifications
+echo "$@" >> "$TEST_TEMP_DIR/notifications.log"
+
+exit 0

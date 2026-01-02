@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Mock pw-record for testing
+
+source "${BATS_TEST_DIRNAME}/../test_helper.bash" 2>/dev/null || true
+[[ -n "${MOCK_CALL_LOG:-}" ]] && record_mock_call "pw-record" "$@"
+
+# Parse arguments to find output file
+output_file=""
+for ((i=1; i<=$#; i++)); do
+    arg="${!i}"
+    if [[ "$arg" != --* ]] && [[ "$arg" != -* ]] && [[ "$arg" =~ \.wav$ ]]; then
+        output_file="$arg"
+        break
+    fi
+done
+
+# Create a mock WAV file
+if [[ -n "$output_file" ]]; then
+    # Create a minimal valid WAV file (RIFF header)
+    printf 'RIFF' > "$output_file"
+    printf '\x24\x00\x00\x00' >> "$output_file"  # Chunk size
+    printf 'WAVE' >> "$output_file"
+    printf 'fmt ' >> "$output_file"
+    printf '\x10\x00\x00\x00' >> "$output_file"  # Subchunk1 size
+    printf '\x01\x00' >> "$output_file"           # Audio format (PCM)
+    printf '\x01\x00' >> "$output_file"           # Channels
+    printf '\x00\x7D\x00\x00' >> "$output_file"   # Sample rate
+    printf '\x00\xFA\x00\x00' >> "$output_file"   # Byte rate
+    printf '\x02\x00' >> "$output_file"           # Block align
+    printf '\x10\x00' >> "$output_file"           # Bits per sample
+    printf 'data' >> "$output_file"
+    printf '\x00\x00\x00\x00' >> "$output_file"   # Data chunk size
+
+    # Simulate recording by sleeping briefly
+    sleep 0.1
+fi
+
+exit 0

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock paplay for testing
+
+source "${BATS_TEST_DIRNAME}/../test_helper.bash" 2>/dev/null || true
+[[ -n "${MOCK_CALL_LOG:-}" ]] && record_mock_call "paplay" "$@"
+
+# Just record the call, don't actually play audio
+exit 0

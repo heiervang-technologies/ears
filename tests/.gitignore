@@ -1,0 +1,8 @@
+# Ignore test artifacts
+*.log
+*.tmp
+tmp/
+temp/
+
+# BATS output
+test-results/

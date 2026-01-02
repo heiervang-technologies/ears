@@ -1,0 +1,18 @@
+{
+  "text": "This is a test transcription",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.5,
+      "text": " This is a test transcription",
+      "tokens": [50364, 50365],
+      "temperature": 0.0,
+      "avg_logprob": -0.25,
+      "compression_ratio": 1.5,
+      "no_speech_prob": 0.01
+    }
+  ],
+  "language": "en"
+}

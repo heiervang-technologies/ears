@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Mock pw-cli for testing
+
+source "${BATS_TEST_DIRNAME}/../test_helper.bash" 2>/dev/null || true
+[[ -n "${MOCK_CALL_LOG:-}" ]] && record_mock_call "pw-cli" "$@"
+
+if [[ "$1" == "ls" ]] && [[ "$2" == "Node" ]]; then
+    # Return mock device list
+    cat "${BATS_TEST_DIRNAME}/../fixtures/pw-cli-output.txt" 2>/dev/null || cat <<'EOF'
+	id 45, type PipeWire:Interface:Node/3
+		object.serial = "45"
+		object.path = "alsa:pcm:0:front:0:capture"
+		factory.id = "18"
+		client.id = "34"
+		node.name = "alsa_input.pci-0000_00_1f.3.analog-stereo"
+		node.description = "Built-in Audio Analog Stereo"
+		media.class = "Audio/Source"
+		priority.driver = "1009"
+		priority.session = "1009"
+
+	id 67, type PipeWire:Interface:Node/3
+		object.serial = "67"
+		object.path = "alsa:pcm:1:front:0:capture"
+		factory.id = "18"
+		client.id = "34"
+		node.name = "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
+		node.description = "HyperX Cloud II Wireless"
+		media.class = "Audio/Source"
+		priority.driver = "2000"
+		priority.session = "2000"
+
+	id 89, type PipeWire:Interface:Node/3
+		object.serial = "89"
+		object.path = "v4l2:/dev/video0"
+		factory.id = "20"
+		client.id = "36"
+		node.name = "v4l2_input.pci-0000_00_14.0-usb-0_8_1.0"
+		node.description = "HD Webcam"
+		media.class = "Video/Source"
+		priority.driver = "1000"
+		priority.session = "1000"
+EOF
+fi

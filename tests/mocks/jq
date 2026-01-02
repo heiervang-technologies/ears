@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Mock jq - use real jq if available, otherwise provide basic fallback
+
+if command -v /usr/bin/jq &>/dev/null; then
+    exec /usr/bin/jq "$@"
+else
+    # Basic fallback for .text extraction
+    if [[ "$1" == "-r" ]] && [[ "$2" == ".text // empty" ]]; then
+        # Extract text field from JSON
+        sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    else
+        # Pass through for other cases
+        cat
+    fi
+fi
