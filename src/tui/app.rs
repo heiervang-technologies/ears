@@ -181,8 +181,7 @@ impl App {
                 return Ok(false);
             }
             _ => {
-                self.logs
-                    .push(format!("Unknown command: {}", cmd));
+                self.logs.push(format!("Unknown command: {}", cmd));
             }
         }
         Ok(true)
@@ -190,7 +189,9 @@ impl App {
 
     /// Scroll down in the current panel
     fn scroll_down(&mut self) {
-        if self.current_panel == Panel::Logs && self.selected_log < self.logs.len().saturating_sub(1) {
+        if self.current_panel == Panel::Logs
+            && self.selected_log < self.logs.len().saturating_sub(1)
+        {
             self.selected_log += 1;
         }
     }
