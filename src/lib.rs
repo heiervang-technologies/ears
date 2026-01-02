@@ -14,6 +14,9 @@ pub mod state;
 // Iteration 4: Whisper integration
 pub mod whisper;
 
+// Iteration 6: Desktop integration
+pub mod desktop;
+
 // Iteration 7: TUI
 pub mod tui;
 
@@ -27,3 +30,6 @@ pub use state::{State, StateError, StateManager};
 
 // Re-exports from Iteration 4
 pub use whisper::{WhisperClient, WhisperError};
+
+// Re-exports from Iteration 6
+pub use desktop::{AudioFeedback, Notifications, TextInput, Urgency};
