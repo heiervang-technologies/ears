@@ -10,6 +10,10 @@ use ears::{Config, State};
 #[command(name = "ears")]
 #[command(about = "Speech recognition daemon", long_about = None)]
 struct Cli {
+    /// Launch interactive TUI mode
+    #[arg(short = 't', long = "tui")]
+    tui: bool,
+
     /// Select audio device with fzf
     #[arg(short = 's', long = "select")]
     select: bool,
@@ -39,6 +43,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle flags in order of precedence
+    if cli.tui {
+        return ears::tui::run();
+    }
+
     if cli.select {
         println!("Device selection not yet implemented");
         return Ok(());

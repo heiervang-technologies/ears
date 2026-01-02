@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod state;
+pub mod tui;
 
 pub use config::Config;
 pub use state::State;
