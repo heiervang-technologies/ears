@@ -1,182 +1,269 @@
-//! State management for ears
-//!
-//! Handles runtime state including PID files, lock files, and recording state.
-
-use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use thiserror::Error;
 
-/// Runtime state management
-#[derive(Debug)]
-pub struct State {
-    /// State directory path
-    pub state_dir: PathBuf,
+/// State of the ears daemon
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// No active recording, ready to start
+    Idle,
+    /// Currently recording audio
+    Recording,
+    /// Processing/transcribing recorded audio
+    Transcribing,
 }
 
-impl State {
-    /// Create a new State manager
-    pub fn new() -> Result<Self> {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+/// Errors that can occur during state management
+#[derive(Debug, Error)]
+pub enum StateError {
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
 
-        let state_dir = PathBuf::from(runtime_dir).join("ears");
-        fs::create_dir_all(&state_dir).context("Failed to create state directory")?;
+    #[error("Invalid state transition from {from:?} to {to:?}")]
+    InvalidTransition { from: State, to: State },
 
-        Ok(Self { state_dir })
+    #[error("Recording timeout exceeded")]
+    RecordingTimeout,
+
+    #[error("State file corrupted")]
+    CorruptedState,
+}
+
+/// Manages state transitions and persistence
+pub struct StateManager {
+    current_state: State,
+    state_dir: PathBuf,
+    recording_started: Option<Instant>,
+    max_recording_duration: Duration,
+}
+
+impl StateManager {
+    /// Create a new StateManager with the given state directory
+    pub fn new<P: AsRef<Path>>(state_dir: P) -> Result<Self, StateError> {
+        let state_dir = state_dir.as_ref().to_path_buf();
+
+        // Ensure state directory exists
+        fs::create_dir_all(&state_dir)?;
+
+        Ok(Self {
+            current_state: State::Idle,
+            state_dir,
+            recording_started: None,
+            max_recording_duration: Duration::from_secs(120), // 2 minutes
+        })
     }
 
-    /// Get the lock file path
-    pub fn lock_file(&self) -> PathBuf {
-        self.state_dir.join("lock")
+    /// Get the current state
+    pub fn current_state(&self) -> State {
+        self.current_state
     }
 
-    /// Get the PID file path
-    pub fn pid_file(&self) -> PathBuf {
-        self.state_dir.join("recording.pid")
+    /// Transition to a new state
+    pub fn transition(&mut self, new_state: State) -> Result<(), StateError> {
+        // Validate state transition
+        if !self.is_valid_transition(self.current_state, new_state) {
+            return Err(StateError::InvalidTransition {
+                from: self.current_state,
+                to: new_state,
+            });
+        }
+
+        // Check recording timeout before transitioning
+        if self.current_state == State::Recording {
+            if let Some(started) = self.recording_started {
+                if started.elapsed() > self.max_recording_duration {
+                    self.current_state = State::Idle;
+                    self.recording_started = None;
+                    return Err(StateError::RecordingTimeout);
+                }
+            }
+        }
+
+        // Update state
+        self.current_state = new_state;
+
+        // Track recording start time
+        match new_state {
+            State::Recording => {
+                self.recording_started = Some(Instant::now());
+            }
+            State::Idle => {
+                self.recording_started = None;
+            }
+            _ => {}
+        }
+
+        // Persist state to disk
+        self.persist_state()?;
+
+        Ok(())
     }
 
-    /// Get the audio file path
-    pub fn audio_file(&self) -> PathBuf {
-        self.state_dir.join("recording.wav")
+    /// Check if a state transition is valid
+    fn is_valid_transition(&self, from: State, to: State) -> bool {
+        match (from, to) {
+            // Can only start recording from Idle
+            (State::Idle, State::Recording) => true,
+            // Can transition to transcribing from recording
+            (State::Recording, State::Transcribing) => true,
+            // Can always transition to Idle (emergency stop)
+            (_, State::Idle) => true,
+            // All other transitions are invalid
+            _ => false,
+        }
     }
 
-    /// Get the debug log file path
-    pub fn log_file(&self) -> PathBuf {
-        self.state_dir.join("debug.log")
+    /// Get the path to the state file
+    fn state_file_path(&self) -> PathBuf {
+        self.state_dir.join("state")
     }
 
-    /// Check if a recording is currently active
-    pub fn is_recording(&self) -> bool {
-        let pid_file = self.pid_file();
-        if !pid_file.exists() {
+    /// Persist the current state to disk
+    fn persist_state(&self) -> Result<(), StateError> {
+        let state_str = match self.current_state {
+            State::Idle => "idle",
+            State::Recording => "recording",
+            State::Transcribing => "transcribing",
+        };
+
+        fs::write(self.state_file_path(), state_str)?;
+        Ok(())
+    }
+
+    /// Load state from disk
+    pub fn load_state(&mut self) -> Result<(), StateError> {
+        let state_file = self.state_file_path();
+
+        if !state_file.exists() {
+            // No state file, default to Idle
+            self.current_state = State::Idle;
+            return Ok(());
+        }
+
+        let state_str = fs::read_to_string(&state_file)?;
+        let state = match state_str.trim() {
+            "idle" => State::Idle,
+            "recording" => State::Recording,
+            "transcribing" => State::Transcribing,
+            _ => return Err(StateError::CorruptedState),
+        };
+
+        self.current_state = state;
+        Ok(())
+    }
+
+    /// Check if recording has exceeded timeout
+    pub fn check_recording_timeout(&self) -> bool {
+        if self.current_state != State::Recording {
             return false;
         }
 
-        // Read PID and check if process is alive
-        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                // Check if process exists (signal 0 doesn't kill, just checks)
-                unsafe { libc::kill(pid, 0) == 0 }
-            } else {
-                false
-            }
+        if let Some(started) = self.recording_started {
+            started.elapsed() > self.max_recording_duration
         } else {
             false
         }
     }
 
-    /// Get the PID of the recording process
-    pub fn get_recording_pid(&self) -> Option<i32> {
-        let pid_file = self.pid_file();
-        if !pid_file.exists() {
-            return None;
-        }
-
-        fs::read_to_string(&pid_file)
-            .ok()
-            .and_then(|s| s.trim().parse::<i32>().ok())
-    }
-
-    /// Clean up stale PID files
-    pub fn cleanup_stale(&self) -> Result<()> {
-        if !self.is_recording() {
-            let pid_file = self.pid_file();
-            let audio_file = self.audio_file();
-
-            if pid_file.exists() {
-                fs::remove_file(pid_file).ok();
-            }
-            if audio_file.exists() {
-                fs::remove_file(audio_file).ok();
-            }
-        }
-        Ok(())
-    }
-
-    /// Save PID to file
-    pub fn save_pid(&self, pid: i32) -> Result<()> {
-        let pid_file = self.pid_file();
-        fs::write(&pid_file, pid.to_string()).context("Failed to write PID file")?;
-        Ok(())
-    }
-
-    /// Remove PID file
-    pub fn remove_pid(&self) -> Result<()> {
-        let pid_file = self.pid_file();
-        if pid_file.exists() {
-            fs::remove_file(&pid_file).context("Failed to remove PID file")?;
-        }
-        Ok(())
-    }
-
-    /// Remove audio file
-    pub fn remove_audio(&self) -> Result<()> {
-        let audio_file = self.audio_file();
-        if audio_file.exists() {
-            fs::remove_file(&audio_file).context("Failed to remove audio file")?;
-        }
-        Ok(())
-    }
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::new().expect("Failed to create state directory")
+    /// Get the state directory path
+    pub fn state_dir(&self) -> &Path {
+        &self.state_dir
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use tempfile::TempDir;
 
     #[test]
-    fn test_state_creation() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        env::set_var("XDG_RUNTIME_DIR", temp_dir.path());
+    fn test_state_transitions() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
 
-        let state = State::new().unwrap();
-        assert!(state.state_dir.exists());
+        // Start in Idle state
+        assert_eq!(manager.current_state(), State::Idle);
+
+        // Transition to Recording
+        assert!(manager.transition(State::Recording).is_ok());
+        assert_eq!(manager.current_state(), State::Recording);
+
+        // Transition to Transcribing
+        assert!(manager.transition(State::Transcribing).is_ok());
+        assert_eq!(manager.current_state(), State::Transcribing);
+
+        // Back to Idle
+        assert!(manager.transition(State::Idle).is_ok());
+        assert_eq!(manager.current_state(), State::Idle);
     }
 
     #[test]
-    fn test_pid_operations() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        env::set_var("XDG_RUNTIME_DIR", temp_dir.path());
+    fn test_invalid_transitions() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
 
-        let state = State::new().unwrap();
+        // Can't go from Idle to Transcribing
+        assert!(manager.transition(State::Transcribing).is_err());
 
-        // Initially no recording
-        assert!(!state.is_recording());
-        assert_eq!(state.get_recording_pid(), None);
-
-        // Save our own PID (we know we're running)
-        let pid = std::process::id() as i32;
-        state.save_pid(pid).unwrap();
-
-        // Should now detect recording
-        assert!(state.is_recording());
-        assert_eq!(state.get_recording_pid(), Some(pid));
-
-        // Remove PID
-        state.remove_pid().unwrap();
-        assert!(!state.is_recording());
+        // Can't go from Recording to Recording
+        manager.transition(State::Recording).unwrap();
+        assert!(manager.transition(State::Recording).is_err());
     }
 
     #[test]
-    fn test_cleanup_stale() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        env::set_var("XDG_RUNTIME_DIR", temp_dir.path());
+    fn test_state_persistence() {
+        let temp_dir = TempDir::new().unwrap();
 
-        let state = State::new().unwrap();
+        // Create manager and transition to Recording
+        {
+            let mut manager = StateManager::new(temp_dir.path()).unwrap();
+            manager.transition(State::Recording).unwrap();
+        }
 
-        // Create stale PID file (non-existent process)
-        state.save_pid(999999).unwrap();
-        fs::write(state.audio_file(), b"fake audio").unwrap();
+        // Create new manager and load state
+        {
+            let mut manager = StateManager::new(temp_dir.path()).unwrap();
+            manager.load_state().unwrap();
+            assert_eq!(manager.current_state(), State::Recording);
+        }
+    }
 
-        // Cleanup should remove both
-        state.cleanup_stale().unwrap();
-        assert!(!state.pid_file().exists());
-        assert!(!state.audio_file().exists());
+    #[test]
+    fn test_recording_timeout() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Override timeout for testing
+        manager.max_recording_duration = Duration::from_millis(100);
+
+        // Start recording
+        manager.transition(State::Recording).unwrap();
+
+        // Wait for timeout
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Should timeout
+        assert!(manager.check_recording_timeout());
+
+        // Transition should fail with timeout error
+        let result = manager.transition(State::Transcribing);
+        assert!(matches!(result, Err(StateError::RecordingTimeout)));
+        assert_eq!(manager.current_state(), State::Idle);
+    }
+
+    #[test]
+    fn test_emergency_stop() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Can always transition to Idle
+        manager.transition(State::Recording).unwrap();
+        assert!(manager.transition(State::Idle).is_ok());
+
+        manager.transition(State::Recording).unwrap();
+        manager.transition(State::Transcribing).unwrap();
+        assert!(manager.transition(State::Idle).is_ok());
     }
 }
