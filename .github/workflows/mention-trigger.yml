@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   extract-context:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # TODO: Change @marksverdhai to your agent's GitHub username
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -217,7 +217,7 @@ jobs:
 
   post-reaction:
     needs: [extract-context, spawn-agent]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always() && needs.extract-context.result != 'skipped' && (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment')
     steps:
       - name: Add rocket reaction on success
@@ -235,7 +235,7 @@ jobs:
 
   update-progress-on-failure:
     needs: [extract-context, spawn-agent]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always() && needs.extract-context.result != 'skipped' && needs.spawn-agent.result == 'failure' && needs.extract-context.outputs.progress_comment_id != ''
     steps:
       - name: Update progress comment on failure
