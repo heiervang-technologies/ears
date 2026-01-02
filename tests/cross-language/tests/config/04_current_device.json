@@ -1,0 +1,20 @@
+{
+  "name": "Show current device configuration",
+  "description": "Verify that current device can be displayed",
+  "setup": {
+    "env": {
+      "HOME": "$TMPDIR/home",
+      "XDG_RUNTIME_DIR": "$TMPDIR/runtime"
+    },
+    "files": {
+      "$TMPDIR/home/.config/ears/device": "alsa_input.test-device"
+    }
+  },
+  "command": {
+    "args": ["--current"]
+  },
+  "assertions": {
+    "exit_code": 0,
+    "stdout_contains": ["alsa_input.test-device"]
+  }
+}

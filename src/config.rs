@@ -121,6 +121,7 @@ impl Config {
     }
 
     /// Validate the configuration
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<()> {
         // Validate server URL scheme
         if !matches!(self.whisper_server.scheme(), "http" | "https") {

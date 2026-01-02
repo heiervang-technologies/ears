@@ -1,0 +1,21 @@
+{
+  "name": "Can set custom whisper server URL",
+  "description": "Verify that a custom server URL can be saved to config",
+  "setup": {
+    "env": {
+      "HOME": "$TMPDIR/home",
+      "XDG_RUNTIME_DIR": "$TMPDIR/runtime"
+    }
+  },
+  "command": {
+    "args": ["--server", "http://localhost:9000"]
+  },
+  "assertions": {
+    "exit_code": 0,
+    "stdout_contains": ["Server set to: http://localhost:9000"],
+    "files_exist": ["$TMPDIR/home/.config/ears/server"],
+    "file_contains": {
+      "$TMPDIR/home/.config/ears/server": "http://localhost:9000"
+    }
+  }
+}
