@@ -1,0 +1,20 @@
+{
+  "name": "Can retrieve saved whisper server URL",
+  "description": "Verify that saved server URL is correctly loaded",
+  "setup": {
+    "env": {
+      "HOME": "$TMPDIR/home",
+      "XDG_RUNTIME_DIR": "$TMPDIR/runtime"
+    },
+    "files": {
+      "$TMPDIR/home/.config/ears/server": "http://custom-server:8080"
+    }
+  },
+  "command": {
+    "args": ["--server"]
+  },
+  "assertions": {
+    "exit_code": 0,
+    "stdout_contains": ["http://custom-server:8080"]
+  }
+}

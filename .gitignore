@@ -28,3 +28,7 @@ logs/
 dist/
 build/
 *.egg-info/
+
+# Rust
+/target/
+Cargo.lock
