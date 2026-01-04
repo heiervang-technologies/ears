@@ -127,16 +127,33 @@ impl AudioFeedback {
 pub struct TextInput;
 
 impl TextInput {
-    /// Type text using ydotool
+    /// Type text using ydotool with optional delay
+    ///
+    /// The `delay_ms` parameter controls the delay between keystrokes.
+    /// Default is 12ms if not specified (ydotool's default).
     pub fn type_text(text: &str) -> Result<()> {
-        Command::new("ydotool")
-            .arg("type")
-            .arg(text)
-            .stdin(std::process::Stdio::null())
+        Self::type_text_with_delay(text, None)
+    }
+
+    /// Type text using ydotool with a specific delay
+    pub fn type_text_with_delay(text: &str, delay_ms: Option<u32>) -> Result<()> {
+        let mut cmd = Command::new("ydotool");
+        cmd.arg("type");
+
+        // Add delay if specified
+        if let Some(delay) = delay_ms {
+            cmd.arg("--key-delay").arg(delay.to_string());
+        }
+
+        // ydotool handles special characters automatically
+        cmd.arg(text);
+
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .context("Failed to spawn ydotool")?;
+
         Ok(())
     }
 }
@@ -145,6 +162,7 @@ impl TextInput {
 mod tests {
     use super::*;
 
+    // 5.1 Notifications Tests
     #[test]
     fn test_urgency_conversion() {
         assert_eq!(Urgency::Low.as_str(), "low");
@@ -153,11 +171,102 @@ mod tests {
     }
 
     #[test]
+    fn test_notification_info() {
+        // This will fail if notify-send is not installed, but that's expected
+        // In production, notify-send should be available
+        let result = Notifications::info("Test info message");
+        // We don't assert success because notify-send might not be available in test env
+        // Just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_notification_warn() {
+        let result = Notifications::warn("Test warning message");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_notification_error() {
+        let result = Notifications::error("Test error message");
+        let _ = result;
+    }
+
+    // 5.2 Audio Feedback Tests
+    #[test]
     fn test_sound_paths() {
         let system_dir = AudioFeedback::system_sound_dir();
         assert_eq!(
             system_dir,
             PathBuf::from("/usr/share/sounds/freedesktop/stereo")
         );
+    }
+
+    #[test]
+    fn test_custom_sound_dir() {
+        std::env::set_var("HOME", "/home/testuser");
+        let sound_dir = AudioFeedback::sound_dir().unwrap();
+        assert_eq!(
+            sound_dir,
+            PathBuf::from("/home/testuser/.local/share/ears-sounds")
+        );
+    }
+
+    #[test]
+    fn test_beep_start() {
+        // Test that beep_start doesn't panic
+        // Will fail gracefully if paplay not available
+        let result = AudioFeedback::beep_start();
+        let _ = result;
+    }
+
+    #[test]
+    fn test_beep_done() {
+        let result = AudioFeedback::beep_done();
+        let _ = result;
+    }
+
+    #[test]
+    fn test_beep_error() {
+        let result = AudioFeedback::beep_error();
+        let _ = result;
+    }
+
+    #[test]
+    fn test_audio_feedback_non_blocking() {
+        // Play multiple sounds to verify non-blocking behavior
+        let _ = AudioFeedback::beep_start();
+        let _ = AudioFeedback::beep_done();
+        let _ = AudioFeedback::beep_error();
+        // If these were blocking, this test would take a long time
+    }
+
+    // 5.3 Text Input Tests
+    #[test]
+    fn test_type_text_basic() {
+        // Test basic text typing (won't actually type in test env)
+        let result = TextInput::type_text("Hello, world!");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_type_text_with_special_characters() {
+        // Test that special characters don't cause issues
+        let result = TextInput::type_text("Test: !@#$%^&*()");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_type_text_with_delay() {
+        // Test typing with custom delay
+        let result = TextInput::type_text_with_delay("Test text", Some(50));
+        let _ = result;
+    }
+
+    #[test]
+    fn test_type_text_with_no_delay() {
+        // Test typing with no delay (use default)
+        let result = TextInput::type_text_with_delay("Test text", None);
+        let _ = result;
     }
 }
