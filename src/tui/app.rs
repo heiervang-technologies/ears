@@ -4,7 +4,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// The current panel being displayed
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
     Status,
     Configuration,
@@ -41,6 +41,7 @@ impl Panel {
 }
 
 /// Main application state for the TUI
+#[derive(Clone)]
 pub struct App {
     /// Current active panel
     pub current_panel: Panel,

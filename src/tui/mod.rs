@@ -4,7 +4,7 @@
 
 mod app;
 mod event;
-mod ui;
+pub mod ui; // Make ui module public for testing
 
 pub use app::{App, Panel};
 pub use event::{Event, EventHandler};
