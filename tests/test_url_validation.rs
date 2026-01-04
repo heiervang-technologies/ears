@@ -2,12 +2,11 @@
 ///
 /// Issue: The Config module validates URLs but might miss some edge cases
 /// that could cause issues in the WhisperClient
-
 use ears::Config;
 use std::env;
-use tempfile::TempDir;
-use std::sync::Mutex;
 use std::sync::LazyLock;
+use std::sync::Mutex;
+use tempfile::TempDir;
 
 // Serialize tests that modify env vars to prevent interference
 static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -44,7 +43,10 @@ fn test_url_with_trailing_slash_normalization() {
     // This creates "http://localhost:8178//health" - DOUBLE SLASH!
 
     println!("Endpoint with potential issue: {}", endpoint);
-    assert!(endpoint.contains("//health"), "URL construction creates double slash");
+    assert!(
+        endpoint.contains("//health"),
+        "URL construction creates double slash"
+    );
 
     // Cleanup
     if let Some(home) = original_home {
@@ -87,7 +89,10 @@ fn test_url_without_port() {
     config.save().unwrap();
 
     let loaded = Config::load().unwrap();
-    assert_eq!(loaded.whisper_server.as_str(), "http://whisper.example.com/");
+    assert_eq!(
+        loaded.whisper_server.as_str(),
+        "http://whisper.example.com/"
+    );
 
     // This is valid, just checking it works
     println!("URL without port: {}", loaded.whisper_server);
@@ -134,7 +139,10 @@ fn test_url_with_path() {
 
     let loaded = Config::load().unwrap();
     // When URL has a path, trailing slash is not automatically added by url crate
-    assert_eq!(loaded.whisper_server.as_str(), "http://example.com/whisper-api");
+    assert_eq!(
+        loaded.whisper_server.as_str(),
+        "http://example.com/whisper-api"
+    );
 
     // Now when we construct endpoints:
     let endpoint = format!("{}/health", loaded.whisper_server);
@@ -142,7 +150,10 @@ fn test_url_with_path() {
     // This is actually CORRECT - no double slash!
 
     println!("Endpoint with path: {}", endpoint);
-    assert_eq!(endpoint, "http://example.com/whisper-api/health", "URL with path should work correctly");
+    assert_eq!(
+        endpoint, "http://example.com/whisper-api/health",
+        "URL with path should work correctly"
+    );
 
     // Cleanup
     if let Some(home) = original_home {

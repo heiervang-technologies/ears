@@ -1,7 +1,6 @@
 /// QA Round 3: Config validation edge cases
 ///
 /// Investigating what happens when config files contain edge case values
-
 use ears::Config;
 use std::fs;
 use tempfile::TempDir;
@@ -148,7 +147,10 @@ fn test_server_url_without_port() {
         println!("  URL: {}", url_str);
         println!("    Parsed: {}", parsed.as_str());
         println!("    Port: {:?}", parsed.port());
-        println!("    Port or default: {}", parsed.port_or_known_default().unwrap_or(0));
+        println!(
+            "    Port or default: {}",
+            parsed.port_or_known_default().unwrap_or(0)
+        );
     }
 
     println!("\n✅ URLs without ports are valid and work correctly");

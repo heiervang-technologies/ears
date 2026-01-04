@@ -4,7 +4,6 @@
 /// 1. What happens when state directory is read-only?
 /// 2. What happens when disk is full?
 /// 3. What happens when config files are corrupted?
-
 use ears::{Config, StateManager};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -107,7 +106,10 @@ fn test_config_save_to_readonly_dir() {
     println!("Result: {:?}", result);
 
     // EXPECTED: Should fail when trying to write to read-only directory
-    assert!(result.is_err(), "Should fail to save config to read-only dir");
+    assert!(
+        result.is_err(),
+        "Should fail to save config to read-only dir"
+    );
 
     if let Err(e) = result {
         println!("Error: {}", e);

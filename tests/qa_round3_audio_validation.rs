@@ -1,11 +1,10 @@
+use std::io::Write;
 /// QA Round 3: Audio file validation bug
 ///
 /// BUG FOUND: The code only checks that audio file exists and has size > 0,
 /// but doesn't validate that it's a valid WAV file. A corrupted or partial
 /// WAV file would pass validation and cause whisper to fail with unclear errors.
-
 use tempfile::NamedTempFile;
-use std::io::Write;
 
 #[tokio::test]
 async fn test_corrupted_wav_file_passes_basic_checks() {
@@ -13,7 +12,9 @@ async fn test_corrupted_wav_file_passes_basic_checks() {
 
     // Create a "fake" WAV file that has content but isn't valid WAV
     let mut temp_file = NamedTempFile::new().unwrap();
-    temp_file.write_all(b"This is not a WAV file, just garbage data").unwrap();
+    temp_file
+        .write_all(b"This is not a WAV file, just garbage data")
+        .unwrap();
     temp_file.flush().unwrap();
     let audio_path = temp_file.path();
 

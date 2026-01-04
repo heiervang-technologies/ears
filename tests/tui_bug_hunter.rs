@@ -59,9 +59,7 @@ fn render_to_string(app: &App) -> String {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    terminal
-        .draw(|f| ears::tui::ui::render(app, f))
-        .unwrap();
+    terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
     let mut output = String::new();
@@ -195,14 +193,20 @@ fn bug_hunt_recording_indicator_consistency() {
     }
 
     if !bugs.is_empty() {
-        println!("\n❌ BUGS FOUND: {} inconsistent recording indicators", bugs.len());
+        println!(
+            "\n❌ BUGS FOUND: {} inconsistent recording indicators",
+            bugs.len()
+        );
         for bug in &bugs {
             println!("\n{}", bug.description);
             println!("State: {:?}", bug.state);
             println!("Sample:\n{}", bug.visual_sample);
         }
     } else {
-        println!("✓ All {} states have consistent recording indicators", states.len());
+        println!(
+            "✓ All {} states have consistent recording indicators",
+            states.len()
+        );
     }
 
     assert!(bugs.is_empty(), "Found {} bugs", bugs.len());
@@ -227,7 +231,11 @@ fn bug_hunt_command_mode_display() {
                             state.command_buffer, expected_display
                         ),
                         state: state.clone(),
-                        visual_sample: output.lines().skip(output.lines().count().saturating_sub(5)).collect::<Vec<_>>().join("\n"),
+                        visual_sample: output
+                            .lines()
+                            .skip(output.lines().count().saturating_sub(5))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
                     });
                 }
             }
@@ -235,7 +243,10 @@ fn bug_hunt_command_mode_display() {
     }
 
     if !bugs.is_empty() {
-        println!("\n❌ BUGS FOUND: {} command mode display issues", bugs.len());
+        println!(
+            "\n❌ BUGS FOUND: {} command mode display issues",
+            bugs.len()
+        );
         for bug in bugs.iter().take(5) {
             println!("\n{}", bug.description);
             println!("State: {:?}", bug.state);
@@ -351,7 +362,10 @@ fn bug_hunt_selected_log_bounds() {
     }
 
     if !bugs.is_empty() {
-        println!("\n❌ BUGS FOUND: {} out-of-bounds log selections", bugs.len());
+        println!(
+            "\n❌ BUGS FOUND: {} out-of-bounds log selections",
+            bugs.len()
+        );
         for bug in &bugs {
             println!("\n{}", bug.description);
             println!("State: {:?}", bug.state);
@@ -421,9 +435,16 @@ fn bug_hunt_summary_report() {
             let expected = format!(":{}", state.command_buffer);
             if !output.contains(&expected) {
                 all_bugs.push(Bug {
-                    description: format!("[MEDIUM] Command buffer '{}' not shown", state.command_buffer),
+                    description: format!(
+                        "[MEDIUM] Command buffer '{}' not shown",
+                        state.command_buffer
+                    ),
                     state: state.clone(),
-                    visual_sample: output.lines().skip(output.lines().count().saturating_sub(3)).collect::<Vec<_>>().join("\n"),
+                    visual_sample: output
+                        .lines()
+                        .skip(output.lines().count().saturating_sub(3))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                 });
             }
         }
@@ -433,8 +454,10 @@ fn bug_hunt_summary_report() {
     for (state, _, _) in &states {
         if state.log_count > 0 && state.selected_log >= state.log_count {
             all_bugs.push(Bug {
-                description: format!("[CRITICAL] Log selection out of bounds ({} >= {})",
-                                   state.selected_log, state.log_count),
+                description: format!(
+                    "[CRITICAL] Log selection out of bounds ({} >= {})",
+                    state.selected_log, state.log_count
+                ),
                 state: state.clone(),
                 visual_sample: String::new(),
             });
@@ -451,7 +474,13 @@ fn bug_hunt_summary_report() {
         println!("Unique bug types:");
         let mut bug_types: HashMap<String, usize> = HashMap::new();
         for bug in &all_bugs {
-            let bug_type = bug.description.split(']').next().unwrap_or("Unknown").to_string() + "]";
+            let bug_type = bug
+                .description
+                .split(']')
+                .next()
+                .unwrap_or("Unknown")
+                .to_string()
+                + "]";
             *bug_types.entry(bug_type).or_insert(0) += 1;
         }
 
@@ -464,7 +493,10 @@ fn bug_hunt_summary_report() {
             println!("\n{}. {}", i + 1, bug.description);
             println!("   State: {:?}", bug.state);
             if !bug.visual_sample.is_empty() {
-                println!("   Visual: {}", bug.visual_sample.lines().next().unwrap_or(""));
+                println!(
+                    "   Visual: {}",
+                    bug.visual_sample.lines().next().unwrap_or("")
+                );
             }
         }
     }

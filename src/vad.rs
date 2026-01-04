@@ -216,8 +216,7 @@ impl VadSegmentDetector {
         for chunk in samples.chunks(frame_size) {
             let result = self.vad.process_frame(chunk)?;
 
-            let frame_duration_ms =
-                ((chunk.len() * 1000) / self.sample_rate) as u64;
+            let frame_duration_ms = ((chunk.len() * 1000) / self.sample_rate) as u64;
 
             match result {
                 VadResult::Speech => {

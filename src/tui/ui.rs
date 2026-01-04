@@ -277,30 +277,24 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         Color::Gray
     };
-    let vad_status_text = if app.vad_active {
-        "Active"
-    } else {
-        "Inactive"
-    };
+    let vad_status_text = if app.vad_active { "Active" } else { "Inactive" };
 
     let mut text = vec![
         Line::from(""),
         Line::from(vec![
+            Span::styled("VAD Mode: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                "VAD Mode: ",
-                Style::default().add_modifier(Modifier::BOLD),
+                vad_status_char.to_string(),
+                Style::default().fg(vad_status_color),
             ),
-            Span::styled(vad_status_char.to_string(), Style::default().fg(vad_status_color)),
             Span::raw(" "),
             Span::styled(vad_status_text, Style::default().fg(vad_status_color)),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Transcription:",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "Transcription:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
     ];
 
@@ -310,31 +304,34 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
         let full_text = format!("{}{}", app.committed_text, app.uncommitted_text);
 
         if full_text.is_empty() {
-            text.push(Line::from(vec![
-                Span::styled("  Listening...", Style::default().fg(Color::DarkGray)),
-            ]));
+            text.push(Line::from(vec![Span::styled(
+                "  Listening...",
+                Style::default().fg(Color::DarkGray),
+            )]));
         } else {
             // Split into lines for display
             for line in full_text.lines() {
                 if line.len() <= app.committed_text.len() {
                     // This line is fully committed
-                    text.push(Line::from(vec![
-                        Span::styled(format!("  {}", line), Style::default().fg(Color::White)),
-                    ]));
+                    text.push(Line::from(vec![Span::styled(
+                        format!("  {}", line),
+                        Style::default().fg(Color::White),
+                    )]));
                 } else {
                     // This line contains uncommitted text
                     let committed_part = if line.len() <= app.committed_text.len() {
                         line.to_string()
                     } else {
-                        app.committed_text[app.committed_text.len().saturating_sub(line.len())..].to_string()
+                        app.committed_text[app.committed_text.len().saturating_sub(line.len())..]
+                            .to_string()
                     };
 
                     text.push(Line::from(vec![
-                        Span::styled(format!("  {}", committed_part), Style::default().fg(Color::White)),
                         Span::styled(
-                            &app.uncommitted_text,
-                            Style::default().fg(Color::DarkGray),
+                            format!("  {}", committed_part),
+                            Style::default().fg(Color::White),
                         ),
+                        Span::styled(&app.uncommitted_text, Style::default().fg(Color::DarkGray)),
                     ]));
                 }
             }
@@ -347,20 +344,19 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled(" = uncommitted)", Style::default().fg(Color::DarkGray)),
         ]));
     } else {
-        text.push(Line::from(vec![
-            Span::styled(
-                "  VAD mode is inactive. Press [Space] or [v] to enable.",
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
+        text.push(Line::from(vec![Span::styled(
+            "  VAD mode is inactive. Press [Space] or [v] to enable.",
+            Style::default().fg(Color::Yellow),
+        )]));
     }
 
     // Settings
     text.push(Line::from(""));
     text.push(Line::from(""));
-    text.push(Line::from(vec![
-        Span::styled("Settings:", Style::default().add_modifier(Modifier::BOLD)),
-    ]));
+    text.push(Line::from(vec![Span::styled(
+        "Settings:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
     text.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
@@ -381,15 +377,19 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
     // Stats
     text.push(Line::from(""));
     text.push(Line::from(""));
-    text.push(Line::from(vec![
-        Span::styled("Stats:", Style::default().add_modifier(Modifier::BOLD)),
-    ]));
+    text.push(Line::from(vec![Span::styled(
+        "Stats:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
     text.push(Line::from(vec![
         Span::styled("  Latency: ", Style::default().fg(Color::DarkGray)),
         Span::raw(format!("{}ms", app.avg_latency_ms)),
     ]));
     text.push(Line::from(vec![
-        Span::styled("  Segments processed: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "  Segments processed: ",
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::raw(format!("{}", app.segments_processed)),
     ]));
 

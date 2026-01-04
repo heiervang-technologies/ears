@@ -1,8 +1,8 @@
 //! TUI application state and logic
 
+use crate::config::Config;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crate::config::Config;
 
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -260,7 +260,8 @@ impl App {
         }
 
         // Check if user is viewing the last log before adding a new one
-        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
 
         let result = match cmd {
             "q" | "quit" => return Ok(false),
@@ -305,7 +306,8 @@ impl App {
     /// Toggle recording state
     fn toggle_recording(&mut self) {
         // Check if user is viewing the last log before adding a new one
-        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
 
         self.is_recording = !self.is_recording;
         if self.is_recording {
@@ -324,7 +326,8 @@ impl App {
 
     /// Toggle VAD mode
     pub fn toggle_vad_mode(&mut self) {
-        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
 
         self.vad_active = !self.vad_active;
         if self.vad_active {

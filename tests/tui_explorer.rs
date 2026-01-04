@@ -65,9 +65,7 @@ fn render_to_string(app: &App) -> String {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    terminal
-        .draw(|f| ears::tui::ui::render(app, f))
-        .unwrap();
+    terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
     let mut output = String::new();
@@ -188,19 +186,22 @@ fn test_explore_all_reachable_states() {
     }
 
     // Verify we found multiple states
-    assert!(discovered_states.len() > 1, "Should discover multiple states");
+    assert!(
+        discovered_states.len() > 1,
+        "Should discover multiple states"
+    );
 
-    println!("\n✓ Successfully explored {} unique states", discovered_states.len());
+    println!(
+        "\n✓ Successfully explored {} unique states",
+        discovered_states.len()
+    );
 }
 
 #[test]
 fn test_explorer_finds_all_panels() {
     let discovered_states = explore_state_space(50);
 
-    let panels: HashSet<Panel> = discovered_states
-        .keys()
-        .map(|s| s.current_panel)
-        .collect();
+    let panels: HashSet<Panel> = discovered_states.keys().map(|s| s.current_panel).collect();
 
     println!("\nPanels discovered: {:?}", panels);
 
@@ -222,7 +223,10 @@ fn test_explorer_finds_recording_states() {
     println!("\nRecording states found: {}", recording_states.len());
 
     // Should find at least one recording state
-    assert!(!recording_states.is_empty(), "Should discover recording state");
+    assert!(
+        !recording_states.is_empty(),
+        "Should discover recording state"
+    );
 }
 
 #[test]
@@ -240,10 +244,8 @@ fn test_explorer_finds_command_mode() {
     assert!(!command_states.is_empty(), "Should discover command mode");
 
     // Check for states with different command buffers
-    let unique_commands: HashSet<&String> = command_states
-        .iter()
-        .map(|s| &s.command_buffer)
-        .collect();
+    let unique_commands: HashSet<&String> =
+        command_states.iter().map(|s| &s.command_buffer).collect();
 
     println!("Unique command buffers: {:?}", unique_commands);
 }
@@ -262,8 +264,12 @@ fn test_complexity_is_linear() {
         let duration = start.elapsed();
 
         times.push(duration);
-        println!("\nLimit: {}, Found: {}, Time: {:?}",
-                 limit, states.len(), duration);
+        println!(
+            "\nLimit: {}, Found: {}, Time: {:?}",
+            limit,
+            states.len(),
+            duration
+        );
     }
 
     // Verify roughly linear scaling (within 3x)

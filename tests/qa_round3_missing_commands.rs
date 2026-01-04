@@ -6,7 +6,6 @@
 /// 3. notify-send (notifications)
 /// 4. paplay (audio feedback)
 /// 5. fzf (device selection)
-
 use ears::{AudioFeedback, Notifications, ProcessManager, TextInput};
 use std::process::Command;
 use std::time::Duration;
@@ -109,7 +108,9 @@ fn test_missing_pw_cli() {
 
 #[test]
 fn test_command_path_injection() {
-    println!("\n🔍 SECURITY BUG INVESTIGATION: Can malicious device names cause command injection?");
+    println!(
+        "\n🔍 SECURITY BUG INVESTIGATION: Can malicious device names cause command injection?"
+    );
 
     // What if device name contains special shell characters?
     let temp_dir = TempDir::new().unwrap();
@@ -128,7 +129,10 @@ fn test_command_path_injection() {
 
     // Check if injection worked
     let pwned = std::path::Path::new("/tmp/pwned.txt");
-    assert!(!pwned.exists(), "CRITICAL SECURITY BUG: Command injection possible!");
+    assert!(
+        !pwned.exists(),
+        "CRITICAL SECURITY BUG: Command injection possible!"
+    );
 
     // The spawn will likely fail because device doesn't exist, but it shouldn't execute injection
     if let Err(e) = result {
@@ -140,7 +144,9 @@ fn test_command_path_injection() {
 
 #[test]
 fn test_text_input_command_injection() {
-    println!("\n🔍 SECURITY BUG INVESTIGATION: Can malicious text cause command injection in ydotool?");
+    println!(
+        "\n🔍 SECURITY BUG INVESTIGATION: Can malicious text cause command injection in ydotool?"
+    );
 
     // What if transcribed text contains special characters?
     let malicious_text = "hello; rm -rf /tmp/test";

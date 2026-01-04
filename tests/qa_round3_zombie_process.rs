@@ -3,7 +3,6 @@
 /// BUG FOUND: ProcessManager::spawn_recording() uses std::mem::forget(child)
 /// which prevents the Child destructor from running. This creates zombie processes
 /// that persist until the parent process exits.
-
 use ears::ProcessManager;
 use std::process::Command;
 use std::time::Duration;
@@ -81,7 +80,14 @@ fn test_correct_process_cleanup() {
 
     // ps returns non-zero when process doesn't exist
     // Note: In newer Rust versions, Child::drop() may auto-wait, so this might be 0 or non-zero
-    println!("Process cleanup status: {}", if exit_code == 0 { "still visible (rare)" } else { "cleaned up" });
+    println!(
+        "Process cleanup status: {}",
+        if exit_code == 0 {
+            "still visible (rare)"
+        } else {
+            "cleaned up"
+        }
+    );
 }
 
 #[test]
@@ -155,20 +161,27 @@ fn test_zombie_accumulation_scenario() {
     std::thread::sleep(Duration::from_millis(300));
 
     // Count zombies
-    let zombie_count = pids.iter().filter(|&&pid| {
-        let output = Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .arg("-o")
-            .arg("stat=")
-            .output()
-            .unwrap();
+    let zombie_count = pids
+        .iter()
+        .filter(|&&pid| {
+            let output = Command::new("ps")
+                .arg("-p")
+                .arg(pid.to_string())
+                .arg("-o")
+                .arg("stat=")
+                .output()
+                .unwrap();
 
-        let status = String::from_utf8_lossy(&output.stdout);
-        status.contains("Z")
-    }).count();
+            let status = String::from_utf8_lossy(&output.stdout);
+            status.contains("Z")
+        })
+        .count();
 
-    println!("\n🐛 RESULT: {} out of {} processes became zombies", zombie_count, pids.len());
+    println!(
+        "\n🐛 RESULT: {} out of {} processes became zombies",
+        zombie_count,
+        pids.len()
+    );
 
     if zombie_count > 0 {
         println!("   Impact: With heavy use, zombie processes accumulate");

@@ -10,9 +10,7 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    terminal
-        .draw(|f| ears::tui::ui::render(app, f))
-        .unwrap();
+    terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
     let mut output = String::new();
@@ -39,7 +37,10 @@ fn edge_case_tiny_terminal() {
 
     println!("{}", output);
 
-    assert!(!output.is_empty(), "Should render something even in tiny terminal");
+    assert!(
+        !output.is_empty(),
+        "Should render something even in tiny terminal"
+    );
 }
 
 #[test]
@@ -151,10 +152,17 @@ fn edge_case_scroll_beyond_bounds() {
             .ok();
     }
 
-    println!("Selected log: {} (total logs: {})", app.selected_log, app.logs.len());
+    println!(
+        "Selected log: {} (total logs: {})",
+        app.selected_log,
+        app.logs.len()
+    );
 
     // Should not panic and should stay within bounds
-    assert!(app.selected_log < app.logs.len(), "selected_log should stay within bounds");
+    assert!(
+        app.selected_log < app.logs.len(),
+        "selected_log should stay within bounds"
+    );
 
     let output = render_to_string(&app, 80, 24);
     assert!(!output.is_empty());
@@ -237,8 +245,10 @@ fn edge_case_mixed_operations() {
     let output = render_to_string(&app, 80, 24);
     assert!(!output.is_empty());
 
-    println!("Final state - Panel: {:?}, Recording: {}, Command: {}",
-             app.current_panel, app.is_recording, app.command_mode);
+    println!(
+        "Final state - Panel: {:?}, Recording: {}, Command: {}",
+        app.current_panel, app.is_recording, app.command_mode
+    );
 }
 
 #[test]

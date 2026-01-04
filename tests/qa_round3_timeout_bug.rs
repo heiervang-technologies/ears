@@ -1,7 +1,6 @@
 /// QA Round 3: Timeout command behavior investigation
 ///
 /// Investigating how the 'timeout' command interacts with ProcessManager
-
 use ears::ProcessManager;
 use std::process::Command;
 use std::time::Duration;
@@ -121,7 +120,9 @@ fn test_timeout_signal_propagation() {
         .output()
         .unwrap();
 
-    let child_pid_str = String::from_utf8_lossy(&pgrep_output.stdout).trim().to_string();
+    let child_pid_str = String::from_utf8_lossy(&pgrep_output.stdout)
+        .trim()
+        .to_string();
     println!("sleep PID: {}", child_pid_str);
 
     // Send SIGTERM to timeout
@@ -224,7 +225,9 @@ fn test_mem_forget_with_timeout_creates_two_zombies() {
         .output()
         .unwrap();
 
-    let child_pid_str = String::from_utf8_lossy(&pgrep_output.stdout).trim().to_string();
+    let child_pid_str = String::from_utf8_lossy(&pgrep_output.stdout)
+        .trim()
+        .to_string();
     let child_pid: Option<u32> = child_pid_str.parse().ok();
 
     println!("timeout PID: {}", timeout_pid);

@@ -1,10 +1,9 @@
 /// QA Round 3: State transition validation bug
 ///
 /// BUG FOUND: StateManager allows invalid state transition under certain conditions
-
 use ears::{State, StateManager};
-use tempfile::TempDir;
 use std::time::Duration;
+use tempfile::TempDir;
 
 #[test]
 fn test_state_transition_validation() {
@@ -133,7 +132,10 @@ fn test_state_file_manual_corruption() {
 
     if let Err(e) = result {
         println!("Error: {}", e);
-        assert!(e.to_string().contains("corrupted"), "Error should mention corruption");
+        assert!(
+            e.to_string().contains("corrupted"),
+            "Error should mention corruption"
+        );
     }
 
     println!("✓ Corrupted state is detected");
@@ -160,9 +162,7 @@ fn test_state_reconciliation_logic() {
     println!("State after restart: {:?}", new_mgr.current_state());
 
     // Reconcile with fake process check (returns false = process dead)
-    let reconciled = new_mgr
-        .reconcile_state(|| Ok(false))
-        .unwrap();
+    let reconciled = new_mgr.reconcile_state(|| Ok(false)).unwrap();
 
     println!("Reconciled: {}", reconciled);
     println!("New state: {:?}", new_mgr.current_state());
@@ -189,7 +189,10 @@ fn test_reconciliation_only_affects_recording_state() {
     mgr.transition(State::Recording).unwrap();
     mgr.transition(State::Transcribing).unwrap();
     let reconciled = mgr.reconcile_state(|| Ok(false)).unwrap();
-    assert!(!reconciled, "Transcribing state should not need reconciliation");
+    assert!(
+        !reconciled,
+        "Transcribing state should not need reconciliation"
+    );
     assert_eq!(mgr.current_state(), State::Transcribing);
 
     println!("✓ Reconciliation only applies to Recording state");
@@ -218,7 +221,10 @@ fn test_state_transition_bypass_via_reconcile() {
 
     // And load it
     state_mgr.load_state().unwrap();
-    println!("State after manual edit + load: {:?}", state_mgr.current_state());
+    println!(
+        "State after manual edit + load: {:?}",
+        state_mgr.current_state()
+    );
 
     // State is now Recording, even though we came from Transcribing
     // This bypassed the transition validation!

@@ -2,7 +2,6 @@
 ///
 /// BUG FOUND: When server config file exists with invalid URL,
 /// Config::load() fails completely instead of falling back to default
-
 use ears::Config;
 use std::fs;
 use tempfile::TempDir;
@@ -25,10 +24,7 @@ fn test_config_load_with_invalid_url_in_file() {
     config.config_dir = config_dir.clone();
 
     // Now try to manually do what Config::load does (lines 75-85)
-    let server_str = fs::read_to_string(&server_file)
-        .unwrap()
-        .trim()
-        .to_string();
+    let server_str = fs::read_to_string(&server_file).unwrap().trim().to_string();
 
     let parse_result = url::Url::parse(&server_str);
     println!("Parse result: {:?}", parse_result);
@@ -115,13 +111,19 @@ fn test_better_error_recovery_approach() {
 
     // Current behavior: Config::load() succeeds with partial recovery
     let result = Config::load();
-    assert!(result.is_ok(), "Config::load() should succeed with partial recovery");
+    assert!(
+        result.is_ok(),
+        "Config::load() should succeed with partial recovery"
+    );
 
     let config = result.unwrap();
 
     // Verify partial recovery works:
     // 1. Device config should be preserved
-    assert_eq!(config.device, "my-custom-device", "Device config should be preserved");
+    assert_eq!(
+        config.device, "my-custom-device",
+        "Device config should be preserved"
+    );
 
     // 2. Server URL should fall back to default
     assert_eq!(
@@ -132,7 +134,10 @@ fn test_better_error_recovery_approach() {
 
     println!("✅ Partial recovery works!");
     println!("  - Device config preserved: {}", config.device);
-    println!("  - Invalid server URL fell back to default: {}", config.whisper_server);
+    println!(
+        "  - Invalid server URL fell back to default: {}",
+        config.whisper_server
+    );
 
     // Clean up
     std::env::remove_var("XDG_CONFIG_HOME");
