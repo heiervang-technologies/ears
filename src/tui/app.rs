@@ -171,11 +171,15 @@ impl App {
 
     /// Execute a vim-style command
     fn execute_command(&mut self) -> Result<bool> {
+        // Check if user is viewing the last log before adding a new one
+        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
         let cmd = self.command_buffer.trim();
-        match cmd {
+        let result = match cmd {
             "q" | "quit" => return Ok(false),
             "w" | "write" => {
                 self.logs.push("Configuration saved".to_string());
+                Ok(true)
             }
             "wq" => {
                 self.logs.push("Configuration saved".to_string());
@@ -183,9 +187,16 @@ impl App {
             }
             _ => {
                 self.logs.push(format!("Unknown command: {}", cmd));
+                Ok(true)
             }
+        };
+
+        // If user was viewing the last log, update selected_log to follow the new log
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
         }
-        Ok(true)
+
+        result
     }
 
     /// Scroll down in the current panel
@@ -206,12 +217,20 @@ impl App {
 
     /// Toggle recording state
     fn toggle_recording(&mut self) {
+        // Check if user is viewing the last log before adding a new one
+        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
         self.is_recording = !self.is_recording;
         if self.is_recording {
             self.logs.push("Started recording".to_string());
             self.recording_duration = 0;
         } else {
             self.logs.push("Stopped recording".to_string());
+        }
+
+        // If user was viewing the last log, update selected_log to follow the new log
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
         }
     }
 }
