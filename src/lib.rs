@@ -20,6 +20,13 @@ pub mod desktop;
 // Iteration 7: TUI
 pub mod tui;
 
+// Iteration 8: Streaming transcription with VAD
+pub mod streaming;
+pub mod vad;
+pub mod progressive_typing;
+pub mod streaming_engine;
+pub mod continuous_capture;
+
 // Re-exports from Iteration 1
 pub use config::Config;
 
@@ -33,3 +40,9 @@ pub use whisper::{WhisperClient, WhisperError};
 
 // Re-exports from Iteration 6
 pub use desktop::{AudioFeedback, KeyboardLayout, Notifications, TextInput, Urgency};
+
+// Re-exports from Iteration 8
+pub use streaming::{
+    AudioBuffer, LocalAgreementPolicy, StreamingConfig, StreamingError, TranscriptChunk,
+};
+pub use vad::{EnergyVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegmentDetector};

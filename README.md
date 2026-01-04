@@ -163,9 +163,24 @@ Config is stored in: `~/.config/ears/device`
 
 ## Usage
 
-### Basic Operation
+### Interactive TUI Mode
 
-Bind a keyboard shortcut to run `ears` (no arguments). Then:
+Launch the interactive Terminal UI:
+
+```bash
+ears
+```
+
+The TUI provides:
+- Real-time status monitoring
+- VAD (Voice Activity Detection) mode with live transcription
+- Configuration management
+- Log viewing
+- Multiple panels: Status, Configuration, Logs, Live
+
+### Push-to-Talk Mode (Keyboard Shortcuts)
+
+Bind a keyboard shortcut to run `ears toggle`. Then:
 
 1. **Press shortcut once** - Starts recording (you'll hear a beep)
 2. **Speak your message**
@@ -178,9 +193,9 @@ Bind a keyboard shortcut to run `ears` (no arguments). Then:
 ```bash
 # Settings → Keyboard → Custom Shortcuts
 # Add new shortcut:
-#   Name: ears
-#   Command: /home/yourusername/.local/bin/ears
-#   Shortcut: Your preferred key combo
+#   Name: ears toggle
+#   Command: /home/yourusername/.local/bin/ears toggle
+#   Shortcut: Your preferred key combo (e.g., Super+Shift+V)
 ```
 
 #### KDE Plasma
@@ -188,31 +203,33 @@ Bind a keyboard shortcut to run `ears` (no arguments). Then:
 # System Settings → Shortcuts → Custom Shortcuts
 # Edit → New → Global Shortcut → Command/URL
 #   Trigger: Your preferred key combo
-#   Action: /home/yourusername/.local/bin/ears
+#   Action: /home/yourusername/.local/bin/ears toggle
 ```
 
 #### i3/Sway
 ```bash
 # Add to config:
-bindsym $mod+Shift+v exec ears
+bindsym $mod+Shift+v exec ears toggle
 ```
 
 ### Command-Line Options
 
 ```
-Usage: ears [OPTIONS] [COMMAND]
+Usage: ears [COMMAND]
 
-Without options: Toggle recording/transcription
-
-Options:
-  -t, --tui          Launch interactive TUI mode
-  -h, --help         Show this help
-  -V, --version      Print version
+Without commands: Launch interactive TUI
 
 Commands:
-  device             Manage audio input device
+  toggle, t          Toggle recording/transcription (for keyboard shortcuts)
+  select, s          Select audio device with fzf
+  list, l            List available audio devices
+  current, c         Show current device
   server             Manage whisper server configuration
   help               Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help         Show this help
+  -V, --version      Print version
 ```
 
 ## How It Works

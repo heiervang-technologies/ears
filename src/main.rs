@@ -40,12 +40,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Handle TUI flag first
-    if cli.tui {
-        return ears::tui::run();
-    }
-
     match cli.command {
+        Some(Commands::Toggle) => {
+            // Toggle recording/transcription (for keyboard shortcuts)
+            handle_toggle().await?;
+        }
         Some(Commands::Select) => {
             select_device()?;
         }
@@ -63,8 +62,8 @@ async fn main() -> Result<()> {
             }
         }
         None => {
-            // Main toggle logic
-            handle_toggle().await?;
+            // Default: Launch TUI
+            return ears::tui::run();
         }
     }
 

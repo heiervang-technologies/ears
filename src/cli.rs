@@ -5,16 +5,16 @@ use clap::{Parser, Subcommand};
 #[command(name = "ears")]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Launch interactive TUI mode
-    #[arg(short = 't', long = "tui")]
-    pub tui: bool,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Toggle recording/transcription (for keyboard shortcuts)
+    #[command(alias = "t")]
+    Toggle,
+
     /// Select audio device with fzf
     #[command(alias = "s")]
     Select,
@@ -41,7 +41,19 @@ mod tests {
     #[test]
     fn test_cli_no_args() {
         let cli = Cli::try_parse_from(["ears"]).unwrap();
-        assert!(cli.command.is_none());
+        assert!(cli.command.is_none()); // Should launch TUI
+    }
+
+    #[test]
+    fn test_cli_toggle() {
+        let cli = Cli::try_parse_from(["ears", "toggle"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Toggle)));
+    }
+
+    #[test]
+    fn test_cli_toggle_alias() {
+        let cli = Cli::try_parse_from(["ears", "t"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Toggle)));
     }
 
     #[test]
