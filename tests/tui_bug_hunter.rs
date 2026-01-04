@@ -260,6 +260,7 @@ fn bug_hunt_panel_name_visibility() {
             Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
+            Panel::LiveTranscription => "Live Transcription",
         };
 
         if !output.contains(expected_panel) {
@@ -403,6 +404,7 @@ fn bug_hunt_summary_report() {
             Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
+            Panel::LiveTranscription => "Live Transcription",
         };
         if !output.contains(panel_name) {
             all_bugs.push(Bug {
