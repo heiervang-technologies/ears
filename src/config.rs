@@ -72,25 +72,51 @@ impl Config {
         // Ensure config directory exists
         fs::create_dir_all(&config.config_dir).context("Failed to create config directory")?;
 
-        // Load server URL if file exists
+        // Load server URL if file exists (with error handling for partial recovery)
         let server_file = config.config_dir.join("server");
         if server_file.exists() {
-            let server_str = fs::read_to_string(&server_file)
-                .context("Failed to read server config file")?
-                .trim()
-                .to_string();
-
-            config.whisper_server = Url::parse(&server_str)
-                .with_context(|| format!("Invalid server URL in config file: {}", server_str))?;
+            match fs::read_to_string(&server_file) {
+                Ok(server_str) => {
+                    let server_str = server_str.trim().to_string();
+                    match Url::parse(&server_str) {
+                        Ok(url) => {
+                            config.whisper_server = url;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Invalid URL in server config file ({}), using default: {}",
+                                e,
+                                config.whisper_server
+                            );
+                            eprintln!(
+                                "Warning: Invalid server URL in config file, using default: {}",
+                                config.whisper_server
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read server config: {}", e);
+                }
+            }
         }
 
-        // Load device if file exists
+        // Load device if file exists (independent of server config)
         let device_file = config.config_dir.join("device");
         if device_file.exists() {
-            config.device = fs::read_to_string(&device_file)
-                .context("Failed to read device config file")?
-                .trim()
-                .to_string();
+            match fs::read_to_string(&device_file) {
+                Ok(device_str) => {
+                    let device = device_str.trim().to_string();
+                    if !device.is_empty() {
+                        config.device = device;
+                    } else {
+                        tracing::warn!("Empty device name in config, using default");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read device config: {}", e);
+                }
+            }
         }
 
         // Ensure state directory exists
