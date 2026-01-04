@@ -10,13 +10,13 @@ expression: output
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Configuration ───────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
-│Server URL: http://localhost:9999/                                                                │
+│Server URL: http://127.0.0.1:8178/                                                                │
 │                                                                                                  │
 │Model: unknown                                                                                    │
 │                                                                                                  │
 │Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback                  │
 │                                                                                                  │
-│Language: no (Shift+L to cycle)                                                                   │
+│Language: auto (Shift+L to cycle)                                                                 │
 │                                                                                                  │
 │                                                                                                  │
 │Press Shift+L to cycle: auto → en → no → auto                                                     │

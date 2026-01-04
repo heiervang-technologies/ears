@@ -11,10 +11,12 @@ use ratatui::{backend::TestBackend, Terminal};
 use std::env;
 use tempfile::TempDir;
 
-/// Setup a clean HOME directory for tests to get consistent config
+/// Setup a clean environment for tests to get consistent config
 fn setup_test_env() -> TempDir {
     let temp_dir = TempDir::new().unwrap();
+    // Set both HOME and XDG_CONFIG_HOME to ensure directories crate uses temp dir
     env::set_var("HOME", temp_dir.path());
+    env::set_var("XDG_CONFIG_HOME", temp_dir.path().join(".config"));
     temp_dir
 }
 
