@@ -233,12 +233,14 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("[Space] ", Style::default().fg(Color::Cyan)),
             Span::raw("Start/Stop  "),
-            Span::styled("[h/l] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Tabs  "),
+            Span::styled("[h/l/Tab] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Panels  "),
+            Span::styled("[c] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Config  "),
             Span::styled("[j/k] ", Style::default().fg(Color::Cyan)),
             Span::raw("Scroll  "),
             Span::styled("[:] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Command  "),
+            Span::raw("Cmd  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
