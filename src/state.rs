@@ -171,6 +171,49 @@ impl StateManager {
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
     }
+
+    /// Reconcile state with actual process status
+    ///
+    /// This method checks if the current state is consistent with reality.
+    /// If the state is Recording but no process is actually running, it resets to Idle.
+    /// This prevents stale state after crashes or unexpected process termination.
+    ///
+    /// # Arguments
+    /// * `is_process_alive` - Function that checks if the recording process is alive
+    ///
+    /// # Returns
+    /// * `Ok(true)` if state was reconciled (changed from Recording to Idle)
+    /// * `Ok(false)` if no reconciliation was needed
+    /// * `Err` if there was an error during reconciliation
+    pub fn reconcile_state<F>(&mut self, is_process_alive: F) -> Result<bool, StateError>
+    where
+        F: FnOnce() -> Result<bool, Box<dyn std::error::Error>>,
+    {
+        // Only need to reconcile if state claims we're recording
+        if self.current_state != State::Recording {
+            return Ok(false);
+        }
+
+        // Check if the recording process is actually alive
+        let process_alive = is_process_alive()
+            .map_err(|e| StateError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+
+        if !process_alive {
+            // State says Recording but process is dead - reconcile
+            tracing::warn!(
+                "Stale Recording state detected on startup, resetting to Idle (process not running)"
+            );
+
+            // Reset to Idle without using transition() to avoid validation
+            self.current_state = State::Idle;
+            self.recording_started = None;
+            self.persist_state()?;
+
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

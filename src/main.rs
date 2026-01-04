@@ -220,8 +220,18 @@ async fn handle_toggle() -> Result<()> {
     let pid_file = config.state_dir.join("recording.pid");
     let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(120));
 
-    // Clean up any stale state
+    // Clean up any stale PID files
     process_mgr.cleanup_stale().ok();
+
+    // Reconcile state with actual process status (fixes Issue #52)
+    // If state says Recording but no process is running, reset to Idle
+    state_mgr
+        .reconcile_state(|| {
+            process_mgr
+                .is_recording_alive()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        })
+        .context("Failed to reconcile state")?;
 
     // Check if we're currently recording
     let is_recording = process_mgr.is_recording_alive().unwrap_or(false);
