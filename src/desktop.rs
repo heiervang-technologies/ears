@@ -148,11 +148,18 @@ impl TextInput {
         // ydotool handles special characters automatically
         cmd.arg(text);
 
-        cmd.stdin(std::process::Stdio::null())
+        // Use .status() to wait for completion, preventing concurrent processes
+        // from interleaving output (fixes #57)
+        let status = cmd
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("Failed to spawn ydotool")?;
+            .status()
+            .context("Failed to run ydotool")?;
+
+        if !status.success() {
+            anyhow::bail!("ydotool failed with status: {}", status);
+        }
 
         Ok(())
     }
