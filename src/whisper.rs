@@ -51,6 +51,8 @@ pub struct WhisperClient {
     client: Client,
     /// Base URL of the whisper.cpp server
     server_url: String,
+    /// Language code for transcription (None = auto-detect)
+    language: Option<String>,
     /// Maximum number of retry attempts
     #[allow(dead_code)]
     max_retries: u32,
@@ -79,10 +81,20 @@ impl WhisperClient {
                 .build()
                 .expect("Failed to build HTTP client"),
             server_url: server_url.into(),
+            language: None,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
         }
+    }
+
+    /// Sets the language for transcription
+    ///
+    /// # Arguments
+    /// * `language` - Language code (e.g., "en", "no") or None for auto-detect
+    pub fn with_language(mut self, language: Option<String>) -> Self {
+        self.language = language;
+        self
     }
 
     /// Creates a new WhisperClient with custom retry settings
@@ -104,6 +116,7 @@ impl WhisperClient {
                 .build()
                 .expect("Failed to build HTTP client"),
             server_url: server_url.into(),
+            language: None,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -238,9 +251,15 @@ impl WhisperClient {
             .mime_str("audio/wav")
             .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
 
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .part("file", file_part)
             .text("response_format", "json");
+
+        // Add language parameter only if explicitly set (otherwise auto-detect)
+        if let Some(ref lang) = self.language {
+            debug!("Using language: {}", lang);
+            form = form.text("language", lang.clone());
+        }
 
         // Send request
         let response = self

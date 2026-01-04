@@ -62,6 +62,10 @@ pub struct App {
     pub server: String,
     /// Audio device name
     pub device: String,
+    /// Language for transcription (None = auto-detect)
+    pub language: Option<String>,
+    /// Config directory path
+    config_dir: std::path::PathBuf,
     /// Log messages
     pub logs: Vec<String>,
     /// Selected log index (for scrolling)
@@ -75,6 +79,8 @@ impl App {
         let config = Config::load().unwrap_or_default();
         let server_url = config.whisper_server.to_string();
         let device = config.device.clone();
+        let language = config.language.clone();
+        let config_dir = config.config_dir.clone();
 
         // Try to fetch model from the server's /v1/models endpoint
         let model = Self::fetch_model_name(&server_url).unwrap_or_else(|| "unknown".to_string());
@@ -89,6 +95,8 @@ impl App {
             model,
             server: server_url,
             device,
+            language,
+            config_dir,
             logs: vec![
                 "Application started".to_string(),
                 "TUI initialized".to_string(),
@@ -167,6 +175,11 @@ impl App {
             // 'c' to go to configuration panel
             (KeyCode::Char('c'), KeyModifiers::NONE) => {
                 self.current_panel = Panel::Configuration;
+            }
+
+            // 'L' to cycle language (auto -> en -> no -> auto)
+            (KeyCode::Char('L'), KeyModifiers::SHIFT) => {
+                self.cycle_language();
             }
 
             _ => {}
@@ -266,6 +279,31 @@ impl App {
         }
 
         // If user was viewing the last log, update selected_log to follow the new log
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
+        }
+    }
+
+    /// Cycle through languages: auto -> en -> no -> auto
+    fn cycle_language(&mut self) {
+        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
+        self.language = match &self.language {
+            None => Some("en".to_string()),
+            Some(lang) if lang == "en" => Some("no".to_string()),
+            Some(_) => None,
+        };
+
+        let lang_display = self.language.as_deref().unwrap_or("auto");
+        self.logs.push(format!("Language set to: {}", lang_display));
+
+        // Save to config file
+        let language_file = self.config_dir.join("language");
+        let content = self.language.as_deref().unwrap_or("");
+        if let Err(e) = std::fs::write(&language_file, content) {
+            self.logs.push(format!("Failed to save language: {}", e));
+        }
+
         if was_viewing_last_log {
             self.selected_log = self.logs.len() - 1;
         }

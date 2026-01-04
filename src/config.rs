@@ -12,6 +12,8 @@ pub struct Config {
     pub whisper_server: Url,
     /// Audio input device name
     pub device: String,
+    /// Language code for transcription (None = auto-detect)
+    pub language: Option<String>,
     /// Configuration directory
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -36,6 +38,7 @@ impl Config {
                 .expect("Default server URL is valid"),
             device: "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
                 .to_string(),
+            language: None, // Auto-detect by default
             config_dir,
             state_dir,
         })
@@ -46,6 +49,7 @@ impl Config {
     /// Supports the following environment variables:
     /// - EARS_SERVER: Whisper server URL
     /// - EARS_DEVICE: Audio device name
+    /// - EARS_LANGUAGE: Language code (e.g., "en", "no") or empty for auto-detect
     pub fn from_env() -> Result<Self> {
         let mut config = Self::new()?;
 
@@ -58,6 +62,11 @@ impl Config {
             config.device = device;
         }
 
+        if let Ok(language) = std::env::var("EARS_LANGUAGE") {
+            let language = language.trim();
+            config.language = if language.is_empty() { None } else { Some(language.to_string()) };
+        }
+
         Ok(config)
     }
 
@@ -66,6 +75,7 @@ impl Config {
     /// Reads from:
     /// - `~/.config/ears/server` for whisper server URL
     /// - `~/.config/ears/device` for audio device name
+    /// - `~/.config/ears/language` for language code (empty or missing = auto-detect)
     pub fn load() -> Result<Self> {
         let mut config = Self::from_env()?;
 
@@ -115,6 +125,20 @@ impl Config {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to read device config: {}", e);
+                }
+            }
+        }
+
+        // Load language if file exists (empty or missing = auto-detect)
+        let language_file = config.config_dir.join("language");
+        if language_file.exists() {
+            match fs::read_to_string(&language_file) {
+                Ok(language_str) => {
+                    let language = language_str.trim().to_string();
+                    config.language = if language.is_empty() { None } else { Some(language) };
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read language config: {}", e);
                 }
             }
         }
