@@ -6,20 +6,20 @@ expression: output
 │ears v1.0.0 │ Status: ○ Idle                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ▸ Status │ ▸ Configuration │ ▸ Logs                                                              │
+│ ▸ Status │ ▸ Configuration │ ▸ Logs │ ▸ Live                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Configuration ───────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
-│Server URL: http://localhost:8178                                                                 │
+│Server URL: http://whisper.example.com/                                                           │
 │                                                                                                  │
-│Model: ggml-base.en                                                                               │
+│Model: unknown                                                                                    │
 │                                                                                                  │
-│Audio Device: Default Device                                                                      │
+│Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback                  │
+│                                                                                                  │
+│Language: no (Shift+L to cycle)                                                                   │
 │                                                                                                  │
 │                                                                                                  │
-│Configuration editing not yet implemented                                                         │
-│                                                                                                  │
-│                                                                                                  │
+│Press Shift+L to cycle: auto → en → no → auto                                                     │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
@@ -30,5 +30,5 @@ expression: output
 │                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│[Space] Start/Stop  [h/l] Tabs  [j/k] Scroll  [:] Command  [q] Quit                               │
+│[Space] Start/Stop  [v] VAD  [Tab] Panels  [j/k] Scroll  [q] Quit                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

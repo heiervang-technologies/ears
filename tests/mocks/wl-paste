@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Mock wl-paste for testing - returns empty clipboard
+echo ""
+exit 0

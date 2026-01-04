@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Mock wl-copy for testing - does nothing (avoids clipboard modification)
+exit 0

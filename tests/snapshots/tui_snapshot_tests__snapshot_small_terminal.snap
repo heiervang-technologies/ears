@@ -7,13 +7,13 @@ expression: output
 ┌ Status ──────────────────────────────────────────────────┐
 │                                                          │
 │Current State: Idle                                       │
-│Model: ggml-base.en                                       │
-│Server: http://localhost:8178                             │
-│Device: Default Device                                    │
-│                                                          │
+│Model: unknown                                            │
+│Server: http://whisper.example.com/                       │
+│Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-│
+│Language: no                                              │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────┐
-│[Space] Start/Stop  [h/l] Tabs  [j/k] Scroll  [:] Command │
+│[Space] Start/Stop  [v] VAD  [Tab] Panels  [j/k] Scroll  [│
 └──────────────────────────────────────────────────────────┘
