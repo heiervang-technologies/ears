@@ -214,7 +214,13 @@ impl TextInput {
             .stderr(Stdio::null())
             .output()
             .ok()
-            .and_then(|o| if o.status.success() { Some(o.stdout) } else { None });
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(o.stdout)
+                } else {
+                    None
+                }
+            });
 
         // Copy text to clipboard using wl-copy
         let mut child = Command::new("wl-copy")

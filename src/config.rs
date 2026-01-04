@@ -64,7 +64,11 @@ impl Config {
 
         if let Ok(language) = std::env::var("EARS_LANGUAGE") {
             let language = language.trim();
-            config.language = if language.is_empty() { None } else { Some(language.to_string()) };
+            config.language = if language.is_empty() {
+                None
+            } else {
+                Some(language.to_string())
+            };
         }
 
         Ok(config)
@@ -135,7 +139,11 @@ impl Config {
             match fs::read_to_string(&language_file) {
                 Ok(language_str) => {
                     let language = language_str.trim().to_string();
-                    config.language = if language.is_empty() { None } else { Some(language) };
+                    config.language = if language.is_empty() {
+                        None
+                    } else {
+                        Some(language)
+                    };
                 }
                 Err(e) => {
                     tracing::warn!("Failed to read language config: {}", e);

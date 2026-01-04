@@ -4,12 +4,11 @@
 /// 1. Becomes unreachable during transcription
 /// 2. Returns malformed responses
 /// 3. Times out
-
 use ears::WhisperClient;
-use tempfile::NamedTempFile;
 use std::io::Write;
-use wiremock::{MockServer, Mock, ResponseTemplate};
+use tempfile::NamedTempFile;
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_whisper_server_dies_during_transcription() {
@@ -101,10 +100,7 @@ async fn test_whisper_server_malformed_response() {
     // Return invalid JSON
     Mock::given(method("POST"))
         .and(path("/inference"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string("This is not JSON")
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string("This is not JSON"))
         .mount(&mock_server)
         .await;
 
@@ -139,12 +135,9 @@ async fn test_whisper_server_returns_invalid_text_field() {
     // Return JSON but missing 'text' field
     Mock::given(method("POST"))
         .and(path("/inference"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({
-                    "error": "no speech detected"
-                }))
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "error": "no speech detected"
+        })))
         .mount(&mock_server)
         .await;
 

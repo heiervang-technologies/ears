@@ -84,7 +84,10 @@ impl ContinuousCapture {
             return Ok(());
         }
 
-        info!("Starting continuous audio capture from device: {}", self.config.device);
+        info!(
+            "Starting continuous audio capture from device: {}",
+            self.config.device
+        );
 
         // Start pw-record in continuous mode
         // Output raw PCM data (16-bit signed, mono, 16kHz)

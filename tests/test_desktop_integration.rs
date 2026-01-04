@@ -1,7 +1,6 @@
 /// Test for desktop integration
 ///
 /// Tests text input coordination and error handling (Issue #57)
-
 use ears::TextInput;
 
 #[test]

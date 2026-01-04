@@ -53,10 +53,7 @@ pub enum StreamingEvent {
     },
 
     /// Transcription segment completed
-    SegmentCompleted {
-        text: String,
-        duration_ms: u64,
-    },
+    SegmentCompleted { text: String, duration_ms: u64 },
 
     /// Error occurred
     Error(String),
@@ -122,10 +119,7 @@ impl StreamingEngine {
         typing_config: ProgressiveTypingConfig,
         temp_dir: PathBuf,
     ) -> Self {
-        let audio_buffer = AudioBuffer::new(
-            config.buffer_size_seconds,
-            vad_config.sample_rate,
-        );
+        let audio_buffer = AudioBuffer::new(config.buffer_size_seconds, vad_config.sample_rate);
 
         let vad_detector = VadSegmentDetector::new(vad_config);
         let local_agreement = LocalAgreementPolicy::new(config.agreement_threshold);
@@ -181,7 +175,10 @@ impl StreamingEngine {
     }
 
     /// Process a complete speech segment
-    async fn process_segment(&mut self, segment: SpeechSegment) -> Result<(), StreamingEngineError> {
+    async fn process_segment(
+        &mut self,
+        segment: SpeechSegment,
+    ) -> Result<(), StreamingEngineError> {
         let start_time = Instant::now();
 
         debug!(
@@ -192,7 +189,9 @@ impl StreamingEngine {
         );
 
         // Save segment to temporary WAV file
-        let segment_file = self.temp_dir.join(format!("segment_{}.wav", self.stats.segments_processed));
+        let segment_file = self
+            .temp_dir
+            .join(format!("segment_{}.wav", self.stats.segments_processed));
         self.save_wav(&segment_file, &segment.samples)
             .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
 
@@ -238,7 +237,8 @@ impl StreamingEngine {
         let latency_ms = start_time.elapsed().as_millis() as u64;
         self.stats.segments_processed += 1;
         self.stats.total_latency_ms += latency_ms;
-        self.stats.avg_latency_ms = self.stats.total_latency_ms / self.stats.segments_processed as u64;
+        self.stats.avg_latency_ms =
+            self.stats.total_latency_ms / self.stats.segments_processed as u64;
 
         // Send events
         self.send_event(StreamingEvent::TranscriptUpdate {

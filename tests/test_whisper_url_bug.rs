@@ -6,7 +6,6 @@
 ///
 /// While most HTTP servers tolerate this, it's technically incorrect and could fail
 /// with strict servers or reverse proxies.
-
 use ears::WhisperClient;
 
 #[test]

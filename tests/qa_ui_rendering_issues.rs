@@ -1,9 +1,8 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// QA UI Rendering Issues Investigation
 ///
 /// This test investigates potential UI rendering and display issues
-
 use ears::tui::{App, Panel};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_extremely_long_log_line() {
@@ -19,7 +18,8 @@ fn test_extremely_long_log_line() {
     app.handle_key(key_colon).unwrap();
 
     // Type the long message
-    for ch in long_message.chars().take(1000) {  // Limit to 1000 for test speed
+    for ch in long_message.chars().take(1000) {
+        // Limit to 1000 for test speed
         let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
         app.handle_key(key).unwrap();
     }
@@ -118,7 +118,11 @@ fn test_selected_log_out_of_bounds() {
     // BUG POTENTIAL: selected_log can be out of bounds
     // The UI rendering code should handle this gracefully (ratatui does)
     // but it's worth noting this edge case
-    println!("selected_log out of bounds: {} (logs.len: {})", app.selected_log, app.logs.len());
+    println!(
+        "selected_log out of bounds: {} (logs.len: {})",
+        app.selected_log,
+        app.logs.len()
+    );
     println!("POTENTIAL ISSUE: selected_log not validated to be < logs.len()");
 }
 

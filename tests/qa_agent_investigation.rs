@@ -1,9 +1,8 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// QA Agent Investigation - Finding real bugs in the TUI
 ///
 /// This test file investigates potential bugs in the ears TUI
-
 use ears::tui::{App, Panel};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_keybinding_conflict_c_key() {
@@ -21,7 +20,11 @@ fn test_keybinding_conflict_c_key() {
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
     let result = app.handle_key(key_c).unwrap();
     assert!(result, "Pressing 'c' should continue the app");
-    assert_eq!(app.current_panel, Panel::Configuration, "'c' should jump to Configuration panel");
+    assert_eq!(
+        app.current_panel,
+        Panel::Configuration,
+        "'c' should jump to Configuration panel"
+    );
 
     // Press Ctrl+C - should quit
     let key_ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
@@ -56,8 +59,10 @@ fn test_empty_command_handling() {
     println!("Last log after empty command: {}", last_log);
 
     // FIXED: Empty commands are now silently ignored
-    assert_eq!(last_log, "TUI initialized",
-        "Empty command should not add a log entry");
+    assert_eq!(
+        last_log, "TUI initialized",
+        "Empty command should not add a log entry"
+    );
 }
 
 #[test]
@@ -87,8 +92,10 @@ fn test_whitespace_only_command() {
     println!("Whitespace command logged: {}", last_log);
 
     // The command is trimmed, so this should behave like empty command (silently ignored)
-    assert_eq!(last_log, "TUI initialized",
-        "Whitespace-only command should be silently ignored like empty commands");
+    assert_eq!(
+        last_log, "TUI initialized",
+        "Whitespace-only command should be silently ignored like empty commands"
+    );
 }
 
 #[test]
@@ -106,7 +113,11 @@ fn test_very_long_command() {
         app.handle_key(key).unwrap();
     }
 
-    assert_eq!(app.command_buffer.len(), 1000, "Buffer should have 1000 chars");
+    assert_eq!(
+        app.command_buffer.len(),
+        1000,
+        "Buffer should have 1000 chars"
+    );
 
     // Press Enter
     let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
@@ -231,14 +242,19 @@ fn test_command_mode_with_special_chars() {
     app.handle_key(key_colon).unwrap();
 
     // Try typing various special characters
-    let special_chars = vec!['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '-', '=', '[', ']'];
+    let special_chars = vec![
+        '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '-', '=', '[', ']',
+    ];
 
     for ch in special_chars {
         let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
         app.handle_key(key).unwrap();
     }
 
-    assert!(app.command_buffer.len() > 0, "Should accept special characters");
+    assert!(
+        app.command_buffer.len() > 0,
+        "Should accept special characters"
+    );
     println!("Command buffer with special chars: {}", app.command_buffer);
 
     // Press Enter
@@ -247,7 +263,10 @@ fn test_command_mode_with_special_chars() {
 
     // Should log unknown command
     let last_log = app.logs.last().unwrap();
-    assert!(last_log.starts_with("Unknown command:"), "Should log unknown command");
+    assert!(
+        last_log.starts_with("Unknown command:"),
+        "Should log unknown command"
+    );
 
     println!("✓ Special characters in command mode handled correctly");
 }

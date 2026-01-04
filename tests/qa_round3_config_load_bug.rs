@@ -2,7 +2,6 @@
 ///
 /// BUG FOUND: When server config file exists with invalid URL,
 /// Config::load() fails completely instead of falling back to default
-
 use ears::Config;
 use std::fs;
 use tempfile::TempDir;
@@ -25,10 +24,7 @@ fn test_config_load_with_invalid_url_in_file() {
     config.config_dir = config_dir.clone();
 
     // Now try to manually do what Config::load does (lines 75-85)
-    let server_str = fs::read_to_string(&server_file)
-        .unwrap()
-        .trim()
-        .to_string();
+    let server_str = fs::read_to_string(&server_file).unwrap().trim().to_string();
 
     let parse_result = url::Url::parse(&server_str);
     println!("Parse result: {:?}", parse_result);

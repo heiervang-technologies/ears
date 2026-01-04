@@ -1,10 +1,9 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// QA Help Text Verification
 ///
 /// This test verifies that the help text in the footer accurately reflects
 /// the actual keybindings implemented in the app.
-
 use ears::tui::{App, Panel};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_tab_key_works_but_not_documented() {
@@ -18,14 +17,20 @@ fn test_tab_key_works_but_not_documented() {
     // Press Tab - should move to next panel (Configuration)
     let key_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
     app.handle_key(key_tab).unwrap();
-    assert_eq!(app.current_panel, Panel::Configuration,
-        "Tab should move to next panel");
+    assert_eq!(
+        app.current_panel,
+        Panel::Configuration,
+        "Tab should move to next panel"
+    );
 
     // Press Shift+Tab - should move to previous panel (Status)
     let key_shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
     app.handle_key(key_shift_tab).unwrap();
-    assert_eq!(app.current_panel, Panel::Status,
-        "Shift+Tab should move to previous panel");
+    assert_eq!(
+        app.current_panel,
+        Panel::Status,
+        "Shift+Tab should move to previous panel"
+    );
 
     // BUG FOUND: Tab and Shift+Tab work but are not documented in footer
     // Footer only shows "[h/l] Tabs" which is misleading
@@ -45,8 +50,11 @@ fn test_c_key_shortcut_not_documented() {
     // Press 'c' - should jump to Configuration
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
     app.handle_key(key_c).unwrap();
-    assert_eq!(app.current_panel, Panel::Configuration,
-        "'c' should jump to Configuration panel");
+    assert_eq!(
+        app.current_panel,
+        Panel::Configuration,
+        "'c' should jump to Configuration panel"
+    );
 
     // BUG FOUND: 'c' shortcut works but is not documented
     println!("BUG: 'c' key jumps to Config but not shown in footer");
@@ -62,7 +70,10 @@ fn test_all_documented_keys_work() {
     let was_recording = app.is_recording;
     let key_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
     app.handle_key(key_space).unwrap();
-    assert_ne!(app.is_recording, was_recording, "Space should toggle recording");
+    assert_ne!(
+        app.is_recording, was_recording,
+        "Space should toggle recording"
+    );
 
     // [h/l] Tabs
     let initial_panel = app.current_panel;

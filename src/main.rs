@@ -363,8 +363,7 @@ async fn stop_and_transcribe(
     }
 
     // Transcribe
-    let client = WhisperClient::new(config.whisper_server.clone())
-        .with_language(language);
+    let client = WhisperClient::new(config.whisper_server.clone()).with_language(language);
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!("Transcription successful: {}", text);

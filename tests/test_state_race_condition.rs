@@ -8,7 +8,6 @@
 /// 1. Process is killed externally
 /// 2. State file still says "Recording"
 /// 3. Application restarts and loads state
-
 use ears::{ProcessManager, State, StateManager};
 use std::time::Duration;
 use tempfile::TempDir;

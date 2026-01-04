@@ -11,9 +11,7 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    terminal
-        .draw(|f| ears::tui::ui::render(app, f))
-        .unwrap();
+    terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     // Convert buffer to string by iterating through cells
     let buffer = terminal.backend().buffer();
