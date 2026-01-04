@@ -70,8 +70,12 @@ impl ProcessManager {
         // Write PID to file
         self.write_pid(pid)?;
 
-        // Don't wait for the child - it runs in the background
-        std::mem::forget(child);
+        // Spawn a thread to wait for the child and clean up zombie processes
+        // This prevents zombie accumulation while still allowing background execution
+        std::thread::spawn(move || {
+            let _ = child.wait_with_output();
+            tracing::debug!("Recording process {} cleaned up", pid);
+        });
 
         Ok(pid)
     }
