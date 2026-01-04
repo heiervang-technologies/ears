@@ -96,28 +96,46 @@ fn test_main_rs_has_fallback() {
 fn test_better_error_recovery_approach() {
     println!("\n💡 BETTER APPROACH: Partial config loading with warnings");
 
+    // NOTE: This test demonstrates that the better approach has already been implemented!
+    // Config::load() now does partial recovery instead of failing completely.
+
     let temp_dir = TempDir::new().unwrap();
     let config_dir = temp_dir.path().join("config");
     fs::create_dir_all(&config_dir).unwrap();
 
+    // Set the config dir for this test
+    std::env::set_var("HOME", temp_dir.path());
+    std::env::set_var("XDG_CONFIG_HOME", temp_dir.path().join("config"));
+
     // Create valid device file but invalid server file
-    fs::write(config_dir.join("device"), "my-custom-device").unwrap();
-    fs::write(config_dir.join("server"), "invalid-url").unwrap();
+    let ears_config_dir = temp_dir.path().join("config").join("ears");
+    fs::create_dir_all(&ears_config_dir).unwrap();
+    fs::write(ears_config_dir.join("device"), "my-custom-device").unwrap();
+    fs::write(ears_config_dir.join("server"), "invalid-url").unwrap();
 
-    // Current behavior: Config::load() fails, loses both configs
+    // Current behavior: Config::load() succeeds with partial recovery
     let result = Config::load();
-    assert!(result.is_err());
+    assert!(result.is_ok(), "Config::load() should succeed with partial recovery");
 
-    println!("Current: Both device and server config are lost");
+    let config = result.unwrap();
 
-    // Better approach:
-    println!("\nBetter:");
-    println!("  1. Start with default config");
-    println!("  2. Try to load each file independently");
-    println!("  3. If device file is valid, use it; otherwise use default");
-    println!("  4. If server file is valid, use it; otherwise use default");
-    println!("  5. Log warnings for any failed loads");
-    println!("  Result: Partial recovery instead of total failure");
+    // Verify partial recovery works:
+    // 1. Device config should be preserved
+    assert_eq!(config.device, "my-custom-device", "Device config should be preserved");
+
+    // 2. Server URL should fall back to default
+    assert_eq!(
+        config.whisper_server.to_string(),
+        "http://127.0.0.1:8178/",
+        "Invalid server URL should fall back to default"
+    );
+
+    println!("✅ Partial recovery works!");
+    println!("  - Device config preserved: {}", config.device);
+    println!("  - Invalid server URL fell back to default: {}", config.whisper_server);
+
+    // Clean up
+    std::env::remove_var("XDG_CONFIG_HOME");
 }
 
 #[test]

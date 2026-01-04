@@ -12,7 +12,7 @@ use ears::WhisperClient;
 #[test]
 fn test_double_slash_in_health_check_url() {
     // Create a client with a URL (url::Url always adds trailing slash)
-    let client = WhisperClient::new("http://localhost:8178/");
+    let _client = WhisperClient::new("http://localhost:8178/");
 
     // The server_url field internally will be "http://localhost:8178/"
     // When health_check constructs the URL, it does:

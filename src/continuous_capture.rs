@@ -5,8 +5,6 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
