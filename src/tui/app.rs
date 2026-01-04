@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::config::Config;
 
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,6 +71,14 @@ pub struct App {
 impl App {
     /// Create a new application instance
     pub fn new() -> Self {
+        // Load config from files
+        let config = Config::load().unwrap_or_default();
+        let server_url = config.whisper_server.to_string();
+        let device = config.device.clone();
+
+        // Try to fetch model from the server's /v1/models endpoint
+        let model = Self::fetch_model_name(&server_url).unwrap_or_else(|| "unknown".to_string());
+
         Self {
             current_panel: Panel::Status,
             command_mode: false,
@@ -77,15 +86,33 @@ impl App {
             is_recording: false,
             recording_duration: 0,
             tick_count: 0,
-            model: "ggml-base.en".to_string(),
-            server: "http://localhost:8178".to_string(),
-            device: "Default Device".to_string(),
+            model,
+            server: server_url,
+            device,
             logs: vec![
                 "Application started".to_string(),
                 "TUI initialized".to_string(),
             ],
             selected_log: 0,
         }
+    }
+
+    /// Fetch the model name from the whisper server
+    fn fetch_model_name(server_url: &str) -> Option<String> {
+        let base = server_url.trim_end_matches('/');
+        let url = format!("{}/v1/models", base);
+
+        // Synchronous blocking request (TUI init is sync)
+        let response = reqwest::blocking::get(&url).ok()?;
+        let json: serde_json::Value = response.json().ok()?;
+
+        // OpenAI-compatible response: {"data": [{"id": "model-name", ...}]}
+        json.get("data")?
+            .as_array()?
+            .first()?
+            .get("id")?
+            .as_str()
+            .map(|s| s.to_string())
     }
 
     /// Handle a key press event

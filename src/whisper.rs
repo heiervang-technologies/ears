@@ -226,7 +226,7 @@ impl WhisperClient {
     /// Internal transcription logic without retry
     async fn transcribe_internal(&self, path: &Path) -> Result<String, WhisperError> {
         let base = self.server_url.trim_end_matches('/');
-        let url = format!("{}/inference", base);
+        let url = format!("{}/v1/audio/transcriptions", base);
         debug!("Sending transcription request to {}", url);
 
         // Read audio file
