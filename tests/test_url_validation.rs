@@ -67,7 +67,7 @@ fn test_url_with_path() {
     config.save().unwrap();
 
     let loaded = Config::load().unwrap();
-    // URL with path may or may not have trailing slash depending on how it was saved
+    // URL with path does NOT get trailing slash added (unlike root URLs)
     assert!(
         loaded
             .whisper_server
@@ -76,15 +76,15 @@ fn test_url_with_path() {
         "URL with path should be preserved"
     );
 
-    // Now when we construct endpoints:
+    // When we construct endpoints with a path URL (no trailing slash):
     let endpoint = format!("{}/health", loaded.whisper_server);
-    // This creates "http://example.com/whisper-api//health"
-    // DOUBLE SLASH AGAIN!
+    // This correctly creates "http://example.com/whisper-api/health" (no double slash)
+    // because the url crate only adds trailing slash to root paths, not to paths with segments
 
     println!("Endpoint with path: {}", endpoint);
-    assert!(
-        endpoint.contains("//health"),
-        "URL with path creates double slash"
+    assert_eq!(
+        endpoint, "http://example.com/whisper-api/health",
+        "URL with path correctly joins without double slash"
     );
 }
 
