@@ -252,7 +252,7 @@ fn test_command_mode_with_special_chars() {
     }
 
     assert!(
-        app.command_buffer.len() > 0,
+        !app.command_buffer.is_empty(),
         "Should accept special characters"
     );
     println!("Command buffer with special chars: {}", app.command_buffer);

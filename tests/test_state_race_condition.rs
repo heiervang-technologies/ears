@@ -35,7 +35,7 @@ fn test_stale_state_after_process_death() {
 
     // Before reconciliation: State file says "Recording" but process is dead
     assert_eq!(new_state_mgr.current_state(), State::Recording);
-    assert_eq!(process_mgr.is_recording_alive().unwrap(), false);
+    assert!(!process_mgr.is_recording_alive().unwrap());
 
     // FIX: Reconcile state with actual process status
     let was_reconciled = new_state_mgr

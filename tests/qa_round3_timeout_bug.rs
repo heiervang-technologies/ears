@@ -57,9 +57,9 @@ fn test_timeout_pid_vs_actual_pid() {
 
     let temp_dir = TempDir::new().unwrap();
     let pid_file = temp_dir.path().join("test.pid");
-    let audio_file = temp_dir.path().join("test.wav");
+    let _audio_file = temp_dir.path().join("test.wav");
 
-    let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(5));
+    let _process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(5));
 
     // Spawn a recording (simulated with sleep)
     let mut child = Command::new("timeout")
@@ -207,7 +207,7 @@ fn test_mem_forget_with_timeout_creates_two_zombies() {
     println!("\n🐛 BUG: mem::forget with timeout creates TWO zombie processes");
 
     // Spawn timeout -> sleep
-    let mut child = Command::new("timeout")
+    let child = Command::new("timeout")
         .arg("0.1")
         .arg("sleep")
         .arg("0.05")

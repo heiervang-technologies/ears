@@ -203,8 +203,8 @@ impl StateManager {
         }
 
         // Check if the recording process is actually alive
-        let process_alive = is_process_alive()
-            .map_err(|e| StateError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+        let process_alive =
+            is_process_alive().map_err(|e| StateError::Io(io::Error::other(e.to_string())))?;
 
         if !process_alive {
             // State says Recording but process is dead - reconcile

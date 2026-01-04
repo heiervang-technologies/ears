@@ -88,7 +88,7 @@ fn test_all_documented_keys_work() {
 
     // [j/k] Scroll - only works on Logs panel
     app.current_panel = Panel::Logs;
-    let initial_selection = app.selected_log;
+    let _initial_selection = app.selected_log;
     let key_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
     app.handle_key(key_j).unwrap();
     // May or may not change depending on log count

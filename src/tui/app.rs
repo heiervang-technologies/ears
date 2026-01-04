@@ -423,7 +423,7 @@ impl App {
         if self.is_recording {
             self.tick_count += 1;
             // With 250ms tick rate, 4 ticks = 1 second
-            if self.tick_count % 4 == 0 {
+            if self.tick_count.is_multiple_of(4) {
                 self.recording_duration += 1;
             }
         }

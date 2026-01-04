@@ -271,6 +271,7 @@ fn bug_hunt_panel_name_visibility() {
             Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
+            Panel::LiveTranscription => "Live",
         };
 
         if !output.contains(expected_panel) {
@@ -346,17 +347,15 @@ fn bug_hunt_selected_log_bounds() {
     let mut bugs = Vec::new();
 
     for (state, _app, _output) in &states {
-        if state.log_count > 0 {
-            if state.selected_log >= state.log_count {
-                bugs.push(Bug {
-                    description: format!(
-                        "selected_log ({}) >= log_count ({}) - out of bounds!",
-                        state.selected_log, state.log_count
-                    ),
-                    state: state.clone(),
-                    visual_sample: String::new(),
-                });
-            }
+        if state.log_count > 0 && state.selected_log >= state.log_count {
+            bugs.push(Bug {
+                description: format!(
+                    "selected_log ({}) >= log_count ({}) - out of bounds!",
+                    state.selected_log, state.log_count
+                ),
+                state: state.clone(),
+                visual_sample: String::new(),
+            });
         }
     }
 
@@ -417,6 +416,7 @@ fn bug_hunt_summary_report() {
             Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
+            Panel::LiveTranscription => "Live",
         };
         if !output.contains(panel_name) {
             all_bugs.push(Bug {

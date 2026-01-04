@@ -189,7 +189,7 @@ mod tests {
             auto_correction: true,
         };
 
-        let mut engine = ProgressiveTypingEngine::new(config);
+        let engine = ProgressiveTypingEngine::new(config);
 
         // Should do nothing when disabled
         // Note: This will fail because TextInput needs ydotool running

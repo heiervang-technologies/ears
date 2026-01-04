@@ -14,12 +14,12 @@ fn test_zombie_process_bug() {
 
     let temp_dir = TempDir::new().unwrap();
     let pid_file = temp_dir.path().join("test.pid");
-    let audio_file = temp_dir.path().join("test.wav");
+    let _audio_file = temp_dir.path().join("test.wav");
 
-    let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(10));
+    let _process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(10));
 
     // Spawn a short-lived process
-    let mut child = Command::new("sleep").arg("0.1").spawn().unwrap();
+    let child = Command::new("sleep").arg("0.1").spawn().unwrap();
     let pid = child.id();
 
     println!("Spawned process with PID: {}", pid);
@@ -56,7 +56,7 @@ fn test_correct_process_cleanup() {
     println!("\n✅ CORRECT: Without mem::forget, zombie is cleaned up");
 
     // Spawn a short-lived process
-    let mut child = Command::new("sleep").arg("0.1").spawn().unwrap();
+    let child = Command::new("sleep").arg("0.1").spawn().unwrap();
     let pid = child.id();
 
     println!("Spawned process with PID: {}", pid);
@@ -130,13 +130,13 @@ fn demonstrate_solution() {
 fn test_zombie_accumulation_scenario() {
     println!("\n🐛 SCENARIO: Multiple recordings create multiple zombies");
 
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
     // Simulate multiple recording sessions
     let mut pids = Vec::new();
 
     for i in 0..5 {
-        let mut child = Command::new("sleep").arg("0.1").spawn().unwrap();
+        let child = Command::new("sleep").arg("0.1").spawn().unwrap();
         let pid = child.id();
         pids.push(pid);
 
