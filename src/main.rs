@@ -237,7 +237,7 @@ async fn handle_toggle() -> Result<()> {
     let is_recording = process_mgr.is_recording_alive().unwrap_or(false);
 
     if is_recording {
-        stop_and_transcribe(&config, &process_mgr).await
+        stop_and_transcribe(&config, &mut state_mgr, &process_mgr).await
     } else {
         start_recording(&config, &mut state_mgr, &process_mgr).await
     }
@@ -285,7 +285,11 @@ async fn start_recording(
 }
 
 /// Stop recording and transcribe
-async fn stop_and_transcribe(config: &Config, process_mgr: &ProcessManager) -> Result<()> {
+async fn stop_and_transcribe(
+    config: &Config,
+    state_mgr: &mut StateManager,
+    process_mgr: &ProcessManager,
+) -> Result<()> {
     tracing::info!("Stopping recording and transcribing");
 
     // Get the PID
@@ -336,6 +340,23 @@ async fn stop_and_transcribe(config: &Config, process_mgr: &ProcessManager) -> R
 
     tracing::info!("Audio file size: {} bytes", metadata.len());
 
+    // Validate WAV file format
+    let mut header = [0u8; 12];
+    let mut file = tokio::fs::File::open(&audio_file).await?;
+    use tokio::io::AsyncReadExt;
+    file.read_exact(&mut header).await?;
+
+    // Check for "RIFF" signature and "WAVE" format
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        AudioFeedback::beep_error().ok();
+        Notifications::error("Recording file is corrupted").ok();
+        std::fs::remove_file(&audio_file).ok();
+        tracing::error!("Audio file is not a valid WAV file");
+        anyhow::bail!("Invalid audio file format");
+    }
+
+    tracing::info!("WAV file validation passed");
+
     // Transcribe
     let client = WhisperClient::new(config.whisper_server.clone());
     match client.transcribe(&audio_file).await {
@@ -368,6 +389,11 @@ async fn stop_and_transcribe(config: &Config, process_mgr: &ProcessManager) -> R
 
     // Clean up audio file
     std::fs::remove_file(&audio_file).ok();
+
+    // Reset state to Idle
+    state_mgr
+        .transition(StateEnum::Idle)
+        .context("Failed to transition to Idle state")?;
 
     Ok(())
 }
