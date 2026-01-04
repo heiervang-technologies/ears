@@ -174,10 +174,16 @@ impl App {
 
     /// Execute a vim-style command
     fn execute_command(&mut self) -> Result<bool> {
+        let cmd = self.command_buffer.trim();
+
+        // Silently ignore empty commands
+        if cmd.is_empty() {
+            return Ok(true);
+        }
+
         // Check if user is viewing the last log before adding a new one
         let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
 
-        let cmd = self.command_buffer.trim();
         let result = match cmd {
             "q" | "quit" => return Ok(false),
             "w" | "write" => {
