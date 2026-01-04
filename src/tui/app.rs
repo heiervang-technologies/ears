@@ -48,6 +48,9 @@ impl Panel {
 /// Main application state for the TUI
 #[derive(Clone)]
 pub struct App {
+    // TODO(Phase 3): Add StreamingEngine and ContinuousCapture fields
+    // TODO(Phase 3): Wire VAD toggle to streaming lifecycle
+    // TODO(Phase 3): Handle StreamingEvent updates from engine
     /// Current active panel
     pub current_panel: Panel,
     /// Whether the app is in command mode (vim :command)
