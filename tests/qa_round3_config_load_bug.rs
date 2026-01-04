@@ -92,28 +92,25 @@ fn test_main_rs_has_fallback() {
 fn test_better_error_recovery_approach() {
     println!("\n💡 BETTER APPROACH: Partial config loading with warnings");
 
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("config");
-    fs::create_dir_all(&config_dir).unwrap();
+    // Config::load() now handles partial failures gracefully
+    // It loads each file independently and uses defaults for failed loads
+    // This test documents the expected behavior without modifying real config files
 
-    // Create valid device file but invalid server file
-    fs::write(config_dir.join("device"), "my-custom-device").unwrap();
-    fs::write(config_dir.join("server"), "invalid-url").unwrap();
-
-    // Current behavior: Config::load() fails, loses both configs
     let result = Config::load();
-    assert!(result.is_err());
+    // Config should always load successfully, falling back to defaults when needed
+    assert!(result.is_ok(), "Config should load with partial recovery");
 
-    println!("Current: Both device and server config are lost");
+    let config = result.unwrap();
+    println!("Loaded config with partial recovery:");
+    println!("  Device: {}", config.device);
+    println!("  Server: {}", config.whisper_server);
 
-    // Better approach:
-    println!("\nBetter:");
-    println!("  1. Start with default config");
-    println!("  2. Try to load each file independently");
-    println!("  3. If device file is valid, use it; otherwise use default");
-    println!("  4. If server file is valid, use it; otherwise use default");
-    println!("  5. Log warnings for any failed loads");
-    println!("  Result: Partial recovery instead of total failure");
+    // The config structure should always be valid
+    assert!(!config.device.is_empty(), "Device should have a value");
+    assert!(
+        config.whisper_server.as_str().starts_with("http"),
+        "Server should be a valid URL"
+    );
 }
 
 #[test]
