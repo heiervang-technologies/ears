@@ -5,13 +5,14 @@ A production-grade speech recognition daemon for Linux that integrates whisper.c
 ## Features
 
 - **Push-to-talk interface**: Press once to start recording, press again to transcribe
+- **Interactive TUI mode**: Terminal user interface for real-time status monitoring (--tui flag)
 - **Whisper.cpp integration**: Leverages GPU-accelerated whisper.cpp server
 - **PipeWire audio**: Native support for modern Linux audio stack
 - **Configurable devices**: Easy microphone selection with fzf
 - **Audio feedback**: Beep sounds for start/stop confirmation
 - **Desktop notifications**: System notifications for errors and status
 - **Direct text input**: Automatically types transcribed text using ydotool
-- **State management**: Proper locking and cleanup of recording sessions
+- **State management**: Proper locking and cleanup of recording sessions with automatic reconciliation
 - **Timeout protection**: Automatically stops runaway recordings after 2 minutes
 
 ## Architecture
@@ -97,6 +98,17 @@ systemctl --user start ydotool
 
 ## Installation
 
+### From Source (Recommended)
+
+```bash
+git clone https://github.com/heiervang-technologies/ears
+cd ears
+cargo build --release --all-features
+cargo install --path .
+```
+
+### Using install.sh
+
 ```bash
 git clone https://github.com/heiervang-technologies/ears
 cd ears
@@ -104,6 +116,7 @@ cd ears
 ```
 
 This will:
+- Build the Rust binary with all features
 - Install `ears` to `~/.local/bin/ears`
 - Create config directory at `~/.config/ears`
 - Create sounds directory at `~/.local/share/ears-sounds`
@@ -187,26 +200,32 @@ bindsym $mod+Shift+v exec ears
 ### Command-Line Options
 
 ```
-Usage: ears [OPTION]
+Usage: ears [OPTIONS] [COMMAND]
 
 Without options: Toggle recording/transcription
 
 Options:
-  -s, --select       Select audio device with fzf
-  -l, --list         List available audio devices
-  -c, --current      Show current device
-  --server [URL]     Show or set whisper server URL
+  -t, --tui          Launch interactive TUI mode
   -h, --help         Show this help
+  -V, --version      Print version
+
+Commands:
+  device             Manage audio input device
+  server             Manage whisper server configuration
+  help               Print this message or the help of the given subcommand(s)
 ```
 
 ## How It Works
 
 ### State Management
 
-ears uses lock files and PID tracking to maintain state:
-- **Lock file**: `$XDG_RUNTIME_DIR/ears/lock` - Prevents concurrent instances
-- **PID file**: `$XDG_RUNTIME_DIR/ears/recording.pid` - Tracks recording process
-- **Audio file**: `$XDG_RUNTIME_DIR/ears/recording.wav` - Temporary recording storage
+ears uses files in `$XDG_RUNTIME_DIR/ears/` to maintain state:
+- **State file**: `state` - Tracks current state (Idle/Recording/Transcribing)
+- **Lock file**: `lock` - Prevents concurrent instances
+- **PID file**: `recording.pid` - Tracks recording process
+- **Audio file**: `recording.wav` - Temporary recording storage
+
+The state is automatically reconciled on startup to handle crashed processes.
 
 ### Audio Recording
 
@@ -250,7 +269,8 @@ Falls back to system sounds if custom sounds aren't found.
 
 ### "No active recording"
 - Recording may have timed out (2 minute limit)
-- Check state: `ls $XDG_RUNTIME_DIR/ears/`
+- Check state: `cat $XDG_RUNTIME_DIR/ears/state` (should show "idle" or "recording")
+- Check PID: `cat $XDG_RUNTIME_DIR/ears/recording.pid`
 - View logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
 
 ### "Transcription failed"
@@ -286,20 +306,36 @@ Falls back to system sounds if custom sounds aren't found.
 
 ```
 ears/
+├── src/               # Rust source code
+│   ├── main.rs        # Main entry point and core logic
+│   ├── lib.rs         # Library modules
+│   ├── audio.rs       # Audio feedback
+│   ├── cli.rs         # Command-line interface
+│   ├── config.rs      # Configuration management
+│   ├── notifications.rs  # Desktop notifications
+│   ├── process.rs     # Process management
+│   ├── recording.rs   # Audio recording
+│   ├── state.rs       # State management
+│   ├── text_input.rs  # Text input automation
+│   ├── tui.rs         # Terminal UI
+│   └── whisper.rs     # Whisper API client
 ├── bin/
-│   └── ears           # Main executable script
+│   └── ears           # Legacy bash script
 ├── sounds/            # Optional custom sound files
 ├── install.sh         # Installation script
+├── Cargo.toml         # Rust package manifest
 ├── README.md          # This file
 ├── CLAUDE.md          # Agent instructions
-└── .github/           # GitHub workflows (from template)
+└── .github/           # GitHub workflows
 ```
 
 ### Running from Source
 
 ```bash
 cd ears
-./bin/ears
+cargo run
+# Or with TUI mode:
+cargo run -- --tui
 ```
 
 ### Debugging
@@ -311,11 +347,17 @@ tail -f $XDG_RUNTIME_DIR/ears/debug.log
 
 ### Testing
 
+Run the test suite:
+
+```bash
+cargo test
+```
+
 Test individual components:
 
 ```bash
-# List devices
-./bin/ears --list
+# Run ears with debug output
+RUST_LOG=debug cargo run
 
 # Test server connection
 curl -sf http://localhost:8178/health
