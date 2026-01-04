@@ -132,7 +132,7 @@ fn explore_state_space(max_states: usize) -> HashMap<AppState, String> {
                         state_snapshots.insert(new_state, render_to_string(&new_app));
                         queue.push_back(new_app);
 
-                        if visited.len() % 10 == 0 {
+                        if visited.len().is_multiple_of(10) {
                             println!("Discovered {} states...", visited.len());
                         }
                     }
