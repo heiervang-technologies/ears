@@ -16,8 +16,12 @@ mkdir -p "$INSTALL_DIR"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$SOUNDS_DIR"
 
-# Install the main script
-cp bin/ears "$INSTALL_DIR/ears"
+# Build Rust binary with all features
+echo "Building Rust binary..."
+cargo build --release --all-features
+
+# Install the Rust binary
+cp target/release/ears "$INSTALL_DIR/ears"
 chmod +x "$INSTALL_DIR/ears"
 
 echo "✓ Installed ears to $INSTALL_DIR/ears"
