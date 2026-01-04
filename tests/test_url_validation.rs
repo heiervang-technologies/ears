@@ -69,7 +69,10 @@ fn test_url_with_path() {
     let loaded = Config::load().unwrap();
     // URL with path may or may not have trailing slash depending on how it was saved
     assert!(
-        loaded.whisper_server.as_str().starts_with("http://example.com/whisper-api"),
+        loaded
+            .whisper_server
+            .as_str()
+            .starts_with("http://example.com/whisper-api"),
         "URL with path should be preserved"
     );
 
