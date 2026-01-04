@@ -23,6 +23,9 @@ pub mod tui;
 // Iteration 8: Streaming transcription with VAD
 pub mod streaming;
 pub mod vad;
+pub mod progressive_typing;
+pub mod streaming_engine;
+pub mod continuous_capture;
 
 // Re-exports from Iteration 1
 pub use config::Config;

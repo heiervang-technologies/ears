@@ -184,9 +184,32 @@ impl App {
                 self.scroll_up();
             }
 
-            // Space to toggle recording
+            // Space to toggle recording (in Status panel) or VAD mode (in Live panel)
             (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                self.toggle_recording();
+                if self.current_panel == Panel::LiveTranscription {
+                    self.toggle_vad_mode();
+                } else {
+                    self.toggle_recording();
+                }
+            }
+
+            // 'v' to toggle VAD mode
+            (KeyCode::Char('v'), KeyModifiers::NONE) => {
+                self.toggle_vad_mode();
+            }
+
+            // 't' to toggle progressive typing (in Live panel)
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::LiveTranscription {
+                    self.toggle_progressive_typing();
+                }
+            }
+
+            // 'a' to toggle auto-correction (in Live panel)
+            (KeyCode::Char('a'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::LiveTranscription {
+                    self.toggle_auto_correction();
+                }
             }
 
             // 'c' to go to configuration panel
@@ -294,6 +317,62 @@ impl App {
         if was_viewing_last_log {
             self.selected_log = self.logs.len() - 1;
         }
+    }
+
+    /// Toggle VAD mode
+    pub fn toggle_vad_mode(&mut self) {
+        let was_viewing_last_log = !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
+        self.vad_active = !self.vad_active;
+        if self.vad_active {
+            self.logs.push("VAD mode enabled".to_string());
+            // Reset streaming state
+            self.committed_text.clear();
+            self.uncommitted_text.clear();
+            self.segments_processed = 0;
+        } else {
+            self.logs.push("VAD mode disabled".to_string());
+        }
+
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
+        }
+    }
+
+    /// Toggle progressive typing setting
+    pub fn toggle_progressive_typing(&mut self) {
+        self.progressive_typing = !self.progressive_typing;
+        let status = if self.progressive_typing {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Progressive typing {}", status));
+    }
+
+    /// Toggle auto-correction setting
+    pub fn toggle_auto_correction(&mut self) {
+        self.auto_correction = !self.auto_correction;
+        let status = if self.auto_correction {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Auto-correction {}", status));
+    }
+
+    /// Update streaming transcription state (called from streaming engine)
+    pub fn update_streaming_state(
+        &mut self,
+        committed: String,
+        uncommitted: String,
+        segments_processed: usize,
+        avg_latency_ms: u64,
+    ) {
+        self.committed_text = committed;
+        self.uncommitted_text = uncommitted;
+        self.segments_processed = segments_processed;
+        self.avg_latency_ms = avg_latency_ms;
     }
 
     /// Handle a tick event

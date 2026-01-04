@@ -231,18 +231,31 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw(&app.command_buffer),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ])
+    } else if app.current_panel == Panel::LiveTranscription {
+        // Live panel shortcuts
+        Line::from(vec![
+            Span::styled("[Space/v] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Toggle VAD  "),
+            Span::styled("[t] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Typing  "),
+            Span::styled("[a] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Auto-corr  "),
+            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Panels  "),
+            Span::styled("[q] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Quit"),
+        ])
     } else {
+        // Default shortcuts
         Line::from(vec![
             Span::styled("[Space] ", Style::default().fg(Color::Cyan)),
             Span::raw("Start/Stop  "),
-            Span::styled("[h/l/Tab] ", Style::default().fg(Color::Cyan)),
+            Span::styled("[v] ", Style::default().fg(Color::Cyan)),
+            Span::raw("VAD  "),
+            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
             Span::raw("Panels  "),
-            Span::styled("[c] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Config  "),
             Span::styled("[j/k] ", Style::default().fg(Color::Cyan)),
             Span::raw("Scroll  "),
-            Span::styled("[:] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Cmd  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
