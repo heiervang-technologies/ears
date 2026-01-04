@@ -53,6 +53,8 @@ pub struct App {
     pub is_recording: bool,
     /// Recording duration in seconds
     pub recording_duration: u64,
+    /// Tick counter for tracking recording duration (4 ticks = 1 second at 250ms tick rate)
+    tick_count: u64,
     /// Current model name
     pub model: String,
     /// Server URL
@@ -74,6 +76,7 @@ impl App {
             command_buffer: String::new(),
             is_recording: false,
             recording_duration: 0,
+            tick_count: 0,
             model: "ggml-base.en".to_string(),
             server: "http://localhost:8178".to_string(),
             device: "Default Device".to_string(),
@@ -224,6 +227,7 @@ impl App {
         if self.is_recording {
             self.logs.push("Started recording".to_string());
             self.recording_duration = 0;
+            self.tick_count = 0;
         } else {
             self.logs.push("Stopped recording".to_string());
         }
@@ -231,6 +235,18 @@ impl App {
         // If user was viewing the last log, update selected_log to follow the new log
         if was_viewing_last_log {
             self.selected_log = self.logs.len() - 1;
+        }
+    }
+
+    /// Handle a tick event
+    /// Updates recording duration if currently recording
+    pub fn handle_tick(&mut self) {
+        if self.is_recording {
+            self.tick_count += 1;
+            // With 250ms tick rate, 4 ticks = 1 second
+            if self.tick_count % 4 == 0 {
+                self.recording_duration += 1;
+            }
         }
     }
 }

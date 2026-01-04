@@ -49,9 +49,18 @@ pub fn run() -> Result<()> {
     loop {
         terminal.draw(|f| ui::render(&app, f))?;
 
-        if let Event::Key(key) = event_handler.next()? {
-            if !app.handle_key(key)? {
-                break;
+        match event_handler.next()? {
+            Event::Key(key) => {
+                if !app.handle_key(key)? {
+                    break;
+                }
+            }
+            Event::Tick => {
+                app.handle_tick();
+            }
+            Event::Resize(_, _) => {
+                // Terminal resize is handled automatically by ratatui
+                // on the next draw() call, no action needed
             }
         }
     }
