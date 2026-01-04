@@ -13,6 +13,8 @@ pub enum State {
     Recording,
     /// Processing/transcribing recorded audio
     Transcribing,
+    /// VAD mode active - continuously listening and auto-transcribing
+    VadActive,
 }
 
 /// Errors that can occur during state management
@@ -108,6 +110,10 @@ impl StateManager {
             (State::Idle, State::Recording) => true,
             // Can transition to transcribing from recording
             (State::Recording, State::Transcribing) => true,
+            // Can enable VAD mode from Idle
+            (State::Idle, State::VadActive) => true,
+            // VAD mode can transition back to Idle
+            (State::VadActive, State::Idle) => true,
             // Can always transition to Idle (emergency stop)
             (_, State::Idle) => true,
             // All other transitions are invalid
@@ -126,6 +132,7 @@ impl StateManager {
             State::Idle => "idle",
             State::Recording => "recording",
             State::Transcribing => "transcribing",
+            State::VadActive => "vad_active",
         };
 
         fs::write(self.state_file_path(), state_str)?;
@@ -147,6 +154,7 @@ impl StateManager {
             "idle" => State::Idle,
             "recording" => State::Recording,
             "transcribing" => State::Transcribing,
+            "vad_active" => State::VadActive,
             _ => return Err(StateError::CorruptedState),
         };
 

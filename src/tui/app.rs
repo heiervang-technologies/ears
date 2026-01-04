@@ -10,6 +10,7 @@ pub enum Panel {
     Status,
     Configuration,
     Logs,
+    LiveTranscription,
 }
 
 impl Panel {
@@ -18,16 +19,18 @@ impl Panel {
         match self {
             Panel::Status => Panel::Configuration,
             Panel::Configuration => Panel::Logs,
-            Panel::Logs => Panel::Status,
+            Panel::Logs => Panel::LiveTranscription,
+            Panel::LiveTranscription => Panel::Status,
         }
     }
 
     /// Get the previous panel (tab left)
     pub fn prev(self) -> Self {
         match self {
-            Panel::Status => Panel::Logs,
+            Panel::Status => Panel::LiveTranscription,
             Panel::Configuration => Panel::Status,
             Panel::Logs => Panel::Configuration,
+            Panel::LiveTranscription => Panel::Logs,
         }
     }
 
@@ -37,6 +40,7 @@ impl Panel {
             Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
+            Panel::LiveTranscription => "Live",
         }
     }
 }
@@ -66,6 +70,20 @@ pub struct App {
     pub logs: Vec<String>,
     /// Selected log index (for scrolling)
     pub selected_log: usize,
+    /// VAD mode active
+    pub vad_active: bool,
+    /// Committed (stable) transcription text
+    pub committed_text: String,
+    /// Uncommitted (unstable) transcription text
+    pub uncommitted_text: String,
+    /// Progressive typing enabled
+    pub progressive_typing: bool,
+    /// Auto-correction enabled
+    pub auto_correction: bool,
+    /// Number of segments processed (for stats)
+    pub segments_processed: usize,
+    /// Average latency in milliseconds (for stats)
+    pub avg_latency_ms: u64,
 }
 
 impl App {
@@ -94,6 +112,13 @@ impl App {
                 "TUI initialized".to_string(),
             ],
             selected_log: 0,
+            vad_active: false,
+            committed_text: String::new(),
+            uncommitted_text: String::new(),
+            progressive_typing: true,
+            auto_correction: true,
+            segments_processed: 0,
+            avg_latency_ms: 0,
         }
     }
 
