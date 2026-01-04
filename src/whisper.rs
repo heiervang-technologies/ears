@@ -126,7 +126,8 @@ impl WhisperClient {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<(), WhisperError> {
-        let url = format!("{}/health", self.server_url);
+        let base = self.server_url.trim_end_matches('/');
+        let url = format!("{}/health", base);
         debug!("Performing health check on {}", url);
 
         let response = self
@@ -224,7 +225,8 @@ impl WhisperClient {
 
     /// Internal transcription logic without retry
     async fn transcribe_internal(&self, path: &Path) -> Result<String, WhisperError> {
-        let url = format!("{}/inference", self.server_url);
+        let base = self.server_url.trim_end_matches('/');
+        let url = format!("{}/inference", base);
         debug!("Sending transcription request to {}", url);
 
         // Read audio file
