@@ -8,8 +8,8 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
 use ears::{
-    AudioFeedback, Notifications, ProcessManager, State as StateEnum, StateManager, TextInput,
-    WhisperClient,
+    AudioFeedback, KeyboardLayout, Notifications, ProcessManager, State as StateEnum, StateManager,
+    TextInput, WhisperClient,
 };
 use std::time::Duration;
 use url::Url;
@@ -356,8 +356,15 @@ async fn stop_and_transcribe(
 
     tracing::info!("WAV file validation passed");
 
+    // Detect language from keyboard layout (overrides config if set)
+    let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    if let Some(ref lang) = language {
+        tracing::info!("Using language: {} (from keyboard layout)", lang);
+    }
+
     // Transcribe
-    let client = WhisperClient::new(config.whisper_server.clone());
+    let client = WhisperClient::new(config.whisper_server.clone())
+        .with_language(language);
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!("Transcription successful: {}", text);

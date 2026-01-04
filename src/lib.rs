@@ -39,7 +39,7 @@ pub use state::{State, StateError, StateManager};
 pub use whisper::{WhisperClient, WhisperError};
 
 // Re-exports from Iteration 6
-pub use desktop::{AudioFeedback, Notifications, TextInput, Urgency};
+pub use desktop::{AudioFeedback, KeyboardLayout, Notifications, TextInput, Urgency};
 
 // Re-exports from Iteration 8
 pub use streaming::{

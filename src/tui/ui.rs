@@ -131,6 +131,10 @@ fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("Device: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(&app.device),
         ]),
+        Line::from(vec![
+            Span::styled("Language: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(app.language.as_deref().unwrap_or("auto")),
+        ]),
     ];
 
     let paragraph = Paragraph::new(text)
@@ -170,9 +174,15 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw(&app.device),
         ]),
         Line::from(""),
+        Line::from(vec![
+            Span::styled("Language: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(app.language.as_deref().unwrap_or("auto")),
+            Span::styled(" (Shift+L to cycle)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
         Line::from(""),
         Line::from(Span::styled(
-            "Configuration editing not yet implemented",
+            "Press Shift+L to cycle: auto → en → no → auto",
             Style::default().fg(Color::DarkGray),
         )),
     ];

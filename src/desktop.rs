@@ -1,10 +1,76 @@
 //! Desktop integration for ears
 //!
-//! Handles notifications, audio feedback, and text input automation.
+//! Handles notifications, audio feedback, text input automation, and keyboard layout detection.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Keyboard layout detection for GNOME
+pub struct KeyboardLayout;
+
+impl KeyboardLayout {
+    /// Detect the current keyboard layout and return the corresponding language code
+    /// Returns Some("en") for US layout, Some("no") for Norwegian, None for unknown/auto
+    pub fn detect_language() -> Option<String> {
+        // Use mru-sources (most recently used) - first item is current layout
+        // This works with GNOME's per-window keyboard layout switching
+        let mru_output = Command::new("dconf")
+            .args(["read", "/org/gnome/desktop/input-sources/mru-sources"])
+            .output()
+            .ok()?;
+
+        if !mru_output.status.success() {
+            return None;
+        }
+
+        let mru_str = String::from_utf8_lossy(&mru_output.stdout);
+        // Parse "[('xkb', 'no'), ('xkb', 'us')]" - first entry is current
+        let layout = Self::parse_first_layout(&mru_str)?;
+
+        tracing::debug!("Detected keyboard layout: {}", layout);
+
+        // Map layout code to language code
+        Self::layout_to_language(&layout)
+    }
+
+    /// Parse the dconf mru-sources output and get the first (current) layout
+    fn parse_first_layout(sources: &str) -> Option<String> {
+        // Format: [('xkb', 'no'), ('xkb', 'us')]
+        // First entry is the current layout
+
+        let trimmed = sources.trim();
+        if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+            return None;
+        }
+
+        // Find the first 'layout' pattern
+        if let Some(start) = trimmed.find("('xkb', '") {
+            let after_prefix = &trimmed[start + 9..]; // Skip "('xkb', '"
+            if let Some(end) = after_prefix.find("')") {
+                return Some(after_prefix[..end].to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Map keyboard layout code to transcription language code
+    fn layout_to_language(layout: &str) -> Option<String> {
+        match layout {
+            "us" | "gb" | "uk" => Some("en".to_string()),
+            "no" | "no+nodeadkeys" => Some("no".to_string()),
+            "de" => Some("de".to_string()),
+            "fr" => Some("fr".to_string()),
+            "es" => Some("es".to_string()),
+            "se" => Some("sv".to_string()),
+            "dk" => Some("da".to_string()),
+            "fi" => Some("fi".to_string()),
+            // Add more mappings as needed
+            _ => None, // Unknown layout = auto-detect
+        }
+    }
+}
 
 /// Notification urgency levels
 #[derive(Debug, Clone, Copy)]
@@ -132,10 +198,77 @@ impl TextInput {
     /// The `delay_ms` parameter controls the delay between keystrokes.
     /// Default is 12ms if not specified (ydotool's default).
     pub fn type_text(text: &str) -> Result<()> {
-        Self::type_text_with_delay(text, None)
+        // Use clipboard + paste for reliable Unicode support
+        Self::paste_text(text)
     }
 
-    /// Type text using ydotool with a specific delay
+    /// Paste text using wl-copy + ydotool Ctrl+V (handles Unicode correctly)
+    /// Preserves and restores the original clipboard contents
+    fn paste_text(text: &str) -> Result<()> {
+        use std::process::Stdio;
+
+        // Save current clipboard contents
+        let original_clipboard = Command::new("wl-paste")
+            .arg("--no-newline")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .and_then(|o| if o.status.success() { Some(o.stdout) } else { None });
+
+        // Copy text to clipboard using wl-copy
+        let mut child = Command::new("wl-copy")
+            .arg("--")
+            .arg(text)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to run wl-copy")?;
+
+        child.wait().context("wl-copy failed")?;
+
+        // Small delay to ensure clipboard is ready
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Simulate Ctrl+V to paste
+        let status = Command::new("ydotool")
+            .args(["key", "ctrl+v"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("Failed to run ydotool key")?;
+
+        if !status.success() {
+            anyhow::bail!("ydotool key failed with status: {}", status);
+        }
+
+        // Small delay before restoring clipboard
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Restore original clipboard contents
+        if let Some(original) = original_clipboard {
+            let mut restore = Command::new("wl-copy")
+                .arg("--")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("Failed to restore clipboard")?;
+
+            if let Some(mut stdin) = restore.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(&original);
+            }
+            let _ = restore.wait();
+        }
+
+        Ok(())
+    }
+
+    /// Type text using ydotool with a specific delay (fallback)
+    #[allow(dead_code)]
     pub fn type_text_with_delay(text: &str, delay_ms: Option<u32>) -> Result<()> {
         let mut cmd = Command::new("ydotool");
         cmd.arg("type");
