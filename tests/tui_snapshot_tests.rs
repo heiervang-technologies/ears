@@ -2,9 +2,21 @@
 //!
 //! These tests use `insta` to capture snapshots of the TUI output.
 //! Run `cargo insta review` to review and accept snapshot changes.
+//!
+//! NOTE: These tests use a temp HOME directory to ensure consistent
+//! config values across different environments (local vs CI).
 
 use ears::tui::{App, Panel};
 use ratatui::{backend::TestBackend, Terminal};
+use std::env;
+use tempfile::TempDir;
+
+/// Setup a clean HOME directory for tests to get consistent config
+fn setup_test_env() -> TempDir {
+    let temp_dir = TempDir::new().unwrap();
+    env::set_var("HOME", temp_dir.path());
+    temp_dir
+}
 
 /// Helper function to render the app and return the terminal buffer as a string
 fn render_to_string(app: &App, width: u16, height: u16) -> String {
@@ -32,6 +44,7 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
 
 #[test]
 fn snapshot_initial_state() {
+    let _env = setup_test_env();
     let app = App::new();
     let output = render_to_string(&app, 80, 24);
     insta::assert_snapshot!(output);
@@ -39,6 +52,7 @@ fn snapshot_initial_state() {
 
 #[test]
 fn snapshot_recording_state() {
+    let _env = setup_test_env();
     let mut app = App::new();
     app.is_recording = true;
     app.recording_duration = 42;
@@ -48,6 +62,7 @@ fn snapshot_recording_state() {
 
 #[test]
 fn snapshot_status_panel() {
+    let _env = setup_test_env();
     let app = App::new();
     let output = render_to_string(&app, 100, 30);
     insta::assert_snapshot!(output);
@@ -55,6 +70,7 @@ fn snapshot_status_panel() {
 
 #[test]
 fn snapshot_config_panel() {
+    let _env = setup_test_env();
     let mut app = App::new();
     app.current_panel = Panel::Configuration;
     let output = render_to_string(&app, 100, 30);
@@ -63,6 +79,7 @@ fn snapshot_config_panel() {
 
 #[test]
 fn snapshot_logs_panel_with_content() {
+    let _env = setup_test_env();
     let mut app = App::new();
     app.current_panel = Panel::Logs;
     app.logs = vec![
@@ -76,6 +93,7 @@ fn snapshot_logs_panel_with_content() {
 
 #[test]
 fn snapshot_command_mode() {
+    let _env = setup_test_env();
     let mut app = App::new();
     app.command_mode = true;
     app.command_buffer = "quit".to_string();
@@ -85,6 +103,7 @@ fn snapshot_command_mode() {
 
 #[test]
 fn snapshot_small_terminal() {
+    let _env = setup_test_env();
     let app = App::new();
     let output = render_to_string(&app, 60, 15);
     insta::assert_snapshot!(output);
@@ -92,6 +111,7 @@ fn snapshot_small_terminal() {
 
 #[test]
 fn snapshot_wide_terminal() {
+    let _env = setup_test_env();
     let app = App::new();
     let output = render_to_string(&app, 120, 40);
     insta::assert_snapshot!(output);

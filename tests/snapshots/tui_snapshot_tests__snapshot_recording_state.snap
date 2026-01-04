@@ -12,7 +12,7 @@ expression: output
 │                                                                              │
 │Current State: Recording                                                      │
 │Model: unknown                                                                │
-│Server: http://whisper.example.com/                                           │
+│Server: http://localhost:9999/                                                │
 │Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback    │
 │Language: no                                                                  │
 │                                                                              │
