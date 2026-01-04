@@ -32,6 +32,12 @@ fn test_panel_navigation_next() {
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Logs);
 
+    // Press 'l' again to go to LiveTranscription
+    let result = app.handle_key(key);
+    assert!(result.is_ok());
+    assert!(result.unwrap());
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
+
     // Press 'l' again to wrap back to Status
     let result = app.handle_key(key);
     assert!(result.is_ok());
@@ -46,8 +52,14 @@ fn test_panel_navigation_prev() {
     // Start at Status
     assert_eq!(app.current_panel, Panel::Status);
 
-    // Press 'h' to go to previous panel (Logs)
+    // Press 'h' to go to previous panel (LiveTranscription - wraps around)
     let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+    let result = app.handle_key(key);
+    assert!(result.is_ok());
+    assert!(result.unwrap());
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
+
+    // Press 'h' again to go to Logs
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
