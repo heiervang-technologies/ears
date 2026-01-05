@@ -1,22 +1,32 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
+#
+# Sync ears voice samples from PostgreSQL to Hugging Face dataset
+# Uses audiofolder format for efficient incremental updates
+#
+
+set -euo pipefail
+
+# Load required environment variables
+source ~/.secrets
+source ~/.config/ears/hooks/.env
+
+exec python3 << 'PYTHON'
 """
 Sync voice samples from PostgreSQL to Hugging Face dataset.
-
-Efficiently adds new samples without re-uploading the entire dataset.
-Tracks last synced ID to only process new entries.
+Uses audiofolder format - only uploads new files without re-downloading.
 """
 
 import os
-import sys
 import json
+import csv
 import base64
 import requests
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from datetime import datetime
+from io import StringIO
 
-from datasets import Dataset, Audio, load_dataset
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 
 # Configuration
 POSTGREST_URL = os.environ.get("EARS_POSTGREST_URL", "http://centurion:30433")
@@ -27,20 +37,17 @@ STATE_FILE = Path.home() / ".local/state/ears/hf-sync-state.json"
 
 
 def load_state():
-    """Load sync state (last synced ID)."""
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text())
-    return {"last_id": 0}
+    return {"last_id": 0, "next_file_num": 1}
 
 
 def save_state(state):
-    """Save sync state."""
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state))
 
 
 def fetch_new_samples(last_id: int) -> list:
-    """Fetch samples with ID > last_id from PostgREST."""
     headers = {"Authorization": f"Bearer {POSTGREST_JWT}"}
     response = requests.get(
         f"{POSTGREST_URL}/voice_samples",
@@ -51,10 +58,26 @@ def fetch_new_samples(last_id: int) -> list:
     return response.json()
 
 
+def get_existing_metadata(api: HfApi) -> list:
+    """Download and parse existing metadata.csv"""
+    try:
+        metadata_path = hf_hub_download(
+            repo_id=HF_REPO,
+            filename="data/metadata.csv",
+            repo_type="dataset",
+            token=HF_TOKEN
+        )
+        with open(metadata_path) as f:
+            reader = csv.DictReader(f)
+            return list(reader)
+    except Exception:
+        return []
+
+
 def sync_dataset():
-    """Sync new samples to HF dataset."""
     state = load_state()
     last_id = state["last_id"]
+    next_file_num = state.get("next_file_num", 1)
 
     print(f"Fetching samples with id > {last_id}...")
     new_samples = fetch_new_samples(last_id)
@@ -65,55 +88,87 @@ def sync_dataset():
 
     print(f"Found {len(new_samples)} new samples")
 
-    # Load existing dataset to append
-    try:
-        existing_ds = load_dataset(HF_REPO, token=HF_TOKEN, split="train")
-        print(f"Existing dataset has {len(existing_ds)} samples")
-    except Exception as e:
-        print(f"Could not load existing dataset: {e}")
-        existing_ds = None
+    api = HfApi(token=HF_TOKEN)
 
-    # Create new samples dataset
+    # Get existing metadata
+    existing_metadata = get_existing_metadata(api)
+    if existing_metadata:
+        # Find highest file number
+        for row in existing_metadata:
+            try:
+                num = int(row["file_name"].replace(".wav", ""))
+                next_file_num = max(next_file_num, num + 1)
+            except ValueError:
+                pass
+
+    print(f"Starting from file number {next_file_num}")
+
     with TemporaryDirectory() as tmpdir:
-        audio_paths = []
-        transcriptions = []
+        tmpdir = Path(tmpdir)
 
-        for sample in new_samples:
+        new_metadata_rows = []
+        files_to_upload = []
+
+        for i, sample in enumerate(new_samples):
+            file_num = next_file_num + i
+            file_name = f"{file_num:04d}.wav"
+
+            # Decode and save audio
             audio_data = base64.b64decode(sample["audio_base64"])
-            audio_path = Path(tmpdir) / f"sample_{sample['id']}.wav"
+            audio_path = tmpdir / file_name
             audio_path.write_bytes(audio_data)
 
-            audio_paths.append(str(audio_path))
-            transcriptions.append(sample["transcription"])
+            files_to_upload.append((str(audio_path), f"data/{file_name}"))
 
-        new_ds = Dataset.from_dict({
-            "audio": audio_paths,
-            "transcription": transcriptions,
-        })
-        new_ds = new_ds.cast_column("audio", Audio(sampling_rate=16000))
+            new_metadata_rows.append({
+                "file_name": file_name,
+                "transcription": sample["transcription"],
+                "duration_ms": sample.get("duration_ms", 0),
+                "sample_rate": sample.get("sample_rate", 16000)
+            })
 
-        # Concatenate with existing if available
-        if existing_ds is not None:
-            from datasets import concatenate_datasets
-            combined_ds = concatenate_datasets([existing_ds, new_ds])
-        else:
-            combined_ds = new_ds
+            print(f"  Prepared {file_name}: {sample['transcription'][:40]}...")
 
-        print(f"Pushing {len(combined_ds)} total samples to {HF_REPO}...")
-        combined_ds.push_to_hub(
-            HF_REPO,
-            private=True,
-            token=HF_TOKEN,
-            commit_message=f"Add {len(new_samples)} new samples (ids {new_samples[0]['id']}-{new_samples[-1]['id']})"
+        # Combine metadata
+        all_metadata = existing_metadata + new_metadata_rows
+
+        # Write updated metadata.csv
+        metadata_path = tmpdir / "metadata.csv"
+        with open(metadata_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["file_name", "transcription", "duration_ms", "sample_rate"])
+            writer.writeheader()
+            writer.writerows(all_metadata)
+
+        # Upload new audio files
+        print(f"Uploading {len(files_to_upload)} audio files...")
+        for local_path, repo_path in files_to_upload:
+            api.upload_file(
+                path_or_fileobj=local_path,
+                path_in_repo=repo_path,
+                repo_id=HF_REPO,
+                repo_type="dataset",
+                commit_message=f"Add {Path(repo_path).name}"
+            )
+
+        # Upload updated metadata
+        print("Uploading updated metadata.csv...")
+        api.upload_file(
+            path_or_fileobj=str(metadata_path),
+            path_in_repo="data/metadata.csv",
+            repo_id=HF_REPO,
+            repo_type="dataset",
+            commit_message=f"Update metadata: add {len(new_samples)} samples (ids {new_samples[0]['id']}-{new_samples[-1]['id']})"
         )
 
     # Update state
     state["last_id"] = new_samples[-1]["id"]
+    state["next_file_num"] = next_file_num + len(new_samples)
     state["last_sync"] = datetime.now().isoformat()
     save_state(state)
 
-    print(f"Synced! Last ID: {state['last_id']}")
+    print(f"Synced {len(new_samples)} samples! Last ID: {state['last_id']}")
 
 
 if __name__ == "__main__":
     sync_dataset()
+PYTHON
