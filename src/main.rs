@@ -204,6 +204,59 @@ fn show_server() -> Result<()> {
     Ok(())
 }
 
+/// Run post-transcribe hook if it exists (fire-and-forget)
+fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
+    use directories::ProjectDirs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let hook_path = ProjectDirs::from("com", "heiervang", "ears")
+        .map(|p| p.config_dir().join("hooks/post-transcribe"))
+        .unwrap_or_default();
+
+    // Check if hook exists and is executable
+    let is_executable = std::fs::metadata(&hook_path)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false);
+
+    if !is_executable {
+        return;
+    }
+
+    // Copy audio file for the hook (it runs async, original gets deleted)
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let hook_audio = audio_file
+        .parent()
+        .unwrap_or(std::path::Path::new("/tmp"))
+        .join(format!("hook-{}.wav", timestamp));
+
+    if std::fs::copy(audio_file, &hook_audio).is_err() {
+        tracing::warn!("Failed to copy audio file for hook");
+        return;
+    }
+
+    let text_owned = text.to_string();
+
+    // Spawn hook in background - fire and forget
+    std::thread::spawn(move || {
+        let result = std::process::Command::new(&hook_path)
+            .arg(&hook_audio)
+            .arg(&text_owned)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match result {
+            Ok(_) => tracing::info!("Post-transcribe hook started"),
+            Err(e) => tracing::warn!("Failed to run post-transcribe hook: {}", e),
+        }
+    });
+}
+
 /// Main toggle logic: start recording or stop and transcribe
 async fn handle_toggle() -> Result<()> {
     let config = Config::load().context("Failed to load configuration")?;
@@ -373,6 +426,9 @@ async fn stop_and_transcribe(
 
             // Play success beep
             AudioFeedback::beep_done().ok();
+
+            // Run post-transcribe hook if it exists
+            run_post_transcribe_hook(&audio_file, &text);
         }
         Ok(_) => {
             // Empty transcription (silence)

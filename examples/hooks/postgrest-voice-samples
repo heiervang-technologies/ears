@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#
+# Example post-transcribe hook: Save voice samples to PostgreSQL via PostgREST
+#
+# This hook saves audio recordings and their transcriptions to a database
+# for building voice training datasets.
+#
+# Setup:
+#   1. Create the voice_samples table (see SQL below)
+#   2. Generate a JWT token for authentication
+#   3. Set environment variables EARS_POSTGREST_URL and EARS_POSTGREST_JWT
+#   4. Copy to ~/.config/ears/hooks/post-transcribe
+#   5. chmod +x ~/.config/ears/hooks/post-transcribe
+#
+# Required SQL (run against your PostgreSQL database):
+#
+#   CREATE TABLE api.voice_samples (
+#     id BIGSERIAL PRIMARY KEY,
+#     audio_base64 TEXT NOT NULL,
+#     transcription TEXT NOT NULL,
+#     duration_ms INTEGER,
+#     sample_rate INTEGER DEFAULT 16000,
+#     created_at TIMESTAMPTZ DEFAULT NOW()
+#   );
+#
+
+set -euo pipefail
+
+AUDIO_FILE="$1"
+TRANSCRIPTION="$2"
+
+# Load config from .env in hooks directory
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+[[ -f "$SCRIPT_DIR/.env" ]] && source "$SCRIPT_DIR/.env"
+
+# Configuration
+POSTGREST_URL="${EARS_POSTGREST_URL:-http://centurion:30433}"
+POSTGREST_JWT="${EARS_POSTGREST_JWT:-}"
+
+# Cleanup function - always delete the audio file
+cleanup() {
+    rm -f "$AUDIO_FILE"
+}
+trap cleanup EXIT
+
+# Validate inputs
+if [[ ! -f "$AUDIO_FILE" ]]; then
+    echo "Audio file not found: $AUDIO_FILE" >&2
+    exit 1
+fi
+
+if [[ -z "$TRANSCRIPTION" ]]; then
+    echo "Empty transcription, skipping" >&2
+    exit 0
+fi
+
+if [[ -z "$POSTGREST_JWT" ]]; then
+    echo "EARS_POSTGREST_JWT not set" >&2
+    exit 1
+fi
+
+# Get audio duration in milliseconds using ffprobe if available
+duration_ms=0
+if command -v ffprobe &>/dev/null; then
+    duration_s=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$AUDIO_FILE" 2>/dev/null || echo "0")
+    duration_ms=$(awk "BEGIN {printf \"%.0f\", $duration_s * 1000}")
+fi
+
+# Encode audio as base64
+audio_base64=$(base64 -w0 "$AUDIO_FILE")
+
+# Build JSON payload using jq for proper escaping
+payload=$(jq -n \
+    --arg audio "$audio_base64" \
+    --arg text "$TRANSCRIPTION" \
+    --argjson duration "$duration_ms" \
+    '{audio_base64: $audio, transcription: $text, duration_ms: $duration}')
+
+# Send to PostgREST
+if ! curl -sf -X POST "$POSTGREST_URL/voice_samples" \
+    -H "Authorization: Bearer $POSTGREST_JWT" \
+    -H "Content-Type: application/json" \
+    -H "Prefer: return=minimal" \
+    -d "$payload" 2>&1; then
+    echo "Failed to save voice sample" >&2
+    exit 1
+fi
+
+echo "Saved voice sample: ${TRANSCRIPTION:0:50}..."
