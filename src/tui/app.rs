@@ -3,6 +3,7 @@
 use crate::config::Config;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use url::Url;
 
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,6 +12,12 @@ pub enum Panel {
     Configuration,
     Logs,
     LiveTranscription,
+}
+
+/// Editable configuration fields
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditableField {
+    ServerUrl,
 }
 
 impl Panel {
@@ -54,6 +61,10 @@ pub struct App {
     pub command_mode: bool,
     /// Current command being typed
     pub command_buffer: String,
+    /// Currently editing field (None = not editing)
+    pub editing_field: Option<EditableField>,
+    /// Buffer for the field being edited
+    pub edit_buffer: String,
     /// Recording state (for display)
     pub is_recording: bool,
     /// Recording duration in seconds
@@ -107,6 +118,8 @@ impl App {
             current_panel: Panel::Status,
             command_mode: false,
             command_buffer: String::new(),
+            editing_field: None,
+            edit_buffer: String::new(),
             is_recording: false,
             recording_duration: 0,
             tick_count: 0,
@@ -151,6 +164,11 @@ impl App {
     /// Handle a key press event
     /// Returns false if the app should quit
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        // Handle edit mode separately
+        if self.editing_field.is_some() {
+            return self.handle_edit_key(key);
+        }
+
         // Handle command mode separately
         if self.command_mode {
             return self.handle_command_key(key);
@@ -230,10 +248,89 @@ impl App {
                 self.cycle_language();
             }
 
+            // 'e' to edit server URL (in Configuration panel)
+            (KeyCode::Char('e'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.start_editing(EditableField::ServerUrl);
+                }
+            }
+
             _ => {}
         }
 
         Ok(true)
+    }
+
+    /// Start editing a field
+    fn start_editing(&mut self, field: EditableField) {
+        self.editing_field = Some(field);
+        self.edit_buffer = match field {
+            EditableField::ServerUrl => self.server.clone(),
+        };
+    }
+
+    /// Handle key press in edit mode
+    fn handle_edit_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel editing
+                self.editing_field = None;
+                self.edit_buffer.clear();
+            }
+            KeyCode::Enter => {
+                // Save the edit
+                self.save_edit();
+            }
+            KeyCode::Char(c) => {
+                self.edit_buffer.push(c);
+            }
+            KeyCode::Backspace => {
+                self.edit_buffer.pop();
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Save the current edit
+    fn save_edit(&mut self) {
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
+        if let Some(field) = self.editing_field {
+            match field {
+                EditableField::ServerUrl => {
+                    // Validate URL
+                    match Url::parse(&self.edit_buffer) {
+                        Ok(url) => {
+                            self.server = url.to_string();
+                            // Save to config file
+                            let server_file = self.config_dir.join("server");
+                            if let Err(e) = std::fs::write(&server_file, &self.server) {
+                                self.logs.push(format!("Failed to save server URL: {}", e));
+                            } else {
+                                self.logs.push(format!("Server URL set to: {}", self.server));
+                                // Update model from new server
+                                if let Some(model) = Self::fetch_model_name(&self.server) {
+                                    self.model = model;
+                                    self.logs.push(format!("Model updated: {}", self.model));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.logs.push(format!("Invalid URL: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.editing_field = None;
+        self.edit_buffer.clear();
+
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
+        }
     }
 
     /// Handle key press in command mode

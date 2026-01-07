@@ -6,7 +6,7 @@ mod app;
 mod event;
 pub mod ui; // Make ui module public for testing
 
-pub use app::{App, Panel};
+pub use app::{App, EditableField, Panel};
 pub use event::{Event, EventHandler};
 
 use anyhow::Result;

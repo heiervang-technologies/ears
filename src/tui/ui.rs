@@ -1,6 +1,6 @@
 //! UI rendering for the TUI
 
-use super::app::{App, Panel};
+use super::app::{App, EditableField, Panel};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -151,15 +151,34 @@ fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the configuration panel
 fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
-    let text = vec![
-        Line::from(""),
+    let is_editing_server = app.editing_field == Some(EditableField::ServerUrl);
+
+    // Server URL line - show edit buffer if editing, otherwise show current value
+    let server_line = if is_editing_server {
+        Line::from(vec![
+            Span::styled(
+                "Server URL: ",
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Yellow),
+            ),
+            Span::styled(&app.edit_buffer, Style::default().fg(Color::White)),
+            Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
+        ])
+    } else {
         Line::from(vec![
             Span::styled(
                 "Server URL: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(&app.server),
-        ]),
+            Span::styled(" [e]", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+
+    let mut text = vec![
+        Line::from(""),
+        server_line,
         Line::from(""),
         Line::from(vec![
             Span::styled("Model: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -181,18 +200,35 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from(""),
-        Line::from(Span::styled(
-            "Press Shift+L to cycle: auto → en → no → auto",
-            Style::default().fg(Color::DarkGray),
-        )),
     ];
+
+    // Show appropriate help text
+    if is_editing_server {
+        text.push(Line::from(vec![
+            Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Save  "),
+            Span::styled("[Esc] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel"),
+        ]));
+    } else {
+        text.push(Line::from(Span::styled(
+            "[e] Edit server URL  [Shift+L] Cycle language",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let border_color = if is_editing_server {
+        Color::Yellow
+    } else {
+        Color::Blue
+    };
 
     let paragraph = Paragraph::new(text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Configuration ")
-                .border_style(Style::default().fg(Color::Blue)),
+                .border_style(Style::default().fg(border_color)),
         )
         .alignment(Alignment::Left);
 
@@ -235,7 +271,16 @@ fn render_logs_panel(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the footer with key bindings and command mode
 fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
-    let footer_text = if app.command_mode {
+    let footer_text = if app.editing_field.is_some() {
+        // Edit mode
+        Line::from(vec![
+            Span::styled("EDIT: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Save  "),
+            Span::styled("[Esc] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel"),
+        ])
+    } else if app.command_mode {
         Line::from(vec![
             Span::styled(":", Style::default().fg(Color::Yellow)),
             Span::raw(&app.command_buffer),
@@ -250,6 +295,18 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw("Typing  "),
             Span::styled("[a] ", Style::default().fg(Color::Cyan)),
             Span::raw("Auto-corr  "),
+            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Panels  "),
+            Span::styled("[q] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Quit"),
+        ])
+    } else if app.current_panel == Panel::Configuration {
+        // Configuration panel shortcuts
+        Line::from(vec![
+            Span::styled("[e] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Edit URL  "),
+            Span::styled("[Shift+L] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Language  "),
             Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
             Span::raw("Panels  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
