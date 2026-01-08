@@ -98,7 +98,18 @@ systemctl --user start ydotool
 
 ## Installation
 
-### From Source (Recommended)
+### From GitHub Releases (Easiest)
+
+```bash
+# Download latest release and install to ~/.local/bin
+curl -fsSL https://github.com/heiervang-technologies/ears/releases/download/latest/ears -o ~/.local/bin/ears
+chmod +x ~/.local/bin/ears
+
+# Ensure ~/.local/bin is in PATH (add to ~/.bashrc or ~/.zshrc)
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### From Source
 
 ```bash
 git clone https://github.com/heiervang-technologies/ears
