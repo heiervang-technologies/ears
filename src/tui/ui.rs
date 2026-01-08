@@ -63,7 +63,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("v1.0.0", Style::default().fg(Color::DarkGray)),
+        Span::styled(concat!("v", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::DarkGray)),
         Span::raw(" │ Status: "),
         Span::styled(status_char.to_string(), Style::default().fg(status_color)),
         Span::raw(" "),
