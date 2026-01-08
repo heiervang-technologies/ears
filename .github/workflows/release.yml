@@ -36,8 +36,12 @@ jobs:
             echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
             echo "IS_TAG=true" >> $GITHUB_OUTPUT
           else
-            # Auto-generate version from latest tag + commit count
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            # Auto-generate version from latest version tag + commit count
+            # Exclude non-version tags like "latest"
+            LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            if [[ -z "$LATEST_TAG" ]]; then
+              LATEST_TAG="v0.0.0"
+            fi
             COMMITS_SINCE=$(git rev-list ${LATEST_TAG}..HEAD --count 2>/dev/null || echo "1")
             # Extract major.minor.patch and increment patch
             BASE_VERSION=${LATEST_TAG#v}
