@@ -28,9 +28,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev
 
-      - name: Build release
-        run: cargo build --release --verbose
-
       - name: Calculate version
         id: version
         run: |
@@ -51,6 +48,17 @@ jobs:
             echo "VERSION=v${MAJOR}.${MINOR}.${NEW_PATCH}" >> $GITHUB_OUTPUT
             echo "IS_TAG=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Update version in Cargo.toml
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION_NUM=${VERSION#v}
+          sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
+          echo "Updated Cargo.toml to version ${VERSION_NUM}"
+          grep "^version" Cargo.toml
+
+      - name: Build release
+        run: cargo build --release --verbose
 
       - name: Create tarball
         run: |
