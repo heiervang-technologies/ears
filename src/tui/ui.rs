@@ -63,7 +63,10 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(concat!("v", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            concat!("v", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::raw(" │ Status: "),
         Span::styled(status_char.to_string(), Style::default().fg(status_color)),
         Span::raw(" "),
@@ -274,7 +277,12 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     let footer_text = if app.editing_field.is_some() {
         // Edit mode
         Line::from(vec![
-            Span::styled("EDIT: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "EDIT: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
             Span::raw("Save  "),
             Span::styled("[Esc] ", Style::default().fg(Color::Cyan)),

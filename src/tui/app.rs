@@ -309,7 +309,8 @@ impl App {
                             if let Err(e) = std::fs::write(&server_file, &self.server) {
                                 self.logs.push(format!("Failed to save server URL: {}", e));
                             } else {
-                                self.logs.push(format!("Server URL set to: {}", self.server));
+                                self.logs
+                                    .push(format!("Server URL set to: {}", self.server));
                                 // Update model from new server
                                 if let Some(model) = Self::fetch_model_name(&self.server) {
                                     self.model = model;
