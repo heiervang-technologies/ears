@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document provides a technical overview of the ears architecture, covering both the original Bash implementation and the Rust rewrite.
+This document provides a technical overview of the ears architecture.
 
 ## Table of Contents
 
@@ -500,13 +500,11 @@ ears/
 │       ├── app.rs        # Application state
 │       ├── ui.rs         # Rendering
 │       └── event.rs      # Event handling
-├── tests/                # Integration tests
-│   ├── config.rs         # Config tests
-│   ├── state.rs          # State tests
-│   ├── whisper_integration.rs  # Whisper API tests
-│   └── tui.rs            # TUI tests
-└── bin/
-    └── ears              # Legacy Bash version
+└── tests/                # Integration tests
+    ├── config.rs         # Config tests
+    ├── state.rs          # State tests
+    ├── whisper_integration.rs  # Whisper API tests
+    └── tui.rs            # TUI tests
 ```
 
 ### Dependency Graph

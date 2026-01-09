@@ -104,8 +104,6 @@ ears/
 │   ├── INSTALL.md     # User installation guide
 │   ├── ARCHITECTURE.md # Technical architecture
 │   └── CONTRIBUTING.md # This file
-├── bin/               # Legacy Bash version
-│   └── ears
 ├── Cargo.toml         # Rust dependencies
 └── README.md          # Project overview
 ```
@@ -614,7 +612,6 @@ Yes! Contributions welcome for:
 - Bug reports with detailed reproduction steps
 - Feature suggestions with use cases
 - Testing on different distros/hardware
-- Bash script improvements (legacy version)
 
 ## Code of Conduct
 

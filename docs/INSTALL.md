@@ -294,14 +294,6 @@ ears --help
 cargo install ears
 ```
 
-### Legacy Bash Version
-
-The original bash version is still available in `bin/ears`:
-
-```bash
-./install.sh  # Installs to ~/.local/bin/ears
-```
-
 ## Configuration
 
 ### Set Whisper Server URL

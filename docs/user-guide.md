@@ -104,13 +104,13 @@ cargo build --release
 sudo cp target/release/ears /usr/local/bin/
 ```
 
-#### Using install.sh (legacy bash version)
+#### Using install.sh
 
 ```bash
 ./install.sh
 ```
 
-This installs to `~/.local/bin/ears`. Ensure `~/.local/bin` is in your PATH:
+This builds and installs to `~/.local/bin/ears`. Ensure `~/.local/bin` is in your PATH:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
