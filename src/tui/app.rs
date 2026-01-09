@@ -148,8 +148,13 @@ impl App {
         let base = server_url.trim_end_matches('/');
         let url = format!("{}/v1/models", base);
 
-        // Synchronous blocking request (TUI init is sync)
-        let response = reqwest::blocking::get(&url).ok()?;
+        // Synchronous blocking request with short timeout
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .ok()?;
+        let response = client.get(&url).send().ok()?;
         let json: serde_json::Value = response.json().ok()?;
 
         // OpenAI-compatible response: {"data": [{"id": "model-name", ...}]}
