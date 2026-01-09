@@ -9,8 +9,17 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
+/// Returns true if running as root (uid 0). Permission tests don't work as root.
+fn is_root() -> bool {
+    unsafe { libc::getuid() == 0 }
+}
+
 #[test]
 fn test_state_dir_readonly() {
+    if is_root() {
+        println!("Skipping test: permission tests don't work as root");
+        return;
+    }
     println!("\n🔍 BUG INVESTIGATION: What if state directory is read-only?");
 
     let temp_dir = TempDir::new().unwrap();
@@ -86,6 +95,10 @@ fn test_corrupted_state_file() {
 
 #[test]
 fn test_config_save_to_readonly_dir() {
+    if is_root() {
+        println!("Skipping test: permission tests don't work as root");
+        return;
+    }
     println!("\n🔍 BUG INVESTIGATION: What if config directory is read-only during save?");
 
     let temp_dir = TempDir::new().unwrap();
@@ -158,6 +171,10 @@ fn test_config_load_with_invalid_url() {
 
 #[test]
 fn test_state_dir_creation_in_unwritable_parent() {
+    if is_root() {
+        println!("Skipping test: permission tests don't work as root");
+        return;
+    }
     println!("\n🔍 BUG INVESTIGATION: What if parent of state_dir is unwritable?");
 
     let temp_dir = TempDir::new().unwrap();
