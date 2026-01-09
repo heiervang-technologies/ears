@@ -77,6 +77,7 @@ impl WhisperClient {
     pub fn new(server_url: impl Into<String>) -> Self {
         Self {
             client: Client::builder()
+                .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("Failed to build HTTP client"),
@@ -112,6 +113,7 @@ impl WhisperClient {
     ) -> Self {
         Self {
             client: Client::builder()
+                .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("Failed to build HTTP client"),

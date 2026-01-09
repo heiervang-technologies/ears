@@ -98,3 +98,17 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync version to main branch
+        if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION_NUM=${VERSION#v}
+          sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
+          git add Cargo.toml
+          git commit -m "chore: bump version to ${VERSION_NUM}" || echo "No changes to commit"
+          git push origin main
