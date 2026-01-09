@@ -1,48 +1,8 @@
 [workspace]
-# Enable changelog generation
 changelog_update = true
-# Use conventional commits for versioning
-changelog_include = ["feat", "fix", "perf", "refactor", "docs", "build", "ci", "style", "test", "chore"]
 
-# GitHub release configuration
-[changelog]
-# Organize commits by type
-body = """
-{% if version %}
-## What's Changed in {{ version }}
-{% else %}
-## What's Changed
-{% endif %}
-
-{% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | upper_first }}
-{% for commit in commits %}
-- {{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]({{ repository_url }}/commit/{{ commit.id }}))
-{%- endfor %}
-{% endfor %}
-"""
-
-# Header template for the changelog
-header = """
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-"""
-
-# Configure commit parser for conventional commits
-commit_parsers = [
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Bug Fixes" },
-  { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactoring" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^build", group = "Build" },
-  { message = "^ci", group = "CI/CD" },
-  { message = "^style", group = "Style" },
-  { message = "^test", group = "Testing" },
-  { message = "^chore", skip = true },
-]
+[[package]]
+name = "ears"
+changelog_path = "CHANGELOG.md"
+git_release_enable = true
+git_tag_enable = true
