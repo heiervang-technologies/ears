@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for version calculation
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -28,43 +26,51 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev
 
-      - name: Calculate version
+      - name: Calculate next version
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            # Use tag version
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "IS_TAG=true" >> $GITHUB_OUTPUT
-          else
-            # Auto-generate version from latest version tag + commit count
-            # Exclude non-version tags like "latest"
-            LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-            if [[ -z "$LATEST_TAG" ]]; then
-              LATEST_TAG="v0.0.0"
-            fi
-            COMMITS_SINCE=$(git rev-list ${LATEST_TAG}..HEAD --count 2>/dev/null || echo "1")
-            # Extract major.minor.patch and increment patch
-            BASE_VERSION=${LATEST_TAG#v}
-            MAJOR=$(echo $BASE_VERSION | cut -d. -f1)
-            MINOR=$(echo $BASE_VERSION | cut -d. -f2)
-            PATCH=$(echo $BASE_VERSION | cut -d. -f3)
-            NEW_PATCH=$((PATCH + COMMITS_SINCE))
-            echo "VERSION=v${MAJOR}.${MINOR}.${NEW_PATCH}" >> $GITHUB_OUTPUT
-            echo "IS_TAG=false" >> $GITHUB_OUTPUT
+          # Get latest version tag
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [[ -z "$LATEST_TAG" ]]; then
+            LATEST_TAG="v0.0.0"
           fi
 
-      - name: Update version in Cargo.toml
+          # Count commits since last tag
+          COMMITS_SINCE=$(git rev-list ${LATEST_TAG}..HEAD --count 2>/dev/null || echo "1")
+
+          # If no new commits, skip release
+          if [[ "$COMMITS_SINCE" == "0" ]]; then
+            echo "SKIP=true" >> $GITHUB_OUTPUT
+            echo "No new commits since $LATEST_TAG, skipping release"
+            exit 0
+          fi
+
+          # Extract version parts and bump patch
+          BASE_VERSION=${LATEST_TAG#v}
+          MAJOR=$(echo $BASE_VERSION | cut -d. -f1)
+          MINOR=$(echo $BASE_VERSION | cut -d. -f2)
+          PATCH=$(echo $BASE_VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + COMMITS_SINCE))
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_NUM=${NEW_VERSION#v}" >> $GITHUB_OUTPUT
+          echo "SKIP=false" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Update Cargo.toml version
+        if: steps.version.outputs.SKIP != 'true'
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          VERSION_NUM=${VERSION#v}
+          VERSION_NUM=${{ steps.version.outputs.VERSION_NUM }}
           sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
           echo "Updated Cargo.toml to version ${VERSION_NUM}"
-          grep "^version" Cargo.toml
 
       - name: Build release
+        if: steps.version.outputs.SKIP != 'true'
         run: cargo build --release --verbose
 
       - name: Create tarball
+        if: steps.version.outputs.SKIP != 'true'
         run: |
           mkdir -p release
           cp target/release/ears release/
@@ -72,26 +78,20 @@ jobs:
           cp LICENSE release/ 2>/dev/null || true
           cd release && tar -czvf ../ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz *
 
-      - name: Update latest release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: latest
-          name: Latest Build
-          prerelease: true
-          files: |
-            ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz
-            target/release/ears
-          body: |
-            Automatic build from main branch.
-            Version: ${{ steps.version.outputs.VERSION }}
-            Commit: ${{ github.sha }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create git tag
+        if: steps.version.outputs.SKIP != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.VERSION }}
+          git push origin ${{ steps.version.outputs.VERSION }}
 
-      - name: Create versioned release
-        if: steps.version.outputs.IS_TAG == 'true'
+      - name: Create GitHub release
+        if: steps.version.outputs.SKIP != 'true'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: ${{ steps.version.outputs.VERSION }}
           files: |
             ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz
             target/release/ears
@@ -99,16 +99,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync version to main branch
-        if: steps.version.outputs.IS_TAG == 'true'
+      - name: Sync version to repo
+        if: steps.version.outputs.SKIP != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          VERSION=${{ steps.version.outputs.VERSION }}
-          VERSION_NUM=${VERSION#v}
+          VERSION_NUM=${{ steps.version.outputs.VERSION_NUM }}
           sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
           git add Cargo.toml
-          git commit -m "chore: bump version to ${VERSION_NUM}" || echo "No changes to commit"
-          git push origin main
+          git diff --cached --quiet || git commit -m "chore: bump version to ${VERSION_NUM} [skip ci]"
+          git push origin HEAD:main || true
