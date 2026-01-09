@@ -111,8 +111,8 @@ impl App {
         let language = config.language.clone();
         let config_dir = config.config_dir.clone();
 
-        // Try to fetch model from the server's /v1/models endpoint
-        let model = Self::fetch_model_name(&server_url).unwrap_or_else(|| "unknown".to_string());
+        // Model will be fetched lazily on first tick to avoid blocking startup
+        let model = "(connecting...)".to_string();
 
         Self {
             current_panel: Panel::Status,
@@ -523,8 +523,15 @@ impl App {
     /// Handle a tick event
     /// Updates recording duration if currently recording
     pub fn handle_tick(&mut self) {
+        self.tick_count += 1;
+
+        // Lazy fetch model on first tick (after UI has rendered once)
+        if self.tick_count == 1 && self.model == "(connecting...)" {
+            self.model = Self::fetch_model_name(&self.server)
+                .unwrap_or_else(|| "(offline)".to_string());
+        }
+
         if self.is_recording {
-            self.tick_count += 1;
             // With 250ms tick rate, 4 ticks = 1 second
             if self.tick_count.is_multiple_of(4) {
                 self.recording_duration += 1;
