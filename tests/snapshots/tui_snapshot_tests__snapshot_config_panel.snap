@@ -3,7 +3,7 @@ source: tests/tui_snapshot_tests.rs
 expression: output
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ears v1.1.26 │ Status: ○ Idle                                                                     │
+│ears vX.X.X │ Status: ○ Idle                                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▸ Status │ ▸ Configuration │ ▸ Logs │ ▸ Live                                                     │
@@ -12,7 +12,7 @@ expression: output
 │                                                                                                  │
 │Server URL: http://127.0.0.1:8178/ [e]                                                            │
 │                                                                                                  │
-│Model: (connecting...)                                                                            │
+│Model: [MODEL]                                                                            │
 │                                                                                                  │
 │Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback                  │
 │                                                                                                  │

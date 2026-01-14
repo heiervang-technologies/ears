@@ -42,7 +42,14 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
         }
     }
 
+    // Normalize variable content for consistent snapshots across versions
+    // Replace the current version with a placeholder
+    let version = env!("CARGO_PKG_VERSION");
     output
+        .replace(&format!("v{}", version), "vX.X.X")
+        // Replace "(connecting...)" or "unknown" model display with placeholder
+        .replace("(connecting...)", "[MODEL]")
+        .replace("unknown", "[MODEL]")
 }
 
 #[test]
