@@ -1,7 +1,7 @@
 //! Event handling for the TUI
 
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::time::Duration;
 
 /// Event types that can occur in the TUI
@@ -9,6 +9,8 @@ use std::time::Duration;
 pub enum Event {
     /// A key was pressed
     Key(KeyEvent),
+    /// Mouse event (click, scroll, etc.)
+    Mouse(MouseEvent),
     /// Terminal was resized
     Resize(u16, u16),
     /// Tick event for periodic updates
@@ -33,6 +35,7 @@ impl EventHandler {
         if event::poll(self.tick_rate)? {
             match event::read()? {
                 CrosstermEvent::Key(key) => Ok(Event::Key(key)),
+                CrosstermEvent::Mouse(mouse) => Ok(Event::Mouse(mouse)),
                 CrosstermEvent::Resize(w, h) => Ok(Event::Resize(w, h)),
                 _ => Ok(Event::Tick),
             }

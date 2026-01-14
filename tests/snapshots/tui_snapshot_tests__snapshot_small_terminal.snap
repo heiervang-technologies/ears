@@ -7,7 +7,7 @@ expression: output
 ┌ Status ──────────────────────────────────────────────────┐
 │                                                          │
 │Current State: Idle                                       │
-│Model: unknown                                            │
+│Model: [MODEL]                                    │
 │Server: http://127.0.0.1:8178/                            │
 │Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-│
 │Language: auto                                            │

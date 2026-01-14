@@ -1,12 +1,11 @@
 mod audio;
 mod cli;
-mod config;
 mod recording;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::Config;
+use ears::Config;
 use ears::{
     AudioFeedback, KeyboardLayout, Notifications, ProcessManager, State as StateEnum, StateManager,
     TextInput, WhisperClient,
@@ -421,14 +420,18 @@ async fn stop_and_transcribe(
         Ok(text) if !text.is_empty() => {
             tracing::info!("Transcription successful: {}", text);
 
+            // Apply text filters (lowercase, punctuation removal, etc.)
+            let filtered_text = config.text_filters.apply(&text);
+            tracing::debug!("Filtered text: {}", filtered_text);
+
             // Type the text
-            TextInput::type_text(&text)?;
+            TextInput::type_text(&filtered_text)?;
 
             // Play success beep
             AudioFeedback::beep_done().ok();
 
-            // Run post-transcribe hook if it exists
-            run_post_transcribe_hook(&audio_file, &text);
+            // Run post-transcribe hook if it exists (with filtered text)
+            run_post_transcribe_hook(&audio_file, &filtered_text);
         }
         Ok(_) => {
             // Empty transcription (silence)

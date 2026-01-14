@@ -8,10 +8,11 @@ use ears::tui::{App, Panel};
 use ratatui::{backend::TestBackend, Terminal};
 
 /// Helper to render app to string
-fn render_to_string(app: &App, width: u16, height: u16) -> String {
+fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    app.clear_clickable_regions();
     terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -35,7 +36,7 @@ fn test_interactive_session_scripted() {
     let mut app = App::new();
 
     println!("\n=== INITIAL STATE ===");
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert!(output.contains("○ Idle"));
     assert_eq!(app.current_panel, Panel::Status);
@@ -43,21 +44,21 @@ fn test_interactive_session_scripted() {
     println!("\n=== PRESS 'l' to go to Configuration panel ===");
     app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
         .unwrap();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert_eq!(app.current_panel, Panel::Configuration);
 
     println!("\n=== PRESS 'l' again to go to Logs panel ===");
     app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
         .unwrap();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert_eq!(app.current_panel, Panel::Logs);
 
     println!("\n=== PRESS Space to start recording ===");
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
         .unwrap();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert!(app.is_recording);
     assert!(output.contains("●")); // Recording indicator
@@ -65,7 +66,7 @@ fn test_interactive_session_scripted() {
     println!("\n=== PRESS ':' to enter command mode ===");
     app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))
         .unwrap();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert!(app.command_mode);
 
@@ -74,7 +75,7 @@ fn test_interactive_session_scripted() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
             .unwrap();
     }
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert!(output.contains(":quit"));
     assert_eq!(app.command_buffer, "quit");
@@ -106,7 +107,7 @@ fn test_cannot_freely_interact() {
     assert_eq!(app.current_panel, Panel::Configuration);
 
     // - Verify visual output
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(output.contains("Configuration"));
 
     // But this is NOT the same as "freely interacting" - it's automated testing
@@ -121,14 +122,14 @@ fn test_complex_interaction_flow() {
 
     // User opens app
     println!("1. App opens on Status panel");
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
 
     // Navigate to Config
     println!("2. User presses Tab to go to Config");
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
         .unwrap();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
 
     // Navigate to Logs
@@ -142,7 +143,7 @@ fn test_complex_interaction_flow() {
     app.logs.push("Transcribed: Hello world".to_string());
     app.logs.push("Stopped recording".to_string());
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
     assert!(output.contains("Hello world"));
 
@@ -159,7 +160,7 @@ fn test_complex_interaction_flow() {
     app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
         .unwrap();
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
     assert_eq!(app.current_panel, Panel::Status);
 

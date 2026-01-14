@@ -61,10 +61,11 @@ fn get_test_keys() -> Vec<KeyEvent> {
 }
 
 /// Render app to string
-fn render_to_string(app: &App) -> String {
+fn render_to_string(app: &mut App) -> String {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    app.clear_clickable_regions();
     terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -90,11 +91,11 @@ fn explore_state_space(max_states: usize) -> HashMap<AppState, String> {
     let mut queue: VecDeque<App> = VecDeque::new();
 
     // Start with initial state
-    let initial_app = App::new();
+    let mut initial_app = App::new();
     let initial_state = AppState::from(&initial_app);
 
     visited.insert(initial_state.clone());
-    state_snapshots.insert(initial_state, render_to_string(&initial_app));
+    state_snapshots.insert(initial_state, render_to_string(&mut initial_app));
     queue.push_back(initial_app);
 
     let test_keys = get_test_keys();
@@ -129,7 +130,7 @@ fn explore_state_space(max_states: usize) -> HashMap<AppState, String> {
                     // Have we seen this state before?
                     if !visited.contains(&new_state) {
                         visited.insert(new_state.clone());
-                        state_snapshots.insert(new_state, render_to_string(&new_app));
+                        state_snapshots.insert(new_state, render_to_string(&mut new_app));
                         queue.push_back(new_app);
 
                         if visited.len().is_multiple_of(10) {

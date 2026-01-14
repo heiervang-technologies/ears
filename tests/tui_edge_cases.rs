@@ -6,10 +6,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ears::tui::App;
 use ratatui::{backend::TestBackend, Terminal};
 
-fn render_to_string(app: &App, width: u16, height: u16) -> String {
+fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    app.clear_clickable_regions();
     terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -32,8 +33,8 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
 fn edge_case_tiny_terminal() {
     println!("\n🔍 EDGE CASE: Tiny terminal (10x5)");
 
-    let app = App::new();
-    let output = render_to_string(&app, 10, 5);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 10, 5);
 
     println!("{}", output);
 
@@ -47,8 +48,8 @@ fn edge_case_tiny_terminal() {
 fn edge_case_very_wide_terminal() {
     println!("\n🔍 EDGE CASE: Very wide terminal (300x50)");
 
-    let app = App::new();
-    let output = render_to_string(&app, 300, 50);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 300, 50);
 
     assert!(!output.is_empty());
     assert!(output.contains("ears"));
@@ -58,8 +59,8 @@ fn edge_case_very_wide_terminal() {
 fn edge_case_very_tall_terminal() {
     println!("\n🔍 EDGE CASE: Very tall terminal (80x100)");
 
-    let app = App::new();
-    let output = render_to_string(&app, 80, 100);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 80, 100);
 
     assert!(!output.is_empty());
     assert!(output.contains("ears"));
@@ -76,7 +77,7 @@ fn edge_case_many_logs() {
         app.logs.push(format!("Log entry {}", i));
     }
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     assert!(output.contains("Logs") || output.contains("Status"));
@@ -89,7 +90,7 @@ fn edge_case_very_long_log_line() {
     let mut app = App::new();
     app.logs.push("A".repeat(1000));
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     // Should not crash, even if truncated
@@ -104,7 +105,7 @@ fn edge_case_special_characters_in_logs() {
     app.logs.push("Unicode: 你好世界 🚀 ñ ü".to_string());
     app.logs.push("Symbols: <>&\"'".to_string());
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     println!("Rendered successfully with special characters");
@@ -118,7 +119,7 @@ fn edge_case_very_long_command_buffer() {
     app.command_mode = true;
     app.command_buffer = "x".repeat(200);
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     // Should not crash even if truncated
@@ -132,7 +133,7 @@ fn edge_case_max_recording_duration() {
     app.is_recording = true;
     app.recording_duration = u64::MAX;
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     assert!(output.contains("●")); // Should show recording indicator
@@ -164,7 +165,7 @@ fn edge_case_scroll_beyond_bounds() {
         "selected_log should stay within bounds"
     );
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(!output.is_empty());
 }
 
@@ -176,7 +177,7 @@ fn edge_case_empty_logs() {
     app.logs.clear();
     app.current_panel = ears::tui::Panel::Logs;
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
     assert!(output.contains("Logs"));
@@ -194,7 +195,7 @@ fn edge_case_rapid_panel_switching() {
             .ok();
     }
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(!output.is_empty());
 
     println!("Final panel: {:?}", app.current_panel);
@@ -212,7 +213,7 @@ fn edge_case_command_mode_spam() {
             .ok();
     }
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(!output.is_empty());
 
     println!("Command mode: {}", app.command_mode);
@@ -242,7 +243,7 @@ fn edge_case_mixed_operations() {
         }
     }
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(!output.is_empty());
 
     println!(
@@ -267,6 +268,6 @@ fn edge_case_backspace_on_empty_buffer() {
 
     assert_eq!(app.command_buffer, "", "Buffer should remain empty");
 
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     assert!(!output.is_empty());
 }

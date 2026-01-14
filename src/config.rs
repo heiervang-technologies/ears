@@ -1,3 +1,4 @@
+use crate::text_filters::TextFilters;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,8 @@ pub struct Config {
     pub device: String,
     /// Language code for transcription (None = auto-detect)
     pub language: Option<String>,
+    /// Text filters for transcription output
+    pub text_filters: TextFilters,
     /// Configuration directory
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -39,6 +42,7 @@ impl Config {
             device: "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
                 .to_string(),
             language: None, // Auto-detect by default
+            text_filters: TextFilters::new(),
             config_dir,
             state_dir,
         })
@@ -151,6 +155,24 @@ impl Config {
             }
         }
 
+        // Load text filters if file exists
+        let filters_file = config.config_dir.join("text_filters.json");
+        if filters_file.exists() {
+            match fs::read_to_string(&filters_file) {
+                Ok(filters_str) => match serde_json::from_str(&filters_str) {
+                    Ok(filters) => {
+                        config.text_filters = filters;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Invalid text_filters.json ({}), using defaults", e);
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to read text_filters config: {}", e);
+                }
+            }
+        }
+
         // Ensure state directory exists
         fs::create_dir_all(&config.state_dir).context("Failed to create state directory")?;
 
@@ -162,6 +184,7 @@ impl Config {
     /// Writes to:
     /// - `~/.config/ears/server` for whisper server URL
     /// - `~/.config/ears/device` for audio device name
+    /// - `~/.config/ears/text_filters.json` for text filter settings
     pub fn save(&self) -> Result<()> {
         // Ensure config directory exists
         fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
@@ -174,6 +197,22 @@ impl Config {
         // Save device
         let device_file = self.config_dir.join("device");
         fs::write(&device_file, &self.device).context("Failed to write device config file")?;
+
+        // Save text filters
+        self.save_text_filters()?;
+
+        Ok(())
+    }
+
+    /// Save text filter settings to file
+    pub fn save_text_filters(&self) -> Result<()> {
+        // Ensure config directory exists
+        fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
+
+        let filters_file = self.config_dir.join("text_filters.json");
+        let json = serde_json::to_string_pretty(&self.text_filters)
+            .context("Failed to serialize text filters")?;
+        fs::write(&filters_file, json).context("Failed to write text_filters config file")?;
 
         Ok(())
     }

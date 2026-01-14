@@ -1,6 +1,6 @@
 //! UI rendering for the TUI
 
-use super::app::{App, EditableField, Panel};
+use super::app::{App, ClickAction, EditableField, Panel};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 /// Render the entire UI
-pub fn render(app: &App, frame: &mut Frame) {
+pub fn render(app: &mut App, frame: &mut Frame) {
     let size = frame.area();
 
     // Main layout: header, tabs, content, footer
@@ -27,7 +27,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     // Render header
     render_header(app, frame, chunks[0]);
 
-    // Render tabs
+    // Render tabs (with clickable regions)
     render_tabs(app, frame, chunks[1]);
 
     // Render current panel content
@@ -85,8 +85,14 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Render the tab bar
-fn render_tabs(app: &App, frame: &mut Frame, area: Rect) {
+fn render_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     let titles = vec!["▸ Status", "▸ Configuration", "▸ Logs", "▸ Live"];
+    let panels = [
+        Panel::Status,
+        Panel::Configuration,
+        Panel::Logs,
+        Panel::LiveTranscription,
+    ];
     let index = match app.current_panel {
         Panel::Status => 0,
         Panel::Configuration => 1,
@@ -94,7 +100,7 @@ fn render_tabs(app: &App, frame: &mut Frame, area: Rect) {
         Panel::LiveTranscription => 3,
     };
 
-    let tabs = Tabs::new(titles)
+    let tabs = Tabs::new(titles.clone())
         .block(Block::default().borders(Borders::ALL))
         .select(index)
         .style(Style::default().fg(Color::White))
@@ -105,6 +111,19 @@ fn render_tabs(app: &App, frame: &mut Frame, area: Rect) {
         );
 
     frame.render_widget(tabs, area);
+
+    // Register clickable regions for each tab
+    // Tabs are rendered inside the border, so offset by 1
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let mut x_offset = inner_x;
+
+    for (i, title) in titles.iter().enumerate() {
+        let tab_width = title.len() as u16 + 1; // +1 for spacing between tabs
+        let tab_rect = Rect::new(x_offset, inner_y, tab_width, 1);
+        app.add_clickable_region(tab_rect, ClickAction::SwitchPanel(panels[i]));
+        x_offset += tab_width;
+    }
 }
 
 /// Render the status panel
@@ -153,7 +172,7 @@ fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Render the configuration panel
-fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
+fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     let is_editing_server = app.editing_field == Some(EditableField::ServerUrl);
 
     // Server URL line - show edit buffer if editing, otherwise show current value
@@ -201,9 +220,43 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw(app.language.as_deref().unwrap_or("auto")),
             Span::styled(" (Shift+L to cycle)", Style::default().fg(Color::DarkGray)),
         ]),
-        Line::from(""),
-        Line::from(""),
     ];
+
+    // Text Filters section
+    text.push(Line::from(""));
+    text.push(Line::from(""));
+    text.push(Line::from(vec![Span::styled(
+        "Text Filters:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    let lowercase_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.text_filters.lowercase {
+                "[x]"
+            } else {
+                "[ ]"
+            },
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(" Lowercase [f]"),
+    ]));
+    let punctuation_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.text_filters.remove_punctuation {
+                "[x]"
+            } else {
+                "[ ]"
+            },
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(" Remove Punctuation [p]"),
+    ]));
+
+    text.push(Line::from(""));
 
     // Show appropriate help text
     if is_editing_server {
@@ -215,7 +268,7 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[e] Edit server URL  [Shift+L] Cycle language",
+            "[e] Edit URL  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -236,6 +289,23 @@ fn render_config_panel(app: &App, frame: &mut Frame, area: Rect) {
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, area);
+
+    // Register clickable regions for text filters
+    let inner_y = area.y + 1;
+    let inner_x = area.x + 1;
+    let inner_width = area.width.saturating_sub(2);
+
+    // Lowercase filter toggle
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + lowercase_line as u16, inner_width, 1),
+        ClickAction::ToggleLowercaseFilter,
+    );
+
+    // Punctuation filter toggle
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
+        ClickAction::TogglePunctuationFilter,
+    );
 }
 
 /// Render the logs panel
@@ -298,13 +368,11 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         // Live panel shortcuts
         Line::from(vec![
             Span::styled("[Space/v] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Toggle VAD  "),
+            Span::raw("VAD  "),
             Span::styled("[t] ", Style::default().fg(Color::Cyan)),
             Span::raw("Typing  "),
             Span::styled("[a] ", Style::default().fg(Color::Cyan)),
             Span::raw("Auto-corr  "),
-            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Panels  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
@@ -312,11 +380,13 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         // Configuration panel shortcuts
         Line::from(vec![
             Span::styled("[e] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Edit URL  "),
-            Span::styled("[Shift+L] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Language  "),
-            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Panels  "),
+            Span::raw("URL  "),
+            Span::styled("[L] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Lang  "),
+            Span::styled("[f] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Lower  "),
+            Span::styled("[p] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Punct  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
@@ -344,7 +414,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Render the live transcription panel
-fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
+fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     // VAD status indicator
     let vad_status_char = if app.vad_active { '●' } else { '○' };
     let vad_status_color = if app.vad_active {
@@ -372,6 +442,7 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
         )]),
         Line::from(""),
     ];
+    let vad_line = 1; // Line index for VAD Mode (after empty line)
 
     // Show transcription text (committed + uncommitted)
     if app.vad_active {
@@ -425,31 +496,36 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
         )]));
     }
 
-    // Settings
+    // Count lines added in transcription section - used for clickable region positioning
+    let _transcription_lines = text.len();
+
+    // Settings section
     text.push(Line::from(""));
     text.push(Line::from(""));
     text.push(Line::from(vec![Span::styled(
         "Settings:",
         Style::default().add_modifier(Modifier::BOLD),
     )]));
+    let progressive_typing_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
             if app.progressive_typing { "[x]" } else { "[ ]" },
             Style::default().fg(Color::Cyan),
         ),
-        Span::raw(" Progressive Typing"),
+        Span::raw(" Progressive Typing [t]"),
     ]));
+    let auto_correction_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
             if app.auto_correction { "[x]" } else { "[ ]" },
             Style::default().fg(Color::Cyan),
         ),
-        Span::raw(" Auto-correction"),
+        Span::raw(" Auto-correction [a]"),
     ]));
 
-    // Stats
+    // Stats section
     text.push(Line::from(""));
     text.push(Line::from(""));
     text.push(Line::from(vec![Span::styled(
@@ -478,4 +554,38 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, area);
+
+    // Register clickable regions
+    // Content starts at area.y + 1 (border) and area.x + 1
+    let inner_y = area.y + 1;
+    let inner_x = area.x + 1;
+    let inner_width = area.width.saturating_sub(2);
+
+    // VAD Mode line (line index 1, after empty line at 0)
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + vad_line as u16, inner_width, 1),
+        ClickAction::ToggleVadMode,
+    );
+
+    // Progressive Typing toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + progressive_typing_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleProgressiveTyping,
+    );
+
+    // Auto-correction toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + auto_correction_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleAutoCorrection,
+    );
 }

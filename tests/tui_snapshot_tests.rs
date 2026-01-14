@@ -21,10 +21,11 @@ fn setup_test_env() -> TempDir {
 }
 
 /// Helper function to render the app and return the terminal buffer as a string
-fn render_to_string(app: &App, width: u16, height: u16) -> String {
+fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    app.clear_clickable_regions();
     terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     // Convert buffer to string by iterating through cells
@@ -41,14 +42,21 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
         }
     }
 
+    // Normalize variable content for consistent snapshots across versions
+    // Replace the current version with a placeholder
+    let version = env!("CARGO_PKG_VERSION");
     output
+        .replace(&format!("v{}", version), "vX.X.X")
+        // Replace "(connecting...)" or "unknown" model display with placeholder
+        .replace("(connecting...)", "[MODEL]")
+        .replace("unknown", "[MODEL]")
 }
 
 #[test]
 fn snapshot_initial_state() {
     let _env = setup_test_env();
-    let app = App::new();
-    let output = render_to_string(&app, 80, 24);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 80, 24);
     insta::assert_snapshot!(output);
 }
 
@@ -58,15 +66,15 @@ fn snapshot_recording_state() {
     let mut app = App::new();
     app.is_recording = true;
     app.recording_duration = 42;
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 fn snapshot_status_panel() {
     let _env = setup_test_env();
-    let app = App::new();
-    let output = render_to_string(&app, 100, 30);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 100, 30);
     insta::assert_snapshot!(output);
 }
 
@@ -75,7 +83,7 @@ fn snapshot_config_panel() {
     let _env = setup_test_env();
     let mut app = App::new();
     app.current_panel = Panel::Configuration;
-    let output = render_to_string(&app, 100, 30);
+    let output = render_to_string(&mut app, 100, 30);
     insta::assert_snapshot!(output);
 }
 
@@ -89,7 +97,7 @@ fn snapshot_logs_panel_with_content() {
         "2024-01-04 12:00:05 - Transcription: Hello world".to_string(),
         "2024-01-04 12:00:10 - Recording stopped".to_string(),
     ];
-    let output = render_to_string(&app, 100, 30);
+    let output = render_to_string(&mut app, 100, 30);
     insta::assert_snapshot!(output);
 }
 
@@ -99,22 +107,22 @@ fn snapshot_command_mode() {
     let mut app = App::new();
     app.command_mode = true;
     app.command_buffer = "quit".to_string();
-    let output = render_to_string(&app, 80, 24);
+    let output = render_to_string(&mut app, 80, 24);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 fn snapshot_small_terminal() {
     let _env = setup_test_env();
-    let app = App::new();
-    let output = render_to_string(&app, 60, 15);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 60, 15);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 fn snapshot_wide_terminal() {
     let _env = setup_test_env();
-    let app = App::new();
-    let output = render_to_string(&app, 120, 40);
+    let mut app = App::new();
+    let output = render_to_string(&mut app, 120, 40);
     insta::assert_snapshot!(output);
 }
