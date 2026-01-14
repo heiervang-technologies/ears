@@ -27,6 +27,9 @@ pub mod streaming;
 pub mod streaming_engine;
 pub mod vad;
 
+// Iteration 9: Text filters
+pub mod text_filters;
+
 // Re-exports from Iteration 1
 pub use config::Config;
 
@@ -46,3 +49,6 @@ pub use streaming::{
     AudioBuffer, LocalAgreementPolicy, StreamingConfig, StreamingError, TranscriptChunk,
 };
 pub use vad::{EnergyVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegmentDetector};
+
+// Re-exports from Iteration 9
+pub use text_filters::TextFilters;

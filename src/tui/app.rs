@@ -1,9 +1,39 @@
 //! TUI application state and logic
 
 use crate::config::Config;
+use crate::text_filters::TextFilters;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use url::Url;
+
+/// Actions that can be triggered by clicking
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickAction {
+    /// Switch to a specific panel
+    SwitchPanel(Panel),
+    /// Toggle progressive typing
+    ToggleProgressiveTyping,
+    /// Toggle auto-correction
+    ToggleAutoCorrection,
+    /// Toggle lowercase filter
+    ToggleLowercaseFilter,
+    /// Toggle punctuation filter
+    TogglePunctuationFilter,
+    /// Toggle VAD mode
+    ToggleVadMode,
+    /// Select a log entry
+    SelectLog(usize),
+}
+
+/// A clickable region in the UI
+#[derive(Debug, Clone, Copy)]
+pub struct ClickableRegion {
+    /// The bounding rectangle
+    pub rect: Rect,
+    /// The action to perform when clicked
+    pub action: ClickAction,
+}
 
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,6 +129,10 @@ pub struct App {
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
     pub avg_latency_ms: u64,
+    /// Text filters for transcription output
+    pub text_filters: TextFilters,
+    /// Clickable regions (updated each frame)
+    pub clickable_regions: Vec<ClickableRegion>,
 }
 
 impl App {
@@ -110,6 +144,7 @@ impl App {
         let device = config.device.clone();
         let language = config.language.clone();
         let config_dir = config.config_dir.clone();
+        let text_filters = config.text_filters.clone();
 
         // Model will be fetched lazily on first tick to avoid blocking startup
         let model = "(connecting...)".to_string();
@@ -140,6 +175,8 @@ impl App {
             auto_correction: true,
             segments_processed: 0,
             avg_latency_ms: 0,
+            text_filters,
+            clickable_regions: Vec::new(),
         }
     }
 
@@ -181,8 +218,9 @@ impl App {
 
         // Global keybindings
         match (key.code, key.modifiers) {
-            // Quit with 'q' or Ctrl+C
+            // Quit with 'q', Escape, or Ctrl+C
             (KeyCode::Char('q'), KeyModifiers::NONE) => return Ok(false),
+            (KeyCode::Esc, KeyModifiers::NONE) => return Ok(false),
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(false),
 
             // Enter command mode with ':'
@@ -191,11 +229,11 @@ impl App {
                 self.command_buffer.clear();
             }
 
-            // Tab navigation with h/l (vim-style)
-            (KeyCode::Char('h'), KeyModifiers::NONE) => {
+            // Tab navigation with h/l (vim-style) or Left/Right arrows
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, KeyModifiers::NONE) => {
                 self.current_panel = self.current_panel.prev();
             }
-            (KeyCode::Char('l'), KeyModifiers::NONE) => {
+            (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
                 self.current_panel = self.current_panel.next();
             }
 
@@ -207,11 +245,11 @@ impl App {
                 self.current_panel = self.current_panel.prev();
             }
 
-            // Panel-specific navigation with j/k (vim-style)
-            (KeyCode::Char('j'), KeyModifiers::NONE) => {
+            // Panel-specific navigation with j/k (vim-style) or Up/Down arrows
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
                 self.scroll_down();
             }
-            (KeyCode::Char('k'), KeyModifiers::NONE) => {
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, KeyModifiers::NONE) => {
                 self.scroll_up();
             }
 
@@ -243,6 +281,20 @@ impl App {
                 }
             }
 
+            // 'f' to toggle lowercase filter (in Configuration panel)
+            (KeyCode::Char('f'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_lowercase_filter();
+                }
+            }
+
+            // 'p' to toggle punctuation filter (in Configuration panel)
+            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_punctuation_filter();
+                }
+            }
+
             // 'c' to go to configuration panel
             (KeyCode::Char('c'), KeyModifiers::NONE) => {
                 self.current_panel = Panel::Configuration;
@@ -264,6 +316,63 @@ impl App {
         }
 
         Ok(true)
+    }
+
+    /// Handle a mouse event
+    /// Returns false if the app should quit
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<bool> {
+        // Only handle left clicks
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            let x = mouse.column;
+            let y = mouse.row;
+
+            // Find which clickable region was clicked
+            for region in &self.clickable_regions {
+                if x >= region.rect.x
+                    && x < region.rect.x + region.rect.width
+                    && y >= region.rect.y
+                    && y < region.rect.y + region.rect.height
+                {
+                    // Execute the action
+                    match region.action {
+                        ClickAction::SwitchPanel(panel) => {
+                            self.current_panel = panel;
+                        }
+                        ClickAction::ToggleProgressiveTyping => {
+                            self.toggle_progressive_typing();
+                        }
+                        ClickAction::ToggleAutoCorrection => {
+                            self.toggle_auto_correction();
+                        }
+                        ClickAction::ToggleLowercaseFilter => {
+                            self.toggle_lowercase_filter();
+                        }
+                        ClickAction::TogglePunctuationFilter => {
+                            self.toggle_punctuation_filter();
+                        }
+                        ClickAction::ToggleVadMode => {
+                            self.toggle_vad_mode();
+                        }
+                        ClickAction::SelectLog(index) => {
+                            self.selected_log = index;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Clear clickable regions (called before each render)
+    pub fn clear_clickable_regions(&mut self) {
+        self.clickable_regions.clear();
+    }
+
+    /// Add a clickable region
+    pub fn add_clickable_region(&mut self, rect: Rect, action: ClickAction) {
+        self.clickable_regions.push(ClickableRegion { rect, action });
     }
 
     /// Start editing a field
@@ -504,6 +613,40 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Auto-correction {}", status));
+    }
+
+    /// Toggle lowercase filter
+    pub fn toggle_lowercase_filter(&mut self) {
+        self.text_filters.lowercase = !self.text_filters.lowercase;
+        let status = if self.text_filters.lowercase {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Lowercase filter {}", status));
+        self.save_text_filters();
+    }
+
+    /// Toggle punctuation removal filter
+    pub fn toggle_punctuation_filter(&mut self) {
+        self.text_filters.remove_punctuation = !self.text_filters.remove_punctuation;
+        let status = if self.text_filters.remove_punctuation {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Punctuation filter {}", status));
+        self.save_text_filters();
+    }
+
+    /// Save text filter settings to config file
+    fn save_text_filters(&self) {
+        let filters_file = self.config_dir.join("text_filters.json");
+        if let Ok(json) = serde_json::to_string_pretty(&self.text_filters) {
+            if let Err(e) = std::fs::write(&filters_file, json) {
+                tracing::warn!("Failed to save text filters: {}", e);
+            }
+        }
     }
 
     /// Update streaming transcription state (called from streaming engine)

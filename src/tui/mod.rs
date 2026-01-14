@@ -6,7 +6,7 @@ mod app;
 mod event;
 pub mod ui; // Make ui module public for testing
 
-pub use app::{App, EditableField, Panel};
+pub use app::{App, ClickAction, ClickableRegion, EditableField, Panel};
 pub use event::{Event, EventHandler};
 
 use anyhow::Result;
@@ -47,11 +47,18 @@ pub fn run() -> Result<()> {
     let event_handler = EventHandler::new(250);
 
     loop {
-        terminal.draw(|f| ui::render(&app, f))?;
+        // Clear clickable regions before rendering
+        app.clear_clickable_regions();
+        terminal.draw(|f| ui::render(&mut app, f))?;
 
         match event_handler.next()? {
             Event::Key(key) => {
                 if !app.handle_key(key)? {
+                    break;
+                }
+            }
+            Event::Mouse(mouse) => {
+                if !app.handle_mouse(mouse)? {
                     break;
                 }
             }
