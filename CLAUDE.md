@@ -106,6 +106,7 @@ Use conventional commits:
 | PipeWire | Audio capture (`pw-record`) |
 | whisper.cpp | Transcription server |
 | ydotool | Text input |
+| wl-clipboard | Clipboard operations (Wayland) |
 | notify-send | Desktop notifications |
 | paplay | Audio feedback |
 | fzf | Interactive selection |

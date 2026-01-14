@@ -42,6 +42,7 @@ A production-grade speech recognition daemon for Linux that integrates whisper.c
 - Linux with PipeWire audio system
 - [whisper.cpp server](https://github.com/ggerganov/whisper.cpp) running
 - `ydotool` for text input
+- `wl-clipboard` for clipboard operations (Wayland)
 - `notify-send` for notifications
 - `paplay` for audio feedback
 - `fzf` for device selection
@@ -52,10 +53,10 @@ A production-grade speech recognition daemon for Linux that integrates whisper.c
 
 ```bash
 # Ubuntu/Debian
-sudo apt install pipewire ydotool libnotify-bin pulseaudio-utils fzf jq curl
+sudo apt install pipewire ydotool wl-clipboard libnotify-bin pulseaudio-utils fzf jq curl
 
 # Arch Linux
-sudo pacman -S pipewire ydotool libnotify pulseaudio fzf jq curl
+sudo pacman -S pipewire ydotool wl-clipboard libnotify pulseaudio fzf jq curl
 ```
 
 ### Setting up whisper.cpp Server

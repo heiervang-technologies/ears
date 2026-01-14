@@ -760,7 +760,7 @@ jobs:
 3. **Install development dependencies:**
    ```bash
    # Ubuntu/Debian
-   sudo apt install pipewire ydotool libnotify-bin pulseaudio-utils fzf
+   sudo apt install pipewire ydotool wl-clipboard libnotify-bin pulseaudio-utils fzf
    
    # Start ydotool daemon
    ydotoold &

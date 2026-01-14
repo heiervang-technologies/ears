@@ -83,6 +83,7 @@ sudo apt install -y \
   pipewire \
   pipewire-audio-client-libraries \
   ydotool \
+  wl-clipboard \
   libnotify-bin \
   pulseaudio-utils \
   fzf \

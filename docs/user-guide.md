@@ -30,12 +30,12 @@ This guide covers installation, configuration, and day-to-day usage of `ears` - 
 
 #### Ubuntu/Debian
 ```bash
-sudo apt install pipewire ydotool libnotify-bin pulseaudio-utils fzf
+sudo apt install pipewire ydotool wl-clipboard libnotify-bin pulseaudio-utils fzf
 ```
 
 #### Arch Linux
 ```bash
-sudo pacman -S pipewire ydotool libnotify pulseaudio fzf
+sudo pacman -S pipewire ydotool wl-clipboard libnotify pulseaudio fzf
 ```
 
 #### Fedora
