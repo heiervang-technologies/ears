@@ -372,7 +372,8 @@ impl App {
 
     /// Add a clickable region
     pub fn add_clickable_region(&mut self, rect: Rect, action: ClickAction) {
-        self.clickable_regions.push(ClickableRegion { rect, action });
+        self.clickable_regions
+            .push(ClickableRegion { rect, action });
     }
 
     /// Start editing a field
@@ -670,8 +671,8 @@ impl App {
 
         // Lazy fetch model on first tick (after UI has rendered once)
         if self.tick_count == 1 && self.model == "(connecting...)" {
-            self.model = Self::fetch_model_name(&self.server)
-                .unwrap_or_else(|| "(offline)".to_string());
+            self.model =
+                Self::fetch_model_name(&self.server).unwrap_or_else(|| "(offline)".to_string());
         }
 
         if self.is_recording {

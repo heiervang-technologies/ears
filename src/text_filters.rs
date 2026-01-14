@@ -43,18 +43,45 @@ impl TextFilters {
 
 /// Remove common punctuation marks from text
 fn remove_punctuation(text: &str) -> String {
-    text.chars()
-        .filter(|c| !is_punctuation(*c))
-        .collect()
+    text.chars().filter(|c| !is_punctuation(*c)).collect()
 }
 
 /// Check if a character is a punctuation mark to remove
 fn is_punctuation(c: char) -> bool {
     matches!(
         c,
-        '.' | ',' | '!' | '?' | ';' | ':' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}'
-            | '-' | '—' | '–' | '…' | '/' | '\\' | '&' | '*' | '#' | '@' | '%' | '^'
-            | '+' | '=' | '~' | '`' | '|' | '<' | '>'
+        '.' | ','
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '"'
+            | '\''
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '-'
+            | '—'
+            | '–'
+            | '…'
+            | '/'
+            | '\\'
+            | '&'
+            | '*'
+            | '#'
+            | '@'
+            | '%'
+            | '^'
+            | '+'
+            | '='
+            | '~'
+            | '`'
+            | '|'
+            | '<'
+            | '>'
     )
 }
 
@@ -102,7 +129,10 @@ mod tests {
             remove_punctuation: true,
         };
         // Typical ASR output that user wants to use in command line
-        assert_eq!(filters.apply("Git commit -m \"Update readme.\""), "git commit m update readme");
+        assert_eq!(
+            filters.apply("Git commit -m \"Update readme.\""),
+            "git commit m update readme"
+        );
     }
 
     #[test]

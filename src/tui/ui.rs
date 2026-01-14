@@ -233,7 +233,11 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     text.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            if app.text_filters.lowercase { "[x]" } else { "[ ]" },
+            if app.text_filters.lowercase {
+                "[x]"
+            } else {
+                "[ ]"
+            },
             Style::default().fg(Color::Yellow),
         ),
         Span::raw(" Lowercase [f]"),
@@ -565,13 +569,23 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
 
     // Progressive Typing toggle
     app.add_clickable_region(
-        Rect::new(inner_x, inner_y + progressive_typing_line as u16, inner_width, 1),
+        Rect::new(
+            inner_x,
+            inner_y + progressive_typing_line as u16,
+            inner_width,
+            1,
+        ),
         ClickAction::ToggleProgressiveTyping,
     );
 
     // Auto-correction toggle
     app.add_clickable_region(
-        Rect::new(inner_x, inner_y + auto_correction_line as u16, inner_width, 1),
+        Rect::new(
+            inner_x,
+            inner_y + auto_correction_line as u16,
+            inner_width,
+            1,
+        ),
         ClickAction::ToggleAutoCorrection,
     );
 }
