@@ -55,10 +55,11 @@ fn get_test_keys() -> Vec<KeyEvent> {
     ]
 }
 
-fn render_to_string(app: &App) -> String {
+fn render_to_string(app: &mut App) -> String {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    app.clear_clickable_regions();
     terminal.draw(|f| ears::tui::ui::render(app, f)).unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -82,9 +83,9 @@ fn explore_and_collect_states(max_states: usize) -> Vec<(AppState, App, String)>
     let mut results: Vec<(AppState, App, String)> = Vec::new();
     let mut queue: VecDeque<App> = VecDeque::new();
 
-    let initial_app = App::new();
+    let mut initial_app = App::new();
     let initial_state = AppState::from(&initial_app);
-    let initial_output = render_to_string(&initial_app);
+    let initial_output = render_to_string(&mut initial_app);
 
     visited.insert(initial_state.clone());
     results.push((initial_state, initial_app.clone(), initial_output));
@@ -109,7 +110,7 @@ fn explore_and_collect_states(max_states: usize) -> Vec<(AppState, App, String)>
                     let new_state = AppState::from(&new_app);
 
                     if !visited.contains(&new_state) {
-                        let output = render_to_string(&new_app);
+                        let output = render_to_string(&mut new_app);
                         visited.insert(new_state.clone());
                         results.push((new_state, new_app.clone(), output));
                         queue.push_back(new_app);
