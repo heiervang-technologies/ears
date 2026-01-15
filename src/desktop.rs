@@ -6,13 +6,154 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Keyboard layout detection for GNOME
+/// Keyboard layout detection for Hyprland and GNOME
 pub struct KeyboardLayout;
 
 impl KeyboardLayout {
     /// Detect the current keyboard layout and return the corresponding language code
     /// Returns Some("en") for US layout, Some("no") for Norwegian, None for unknown/auto
+    ///
+    /// Supports both Hyprland (via hyprctl) and GNOME (via dconf)
     pub fn detect_language() -> Option<String> {
+        // Try Hyprland first
+        if let Some(layout) = Self::detect_hyprland_layout() {
+            tracing::debug!("Detected Hyprland keyboard layout: {}", layout);
+            return Self::layout_to_language(&layout);
+        }
+
+        // Fall back to GNOME/dconf
+        if let Some(layout) = Self::detect_gnome_layout() {
+            tracing::debug!("Detected GNOME keyboard layout: {}", layout);
+            return Self::layout_to_language(&layout);
+        }
+
+        None
+    }
+
+    /// Detect keyboard layout from Hyprland using hyprctl
+    fn detect_hyprland_layout() -> Option<String> {
+        // First try to get the active keyboard layout
+        // hyprctl devices -j returns JSON with keyboard info
+        let output = Command::new("hyprctl")
+            .args(["devices", "-j"])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+
+        // Parse JSON to find the active keyboard layout
+        // Look for "active_keymap" field in keyboards array
+        if let Some(layout) = Self::parse_hyprctl_devices(&json_str) {
+            return Some(layout);
+        }
+
+        // Fallback: try getting the configured layout from hyprctl getoption
+        let option_output = Command::new("hyprctl")
+            .args(["getoption", "input:kb_layout"])
+            .output()
+            .ok()?;
+
+        if option_output.status.success() {
+            let option_str = String::from_utf8_lossy(&option_output.stdout);
+            // Output format: "str: us" or similar
+            for line in option_str.lines() {
+                if line.trim().starts_with("str:") {
+                    let layout = line.trim().strip_prefix("str:")?.trim();
+                    // Handle comma-separated layouts (e.g., "us,no") - take the first one
+                    let first_layout = layout.split(',').next()?.trim();
+                    if !first_layout.is_empty() {
+                        return Some(first_layout.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Parse hyprctl devices JSON output to find active keyboard layout
+    fn parse_hyprctl_devices(json_str: &str) -> Option<String> {
+        // Simple JSON parsing without a full parser
+        // Look for "active_keymap": "..." in the keyboards section
+        // The active_keymap field contains the human-readable layout name
+
+        // Find keyboards section
+        let keyboards_start = json_str.find("\"keyboards\"")?;
+        let keyboards_section = &json_str[keyboards_start..];
+
+        // Find the first active_keymap in the keyboards array
+        // Look for main keyboard (not virtual)
+        for line in keyboards_section.lines() {
+            let trimmed = line.trim();
+
+            // Look for active_keymap field
+            if trimmed.contains("\"active_keymap\"") {
+                // Extract the value: "active_keymap": "English (US)"
+                if let Some(start) = trimmed.find(':') {
+                    let value_part = &trimmed[start + 1..];
+                    let value = value_part
+                        .trim()
+                        .trim_matches(',')
+                        .trim_matches('"')
+                        .trim();
+
+                    // Map common keymap names to layout codes
+                    return Self::keymap_name_to_layout(value);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Map Hyprland keymap names to layout codes
+    fn keymap_name_to_layout(keymap: &str) -> Option<String> {
+        let keymap_lower = keymap.to_lowercase();
+
+        // Common keymap name patterns
+        if keymap_lower.contains("english") && keymap_lower.contains("us") {
+            return Some("us".to_string());
+        }
+        if keymap_lower.contains("english") && keymap_lower.contains("uk") {
+            return Some("gb".to_string());
+        }
+        if keymap_lower.contains("norwegian") || keymap_lower.contains("norsk") {
+            return Some("no".to_string());
+        }
+        if keymap_lower.contains("german") || keymap_lower.contains("deutsch") {
+            return Some("de".to_string());
+        }
+        if keymap_lower.contains("french") || keymap_lower.contains("français") {
+            return Some("fr".to_string());
+        }
+        if keymap_lower.contains("spanish") || keymap_lower.contains("español") {
+            return Some("es".to_string());
+        }
+        if keymap_lower.contains("swedish") || keymap_lower.contains("svenska") {
+            return Some("se".to_string());
+        }
+        if keymap_lower.contains("danish") || keymap_lower.contains("dansk") {
+            return Some("dk".to_string());
+        }
+        if keymap_lower.contains("finnish") || keymap_lower.contains("suomi") {
+            return Some("fi".to_string());
+        }
+
+        // If it's a short code already, use it directly
+        let short = keymap.split_whitespace().next()?;
+        if short.len() == 2 {
+            return Some(short.to_lowercase());
+        }
+
+        None
+    }
+
+    /// Detect keyboard layout from GNOME using dconf
+    fn detect_gnome_layout() -> Option<String> {
         // Use mru-sources (most recently used) - first item is current layout
         // This works with GNOME's per-window keyboard layout switching
         let mru_output = Command::new("dconf")
@@ -26,16 +167,11 @@ impl KeyboardLayout {
 
         let mru_str = String::from_utf8_lossy(&mru_output.stdout);
         // Parse "[('xkb', 'no'), ('xkb', 'us')]" - first entry is current
-        let layout = Self::parse_first_layout(&mru_str)?;
-
-        tracing::debug!("Detected keyboard layout: {}", layout);
-
-        // Map layout code to language code
-        Self::layout_to_language(&layout)
+        Self::parse_dconf_mru_sources(&mru_str)
     }
 
     /// Parse the dconf mru-sources output and get the first (current) layout
-    fn parse_first_layout(sources: &str) -> Option<String> {
+    fn parse_dconf_mru_sources(sources: &str) -> Option<String> {
         // Format: [('xkb', 'no'), ('xkb', 'us')]
         // First entry is the current layout
 
@@ -193,17 +329,58 @@ impl AudioFeedback {
 pub struct TextInput;
 
 impl TextInput {
+    /// Detect if running on Omarchy (Arch + Hyprland)
+    fn is_omarchy() -> bool {
+        // Check if hyprctl exists (Hyprland compositor)
+        if Command::new("hyprctl").arg("version").output().is_ok() {
+            // Check if wtype is available (preferred on Hyprland)
+            if Command::new("which").arg("wtype").output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Type text using ydotool with optional delay
     ///
     /// The `delay_ms` parameter controls the delay between keystrokes.
     /// Default is 12ms if not specified (ydotool's default).
     pub fn type_text(text: &str) -> Result<()> {
-        // Use clipboard + paste for reliable Unicode support
-        Self::paste_text(text)
+        if Self::is_omarchy() {
+            // On Omarchy/Hyprland: use wtype for direct typing
+            Self::type_with_wtype(text)
+        } else {
+            // On other systems: use clipboard + paste for reliable Unicode support
+            Self::paste_text(text)
+        }
+    }
+
+    /// Type text directly using wtype (Wayland native, for Hyprland/Omarchy)
+    fn type_with_wtype(text: &str) -> Result<()> {
+        use std::process::Stdio;
+
+        let status = Command::new("wtype")
+            .arg("--")
+            .arg(text)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("Failed to run wtype")?;
+
+        if !status.success() {
+            anyhow::bail!("wtype failed with status: {}", status);
+        }
+
+        Ok(())
     }
 
     /// Paste text using wl-copy + ydotool Ctrl+V (handles Unicode correctly)
     /// Preserves and restores the original clipboard contents
+    /// Used on non-Omarchy systems (Ubuntu, etc.)
     fn paste_text(text: &str) -> Result<()> {
         use std::process::Stdio;
 
@@ -414,5 +591,102 @@ mod tests {
         // Test typing with no delay (use default)
         let result = TextInput::type_text_with_delay("Test text", None);
         let _ = result;
+    }
+
+    // 5.4 Keyboard Layout Detection Tests
+    #[test]
+    fn test_parse_dconf_mru_sources_valid() {
+        let sources = "[('xkb', 'no'), ('xkb', 'us')]";
+        let result = KeyboardLayout::parse_dconf_mru_sources(sources);
+        assert_eq!(result, Some("no".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dconf_mru_sources_single() {
+        let sources = "[('xkb', 'us')]";
+        let result = KeyboardLayout::parse_dconf_mru_sources(sources);
+        assert_eq!(result, Some("us".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dconf_mru_sources_invalid() {
+        let sources = "invalid data";
+        let result = KeyboardLayout::parse_dconf_mru_sources(sources);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_hyprctl_devices_valid() {
+        let json = r#"{
+            "keyboards": [
+                {
+                    "address": "0x1234",
+                    "name": "AT Translated Set 2 keyboard",
+                    "active_keymap": "English (US)",
+                    "main": true
+                }
+            ]
+        }"#;
+        let result = KeyboardLayout::parse_hyprctl_devices(json);
+        assert_eq!(result, Some("us".to_string()));
+    }
+
+    #[test]
+    fn test_parse_hyprctl_devices_norwegian() {
+        let json = r#"{
+            "keyboards": [
+                {
+                    "name": "keyboard",
+                    "active_keymap": "Norwegian"
+                }
+            ]
+        }"#;
+        let result = KeyboardLayout::parse_hyprctl_devices(json);
+        assert_eq!(result, Some("no".to_string()));
+    }
+
+    #[test]
+    fn test_keymap_name_to_layout() {
+        assert_eq!(
+            KeyboardLayout::keymap_name_to_layout("English (US)"),
+            Some("us".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::keymap_name_to_layout("English (UK)"),
+            Some("gb".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::keymap_name_to_layout("Norwegian"),
+            Some("no".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::keymap_name_to_layout("German"),
+            Some("de".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::keymap_name_to_layout("French"),
+            Some("fr".to_string())
+        );
+    }
+
+    #[test]
+    fn test_layout_to_language() {
+        assert_eq!(
+            KeyboardLayout::layout_to_language("us"),
+            Some("en".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::layout_to_language("gb"),
+            Some("en".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::layout_to_language("no"),
+            Some("no".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::layout_to_language("de"),
+            Some("de".to_string())
+        );
+        assert_eq!(KeyboardLayout::layout_to_language("unknown"), None);
     }
 }
