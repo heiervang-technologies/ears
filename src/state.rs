@@ -126,7 +126,7 @@ impl StateManager {
         self.state_dir.join("state")
     }
 
-    /// Persist the current state to disk
+    /// Persist the current state to disk and notify waybar
     fn persist_state(&self) -> Result<(), StateError> {
         let state_str = match self.current_state {
             State::Idle => "idle",
@@ -136,6 +136,12 @@ impl StateManager {
         };
 
         fs::write(self.state_file_path(), state_str)?;
+
+        // Signal waybar to refresh the ears indicator (signal 9 = SIGRTMIN+9)
+        let _ = std::process::Command::new("pkill")
+            .args(["-RTMIN+9", "waybar"])
+            .spawn();
+
         Ok(())
     }
 

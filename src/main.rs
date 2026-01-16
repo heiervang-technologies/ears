@@ -408,6 +408,11 @@ async fn stop_and_transcribe(
 
     tracing::info!("WAV file validation passed");
 
+    // Transition to transcribing state
+    state_mgr
+        .transition(StateEnum::Transcribing)
+        .context("Failed to transition to Transcribing state")?;
+
     // Detect language from keyboard layout (overrides config if set)
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     if let Some(ref lang) = language {
@@ -446,6 +451,9 @@ async fn stop_and_transcribe(
 
             // Clean up audio file
             std::fs::remove_file(&audio_file).ok();
+
+            // Reset state to Idle on error
+            state_mgr.transition(StateEnum::Idle).ok();
 
             return Err(e.into());
         }
