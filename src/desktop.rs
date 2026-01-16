@@ -260,7 +260,15 @@ impl Notifications {
 }
 
 /// Audio feedback manager
+///
+/// Sounds (E5 start, E4 done, double-B4 error) are embedded in the binary.
+/// Custom sounds in ~/.local/share/ears-sounds/ take priority if present.
 pub struct AudioFeedback;
+
+// Embedded sound files
+static SOUND_START: &[u8] = include_bytes!("../sounds/start.wav");
+static SOUND_DONE: &[u8] = include_bytes!("../sounds/done.wav");
+static SOUND_BELL: &[u8] = include_bytes!("../sounds/bell.wav");
 
 impl AudioFeedback {
     /// Get custom sound directory
@@ -270,11 +278,6 @@ impl AudioFeedback {
             .join(".local")
             .join("share")
             .join("ears-sounds"))
-    }
-
-    /// Get system sound directory
-    fn system_sound_dir() -> PathBuf {
-        PathBuf::from("/usr/share/sounds/freedesktop/stereo")
     }
 
     /// Play a sound file (non-blocking)
@@ -289,39 +292,43 @@ impl AudioFeedback {
         Ok(())
     }
 
-    /// Play a named sound
-    pub fn play(sound: &str) -> Result<()> {
+    /// Play embedded sound data (non-blocking)
+    fn play_embedded(data: &'static [u8]) -> Result<()> {
+        // Write to temp file and play
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        let temp_path = PathBuf::from(runtime_dir).join("ears-sound.wav");
+
+        std::fs::write(&temp_path, data).context("Failed to write temp sound file")?;
+        Self::play_sound(&temp_path)
+    }
+
+    /// Play a named sound (custom override or embedded)
+    fn play_named(name: &str, embedded: &'static [u8]) -> Result<()> {
         // Try custom sound first
         if let Ok(custom_dir) = Self::sound_dir() {
-            let custom_wav = custom_dir.join(format!("{}.wav", sound));
+            let custom_wav = custom_dir.join(format!("{}.wav", name));
             if custom_wav.exists() {
                 return Self::play_sound(&custom_wav);
             }
         }
 
-        // Fall back to system sound
-        let system_sound = Self::system_sound_dir().join(format!("{}.oga", sound));
-        if system_sound.exists() {
-            Self::play_sound(&system_sound)
-        } else {
-            // If sound doesn't exist, just silently succeed
-            Ok(())
-        }
+        // Use embedded sound
+        Self::play_embedded(embedded)
     }
 
-    /// Play start recording beep
+    /// Play start recording beep (E5 - 660Hz)
     pub fn beep_start() -> Result<()> {
-        Self::play("start")
+        Self::play_named("start", SOUND_START)
     }
 
-    /// Play completion beep
+    /// Play completion beep (E4 - 330Hz)
     pub fn beep_done() -> Result<()> {
-        Self::play("done")
+        Self::play_named("done", SOUND_DONE)
     }
 
-    /// Play error bell
+    /// Play error bell (double B4 - 493.88Hz)
     pub fn beep_error() -> Result<()> {
-        Self::play("bell")
+        Self::play_named("bell", SOUND_BELL)
     }
 }
 
@@ -517,12 +524,11 @@ mod tests {
 
     // 5.2 Audio Feedback Tests
     #[test]
-    fn test_sound_paths() {
-        let system_dir = AudioFeedback::system_sound_dir();
-        assert_eq!(
-            system_dir,
-            PathBuf::from("/usr/share/sounds/freedesktop/stereo")
-        );
+    fn test_embedded_sounds() {
+        // Verify embedded sounds are present and non-empty
+        assert!(!SOUND_START.is_empty());
+        assert!(!SOUND_DONE.is_empty());
+        assert!(!SOUND_BELL.is_empty());
     }
 
     #[test]
