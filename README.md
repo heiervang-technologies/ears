@@ -2,6 +2,8 @@
 
 A production-grade speech recognition daemon for Linux that integrates whisper.cpp with your desktop workflow.
 
+![ears TUI demo](demo.gif)
+
 ## Features
 
 - **Push-to-talk interface**: Press once to start recording, press again to transcribe
