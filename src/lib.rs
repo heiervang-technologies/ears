@@ -3,6 +3,9 @@
 //! This library provides configuration, state management, process control,
 //! and whisper.cpp integration for speech recognition.
 
+// Audio device discovery
+pub mod audio;
+
 // Iteration 1: Configuration
 pub mod config;
 

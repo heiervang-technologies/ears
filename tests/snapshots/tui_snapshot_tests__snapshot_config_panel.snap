@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshot_tests.rs
+assertion_line: 87
 expression: output
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -14,7 +15,7 @@ expression: output
 │                                                                                                  │
 │Model: [MODEL]                                                                            │
 │                                                                                                  │
-│Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback                  │
+│Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback [d]              │
 │                                                                                                  │
 │Language: auto (Shift+L to cycle)                                                                 │
 │                                                                                                  │
@@ -23,12 +24,12 @@ expression: output
 │  [ ] Lowercase [f]                                                                               │
 │  [ ] Remove Punctuation [p]                                                                      │
 │                                                                                                  │
-│[e] Edit URL  [Shift+L] Language  [f] Lowercase  [p] Punctuation                                  │
+│[e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation                      │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│[e] URL  [L] Lang  [f] Lower  [p] Punct  [q] Quit                                                 │
+│[e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [q] Quit                                     │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

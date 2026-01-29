@@ -20,6 +20,7 @@ struct AppState {
     command_buffer: String,
     selected_log: usize,
     log_count: usize,
+    vad_active: bool,
 }
 
 impl From<&App> for AppState {
@@ -32,6 +33,7 @@ impl From<&App> for AppState {
             command_buffer: app.command_buffer.clone(),
             selected_log: app.selected_log,
             log_count: app.logs.len(),
+            vad_active: app.vad_active,
         }
     }
 }
@@ -171,12 +173,23 @@ fn bug_hunt_recording_indicator_consistency() {
     for (state, _app, output) in &states {
         let has_recording_symbol = output.contains("●");
         let has_idle_symbol = output.contains("○");
+        let has_vad_symbol = output.contains("◉");
 
         if state.is_recording {
             // Should show recording indicator
             if !has_recording_symbol {
                 bugs.push(Bug {
                     description: "State says recording=true but no ● symbol shown".to_string(),
+                    state: state.clone(),
+                    visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
+                });
+            }
+        } else if state.vad_active {
+            // VAD active: should show ◉ (listening) or ● (speaking)
+            if !has_vad_symbol && !has_recording_symbol {
+                bugs.push(Bug {
+                    description: "State says vad_active=true but no ◉ or ● symbol shown"
+                        .to_string(),
                     state: state.clone(),
                     visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
                 });

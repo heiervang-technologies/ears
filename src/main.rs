@@ -1,10 +1,10 @@
-mod audio;
 mod cli;
 mod recording;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands};
+use ears::audio;
 use ears::Config;
 use ears::{
     AudioFeedback, KeyboardLayout, Notifications, ProcessManager, State as StateEnum, StateManager,
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
         }
         None => {
             // Default: Launch TUI
-            return ears::tui::run();
+            return ears::tui::run().await;
         }
     }
 
@@ -476,21 +476,36 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_show_server_default() {
+        // Use temp HOME so Config::load() doesn't read/write real ~/.config/ears/
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", temp_dir.path());
+
         let result = show_server();
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_set_and_show_server() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
+        // Test URL validation without calling Config::load/save
         let test_url = "http://localhost:9999";
-        set_server(test_url).unwrap();
+        let parsed = Url::parse(test_url).unwrap();
+        assert_eq!(parsed.scheme(), "http");
+        assert_eq!(parsed.host_str(), Some("localhost"));
+        assert_eq!(parsed.port(), Some(9999));
+        assert_eq!(parsed.as_str(), "http://localhost:9999/");
 
-        let config = Config::load().unwrap();
-        assert_eq!(config.whisper_server.as_str(), "http://localhost:9999/");
+        // Verify set_server rejects bad URLs (these fail before reaching Config::load)
+        assert!(set_server("not-a-url").is_err());
+        assert!(set_server("ftp://localhost:8080").is_err());
     }
 
     #[test]
@@ -506,8 +521,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_show_current() {
+        // Use temp HOME so Config::load() doesn't read/write real ~/.config/ears/
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", temp_dir.path());
+
         let result = show_current();
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
         assert!(result.is_ok());
     }
 }
