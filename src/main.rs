@@ -473,17 +473,29 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_show_server_default() {
+        // Use temp HOME so Config::load() doesn't read/write real ~/.config/ears/
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", temp_dir.path());
+
         let result = show_server();
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_set_and_show_server() {
-        // Test URL validation and config persistence without mutating HOME
-        // (setting HOME poisons parallel test threads and corrupts real config)
+        // Test URL validation without calling Config::load/save
         let test_url = "http://localhost:9999";
         let parsed = Url::parse(test_url).unwrap();
         assert_eq!(parsed.scheme(), "http");
@@ -491,7 +503,7 @@ mod tests {
         assert_eq!(parsed.port(), Some(9999));
         assert_eq!(parsed.as_str(), "http://localhost:9999/");
 
-        // Verify set_server rejects bad URLs
+        // Verify set_server rejects bad URLs (these fail before reaching Config::load)
         assert!(set_server("not-a-url").is_err());
         assert!(set_server("ftp://localhost:8080").is_err());
     }
@@ -509,8 +521,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_show_current() {
+        // Use temp HOME so Config::load() doesn't read/write real ~/.config/ears/
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", temp_dir.path());
+
         let result = show_current();
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
         assert!(result.is_ok());
     }
 }

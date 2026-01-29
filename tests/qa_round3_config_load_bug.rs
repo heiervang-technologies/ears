@@ -43,6 +43,7 @@ fn test_config_load_with_invalid_url_in_file() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_config_load_with_invalid_url_prevents_startup() {
     println!("\n🐛 BUG IMPACT: Invalid URL in config prevents ears from starting");
 
@@ -54,14 +55,16 @@ fn test_config_load_with_invalid_url_prevents_startup() {
     let server_file = config_dir.join("server");
     fs::write(&server_file, "htp://localhost:8178").unwrap(); // Typo: htp instead of http
 
-    // This is what happens in main.rs line 20
-    // let config = Config::load().unwrap_or_else(|_| Config::new().expect("Failed to create config"));
-
-    // But Config::load() will fail!
+    let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", temp_dir.path());
 
-    // Simulate the actual call
     let result = Config::load();
+
+    // Restore HOME before any assertions
+    match original_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
 
     println!("Config::load result: {:?}", result);
 
@@ -71,8 +74,6 @@ fn test_config_load_with_invalid_url_prevents_startup() {
         println!("   Error message points to the problem, but user can't easily recover");
         println!("   They need to manually delete the file or fix it");
     }
-
-    std::env::remove_var("HOME");
 }
 
 #[test]
@@ -89,23 +90,26 @@ fn test_main_rs_has_fallback() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_better_error_recovery_approach() {
     println!("\n💡 BETTER APPROACH: Partial config loading with warnings");
 
-    // Config::load() now handles partial failures gracefully
-    // It loads each file independently and uses defaults for failed loads
-    // This test documents the expected behavior without modifying real config files
+    // Use a temp HOME so Config::load() doesn't read/write the real ~/.config/ears/
+    let temp_dir = TempDir::new().unwrap();
+    let original_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", temp_dir.path());
 
     let result = Config::load();
+
+    match &original_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+
     // Config should always load successfully, falling back to defaults when needed
     assert!(result.is_ok(), "Config should load with partial recovery");
 
     let config = result.unwrap();
-    println!("Loaded config with partial recovery:");
-    println!("  Device: {}", config.device);
-    println!("  Server: {}", config.whisper_server);
-
-    // The config structure should always be valid
     assert!(!config.device.is_empty(), "Device should have a value");
     assert!(
         config.whisper_server.as_str().starts_with("http"),
@@ -114,25 +118,18 @@ fn test_better_error_recovery_approach() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_config_from_env_precedence() {
-    println!("\n🔍 OBSERVATION: Environment variables have correct precedence");
-
     std::env::set_var("EARS_SERVER", "http://env-server:9999");
     std::env::set_var("EARS_DEVICE", "env-device");
 
     let config = Config::from_env().unwrap();
 
-    println!("Server from env: {}", config.whisper_server);
-    println!("Device from env: {}", config.device);
-
-    assert_eq!(config.whisper_server.as_str(), "http://env-server:9999/");
-    assert_eq!(config.device, "env-device");
-
     std::env::remove_var("EARS_SERVER");
     std::env::remove_var("EARS_DEVICE");
 
-    println!("\n✅ Environment variables work correctly");
-    println!("   User can override corrupt config with EARS_SERVER env var");
+    assert_eq!(config.whisper_server.as_str(), "http://env-server:9999/");
+    assert_eq!(config.device, "env-device");
 }
 
 #[test]
