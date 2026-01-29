@@ -108,6 +108,9 @@ pub struct StreamingEngine {
 
     /// Temporary directory for audio segments
     temp_dir: PathBuf,
+
+    /// Accumulated committed text across all segments (for progressive typing)
+    accumulated_text: String,
 }
 
 impl StreamingEngine {
@@ -135,6 +138,7 @@ impl StreamingEngine {
             stats: StreamingStats::default(),
             event_tx: None,
             temp_dir,
+            accumulated_text: String::new(),
         }
     }
 
@@ -215,13 +219,24 @@ impl StreamingEngine {
 
         info!("Transcribed: {}", transcript);
 
-        // Process through LocalAgreement
-        let (newly_committed, uncommitted) = self.local_agreement.process(transcript.clone());
+        // Each VAD segment is a discrete utterance. Reset agreement state so
+        // the previous segment's text doesn't interfere, then feed the
+        // transcript twice to force LocalAgreement to commit it immediately.
+        self.local_agreement.reset();
+        self.local_agreement.process(transcript.clone());
+        let (newly_committed, _uncommitted) = self.local_agreement.process(transcript.clone());
 
-        // Update progressive typing
-        let committed_text = self.local_agreement.committed();
+        // Accumulate committed text across segments (space-separated)
+        if !newly_committed.is_empty() {
+            if !self.accumulated_text.is_empty() {
+                self.accumulated_text.push(' ');
+            }
+            self.accumulated_text.push_str(&newly_committed);
+        }
+
+        // Update progressive typing with the full accumulated text
         if self.config.progressive_typing && !newly_committed.is_empty() {
-            match self.progressive_typing.update(committed_text) {
+            match self.progressive_typing.update(&self.accumulated_text) {
                 Ok(chars) => {
                     debug!("Typed {} characters", chars);
                     self.stats.chars_typed += chars;
@@ -242,8 +257,8 @@ impl StreamingEngine {
 
         // Send events
         self.send_event(StreamingEvent::TranscriptUpdate {
-            committed: committed_text.to_string(),
-            uncommitted,
+            committed: self.accumulated_text.clone(),
+            uncommitted: String::new(),
         });
 
         self.send_event(StreamingEvent::SegmentCompleted {
@@ -317,7 +332,7 @@ impl StreamingEngine {
 
     /// Get committed text
     pub fn committed_text(&self) -> &str {
-        self.local_agreement.committed()
+        &self.accumulated_text
     }
 
     /// Reset the engine (start fresh)
@@ -326,6 +341,7 @@ impl StreamingEngine {
         self.vad_detector.reset();
         self.local_agreement.reset();
         self.progressive_typing.reset();
+        self.accumulated_text.clear();
         self.stats = StreamingStats::default();
     }
 
@@ -337,6 +353,16 @@ impl StreamingEngine {
     /// Update typing configuration
     pub fn update_typing_config(&mut self, config: ProgressiveTypingConfig) {
         self.progressive_typing.set_config(config);
+    }
+
+    /// Update just the typing-related settings (progressive typing + auto-correction)
+    pub fn set_typing_enabled(&mut self, progressive: bool, auto_correction: bool) {
+        self.config.progressive_typing = progressive;
+        self.config.auto_correction = auto_correction;
+        self.progressive_typing.set_config(ProgressiveTypingConfig {
+            enabled: progressive,
+            auto_correction,
+        });
     }
 
     /// Check if VAD is currently detecting speech

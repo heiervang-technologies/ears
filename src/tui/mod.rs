@@ -17,6 +17,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
@@ -52,13 +53,49 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -
     Ok(())
 }
 
+/// Guard that resets state to Idle on drop (handles panics and early returns)
+struct StateCleanupGuard {
+    state_dir: PathBuf,
+}
+
+impl Drop for StateCleanupGuard {
+    fn drop(&mut self) {
+        // Best-effort reset state to idle
+        let state_file = self.state_dir.join("state");
+        let _ = std::fs::write(&state_file, "idle");
+        let _ = std::process::Command::new("pkill")
+            .args(["-RTMIN+9", "waybar"])
+            .spawn();
+    }
+}
+
+/// Typing settings sent from the TUI to the engine via watch channel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypingSettings {
+    pub progressive_typing: bool,
+    pub auto_correction: bool,
+}
+
+impl Default for TypingSettings {
+    fn default() -> Self {
+        Self {
+            progressive_typing: true,
+            auto_correction: true,
+        }
+    }
+}
+
 /// Start the VAD audio processing pipeline.
 ///
-/// Returns the shutdown sender and a join handle for the processing task.
-async fn start_vad_pipeline(
+/// Returns the shutdown sender, typing settings sender, and a join handle.
+pub async fn start_vad_pipeline(
     config: &Config,
     event_tx: mpsc::UnboundedSender<StreamingEvent>,
-) -> Result<(watch::Sender<bool>, tokio::task::JoinHandle<()>)> {
+) -> Result<(
+    watch::Sender<bool>,
+    watch::Sender<TypingSettings>,
+    tokio::task::JoinHandle<()>,
+)> {
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let whisper_client =
@@ -99,6 +136,9 @@ async fn start_vad_pipeline(
     // Shutdown channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
+    // Typing settings channel
+    let (settings_tx, mut settings_rx) = watch::channel(TypingSettings::default());
+
     // Spawn audio processing task
     let handle = tokio::spawn(async move {
         loop {
@@ -116,6 +156,11 @@ async fn start_vad_pipeline(
                         }
                     }
                 }
+                _ = settings_rx.changed() => {
+                    let s = *settings_rx.borrow_and_update();
+                    engine.set_typing_enabled(s.progressive_typing, s.auto_correction);
+                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}", s.progressive_typing, s.auto_correction);
+                }
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
                     break;
@@ -126,7 +171,7 @@ async fn start_vad_pipeline(
         drop(capture);
     });
 
-    Ok((shutdown_tx, handle))
+    Ok((shutdown_tx, settings_tx, handle))
 }
 
 /// Run the TUI application
@@ -139,80 +184,113 @@ pub async fn run() -> Result<()> {
     let config = Config::load().unwrap_or_default();
     let mut state_mgr = StateManager::new(&config.state_dir)?;
 
+    // Drop guard ensures state resets to idle even on panic/crash
+    let _state_guard = StateCleanupGuard {
+        state_dir: config.state_dir.clone(),
+    };
+
     // Streaming event channel
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamingEvent>();
 
     // VAD pipeline state
     let mut vad_running = false;
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
+    let mut vad_settings: Option<watch::Sender<TypingSettings>> = None;
     let mut vad_handle: Option<tokio::task::JoinHandle<()>> = None;
 
-    loop {
-        // Clear clickable regions before rendering
-        app.clear_clickable_regions();
-        terminal.draw(|f| ui::render(&mut app, f))?;
+    let result: Result<()> = async {
+        loop {
+            // Clear clickable regions before rendering
+            app.clear_clickable_regions();
+            terminal.draw(|f| ui::render(&mut app, f))?;
 
-        match event_handler.next()? {
-            Event::Key(key) => {
-                if !app.handle_key(key)? {
-                    break;
-                }
-            }
-            Event::Mouse(mouse) => {
-                if !app.handle_mouse(mouse)? {
-                    break;
-                }
-            }
-            Event::Tick => {
-                app.handle_tick();
-            }
-            Event::Resize(_, _) => {
-                // Terminal resize is handled automatically by ratatui
-                // on the next draw() call, no action needed
-            }
-        }
+            // Snapshot settings before handling events to detect changes
+            let prev_progressive = app.progressive_typing;
+            let prev_auto_correction = app.auto_correction;
 
-        // Drain streaming events
-        while let Ok(event) = event_rx.try_recv() {
-            app.handle_streaming_event(event);
-        }
-
-        // Check if VAD state changed
-        if app.vad_active && !vad_running {
-            // Start VAD pipeline
-            match start_vad_pipeline(&config, event_tx.clone()).await {
-                Ok((shutdown, handle)) => {
-                    vad_shutdown = Some(shutdown);
-                    vad_handle = Some(handle);
-                    vad_running = true;
-                    if let Err(e) = state_mgr.transition(EarsState::VadActive) {
-                        tracing::warn!("State transition error: {}", e);
+            match event_handler.next()? {
+                Event::Key(key) => {
+                    if !app.handle_key(key)? {
+                        break;
                     }
-                    app.add_log("VAD pipeline started");
                 }
-                Err(e) => {
-                    app.vad_active = false;
-                    app.add_log(&format!("Failed to start VAD: {}", e));
+                Event::Mouse(mouse) => {
+                    if !app.handle_mouse(mouse)? {
+                        break;
+                    }
+                }
+                Event::Tick => {
+                    app.handle_tick();
+                }
+                Event::Resize(_, _) => {
+                    // Terminal resize is handled automatically by ratatui
+                    // on the next draw() call, no action needed
                 }
             }
-        } else if !app.vad_active && vad_running {
-            // Stop VAD pipeline
-            if let Some(tx) = vad_shutdown.take() {
-                let _ = tx.send(true);
-            }
-            if let Some(handle) = vad_handle.take() {
-                let _ = handle.await;
-            }
-            vad_running = false;
-            app.is_speaking = false;
-            if let Err(e) = state_mgr.transition(EarsState::Idle) {
-                tracing::warn!("State transition error: {}", e);
-            }
-            app.add_log("VAD pipeline stopped");
-        }
-    }
 
-    // Clean up VAD pipeline on exit
+            // Push typing settings to engine if they changed
+            if app.progressive_typing != prev_progressive
+                || app.auto_correction != prev_auto_correction
+            {
+                if let Some(ref tx) = vad_settings {
+                    let _ = tx.send(TypingSettings {
+                        progressive_typing: app.progressive_typing,
+                        auto_correction: app.auto_correction,
+                    });
+                }
+            }
+
+            // Drain streaming events
+            while let Ok(event) = event_rx.try_recv() {
+                app.handle_streaming_event(event);
+            }
+
+            // Check if VAD state changed
+            if app.vad_active && !vad_running {
+                // Start VAD pipeline
+                match start_vad_pipeline(&config, event_tx.clone()).await {
+                    Ok((shutdown, settings, handle)) => {
+                        // Send current settings immediately so engine matches TUI state
+                        let _ = settings.send(TypingSettings {
+                            progressive_typing: app.progressive_typing,
+                            auto_correction: app.auto_correction,
+                        });
+                        vad_shutdown = Some(shutdown);
+                        vad_settings = Some(settings);
+                        vad_handle = Some(handle);
+                        vad_running = true;
+                        if let Err(e) = state_mgr.transition(EarsState::VadActive) {
+                            tracing::warn!("State transition error: {}", e);
+                        }
+                        app.add_log("VAD pipeline started");
+                    }
+                    Err(e) => {
+                        app.vad_active = false;
+                        app.add_log(&format!("Failed to start VAD: {}", e));
+                    }
+                }
+            } else if !app.vad_active && vad_running {
+                // Stop VAD pipeline
+                if let Some(tx) = vad_shutdown.take() {
+                    let _ = tx.send(true);
+                }
+                vad_settings.take();
+                if let Some(handle) = vad_handle.take() {
+                    let _ = handle.await;
+                }
+                vad_running = false;
+                app.is_speaking = false;
+                if let Err(e) = state_mgr.transition(EarsState::Idle) {
+                    tracing::warn!("State transition error: {}", e);
+                }
+                app.add_log("VAD pipeline stopped");
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    // Clean up VAD pipeline on exit (normal path)
     if vad_running {
         if let Some(tx) = vad_shutdown.take() {
             let _ = tx.send(true);
@@ -224,5 +302,9 @@ pub async fn run() -> Result<()> {
     }
 
     restore_terminal(&mut terminal)?;
-    Ok(())
+
+    // Drop guard is redundant on clean exit, but handles panics above
+    drop(_state_guard);
+
+    result
 }

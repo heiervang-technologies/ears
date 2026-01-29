@@ -15,6 +15,10 @@ pub enum Commands {
     #[command(alias = "t")]
     Toggle,
 
+    /// Toggle VAD (Voice Activity Detection) mode (for keyboard shortcuts)
+    #[command(alias = "v")]
+    Vad,
+
     /// Select audio device with fzf
     #[command(alias = "s")]
     Select,
