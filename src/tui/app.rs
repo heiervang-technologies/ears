@@ -1,6 +1,7 @@
 //! TUI application state and logic
 
 use crate::config::Config;
+use crate::streaming_engine::StreamingEvent;
 use crate::text_filters::TextFilters;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -24,6 +25,8 @@ pub enum ClickAction {
     ToggleVadMode,
     /// Select a log entry
     SelectLog(usize),
+    /// Select a device from the picker (by index)
+    SelectDevice(usize),
 }
 
 /// A clickable region in the UI
@@ -117,6 +120,8 @@ pub struct App {
     pub selected_log: usize,
     /// VAD mode active
     pub vad_active: bool,
+    /// Whether VAD is currently detecting speech
+    pub is_speaking: bool,
     /// Committed (stable) transcription text
     pub committed_text: String,
     /// Uncommitted (unstable) transcription text
@@ -133,6 +138,14 @@ pub struct App {
     pub text_filters: TextFilters,
     /// Clickable regions (updated each frame)
     pub clickable_regions: Vec<ClickableRegion>,
+    /// Whether the device picker is open
+    pub device_picker_open: bool,
+    /// Available audio devices (populated when picker opens)
+    pub device_picker_devices: Vec<crate::audio::AudioDevice>,
+    /// Highlighted index in the device picker
+    pub device_picker_selected: usize,
+    /// Error message if device list fetch failed
+    pub device_picker_error: Option<String>,
 }
 
 impl App {
@@ -169,6 +182,7 @@ impl App {
             ],
             selected_log: 0,
             vad_active: false,
+            is_speaking: false,
             committed_text: String::new(),
             uncommitted_text: String::new(),
             progressive_typing: true,
@@ -177,6 +191,10 @@ impl App {
             avg_latency_ms: 0,
             text_filters,
             clickable_regions: Vec::new(),
+            device_picker_open: false,
+            device_picker_devices: Vec::new(),
+            device_picker_selected: 0,
+            device_picker_error: None,
         }
     }
 
@@ -209,6 +227,11 @@ impl App {
         // Handle edit mode separately
         if self.editing_field.is_some() {
             return self.handle_edit_key(key);
+        }
+
+        // Handle device picker mode separately
+        if self.device_picker_open {
+            return self.handle_device_picker_key(key);
         }
 
         // Handle command mode separately
@@ -312,6 +335,13 @@ impl App {
                 }
             }
 
+            // 'd' to open device picker (in Configuration panel)
+            (KeyCode::Char('d'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.open_device_picker();
+                }
+            }
+
             _ => {}
         }
 
@@ -355,6 +385,12 @@ impl App {
                         }
                         ClickAction::SelectLog(index) => {
                             self.selected_log = index;
+                        }
+                        ClickAction::SelectDevice(index) => {
+                            if self.device_picker_open && index < self.device_picker_devices.len() {
+                                self.device_picker_selected = index;
+                                self.confirm_device_selection();
+                            }
                         }
                     }
                     break;
@@ -528,6 +564,11 @@ impl App {
 
     /// Toggle recording state
     fn toggle_recording(&mut self) {
+        if self.vad_active {
+            self.add_log("Cannot record while VAD is active");
+            return;
+        }
+
         // Check if user is viewing the last log before adding a new one
         let was_viewing_last_log =
             !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
@@ -575,22 +616,22 @@ impl App {
 
     /// Toggle VAD mode
     pub fn toggle_vad_mode(&mut self) {
-        let was_viewing_last_log =
-            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+        if self.is_recording {
+            self.add_log("Cannot enable VAD while recording");
+            return;
+        }
 
         self.vad_active = !self.vad_active;
         if self.vad_active {
-            self.logs.push("VAD mode enabled".to_string());
+            self.add_log("VAD mode enabled");
             // Reset streaming state
             self.committed_text.clear();
             self.uncommitted_text.clear();
             self.segments_processed = 0;
+            self.is_speaking = false;
         } else {
-            self.logs.push("VAD mode disabled".to_string());
-        }
-
-        if was_viewing_last_log {
-            self.selected_log = self.logs.len() - 1;
+            self.add_log("VAD mode disabled");
+            self.is_speaking = false;
         }
     }
 
@@ -650,6 +691,101 @@ impl App {
         }
     }
 
+    /// Open the device picker
+    fn open_device_picker(&mut self) {
+        match crate::audio::list_devices() {
+            Ok(devices) => {
+                if devices.is_empty() {
+                    self.device_picker_error = Some("No audio input devices found".to_string());
+                } else {
+                    self.device_picker_error = None;
+                }
+
+                let current_index = devices
+                    .iter()
+                    .position(|d| d.name == self.device)
+                    .unwrap_or(0);
+
+                self.device_picker_devices = devices;
+                self.device_picker_selected = current_index;
+                self.device_picker_open = true;
+            }
+            Err(e) => {
+                let msg = format!("Failed to list devices: {}", e);
+                self.logs.push(msg.clone());
+                self.device_picker_error = Some(msg);
+                self.device_picker_devices = Vec::new();
+                self.device_picker_open = true;
+            }
+        }
+    }
+
+    /// Close the device picker without selecting
+    fn close_device_picker(&mut self) {
+        self.device_picker_open = false;
+        self.device_picker_devices.clear();
+        self.device_picker_error = None;
+    }
+
+    /// Confirm device selection and save to config
+    fn confirm_device_selection(&mut self) {
+        if self.device_picker_devices.is_empty() {
+            self.close_device_picker();
+            return;
+        }
+
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+
+        let selected = &self.device_picker_devices[self.device_picker_selected];
+        let new_name = selected.name.clone();
+        let description = selected.description.clone();
+
+        self.device = new_name.clone();
+
+        let device_file = self.config_dir.join("device");
+        if let Err(e) = std::fs::write(&device_file, &new_name) {
+            self.logs.push(format!("Failed to save device: {}", e));
+        } else {
+            self.logs.push(format!("Device set to: {}", description));
+        }
+
+        self.close_device_picker();
+
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
+        }
+    }
+
+    /// Handle key press in device picker mode
+    fn handle_device_picker_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Esc => {
+                self.close_device_picker();
+            }
+            KeyCode::Enter => {
+                self.confirm_device_selection();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.device_picker_devices.is_empty() {
+                    self.device_picker_selected =
+                        (self.device_picker_selected + 1) % self.device_picker_devices.len();
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if !self.device_picker_devices.is_empty() {
+                    self.device_picker_selected = if self.device_picker_selected == 0 {
+                        self.device_picker_devices.len() - 1
+                    } else {
+                        self.device_picker_selected - 1
+                    };
+                }
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
     /// Update streaming transcription state (called from streaming engine)
     pub fn update_streaming_state(
         &mut self,
@@ -662,6 +798,48 @@ impl App {
         self.uncommitted_text = uncommitted;
         self.segments_processed = segments_processed;
         self.avg_latency_ms = avg_latency_ms;
+    }
+
+    /// Add a log message, auto-scrolling if viewing the last entry
+    pub fn add_log(&mut self, msg: &str) {
+        let was_viewing_last_log =
+            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
+        self.logs.push(msg.to_string());
+        if was_viewing_last_log {
+            self.selected_log = self.logs.len() - 1;
+        }
+    }
+
+    /// Handle a streaming event from the VAD pipeline
+    pub fn handle_streaming_event(&mut self, event: StreamingEvent) {
+        match event {
+            StreamingEvent::SpeechStarted => {
+                self.is_speaking = true;
+            }
+            StreamingEvent::SpeechEnded => {
+                self.is_speaking = false;
+            }
+            StreamingEvent::TranscriptUpdate {
+                committed,
+                uncommitted,
+            } => {
+                self.committed_text = committed;
+                self.uncommitted_text = uncommitted;
+            }
+            StreamingEvent::SegmentCompleted { text, duration_ms } => {
+                self.add_log(&format!("Segment: \"{}\" ({}ms)", text, duration_ms));
+            }
+            StreamingEvent::StatsUpdate {
+                segments_processed,
+                avg_latency_ms,
+            } => {
+                self.segments_processed = segments_processed;
+                self.avg_latency_ms = avg_latency_ms;
+            }
+            StreamingEvent::Error(msg) => {
+                self.add_log(&format!("Streaming error: {}", msg));
+            }
+        }
     }
 
     /// Handle a tick event

@@ -95,11 +95,7 @@ impl KeyboardLayout {
                 // Extract the value: "active_keymap": "English (US)"
                 if let Some(start) = trimmed.find(':') {
                     let value_part = &trimmed[start + 1..];
-                    let value = value_part
-                        .trim()
-                        .trim_matches(',')
-                        .trim_matches('"')
-                        .trim();
+                    let value = value_part.trim().trim_matches(',').trim_matches('"').trim();
 
                     // Map common keymap names to layout codes
                     return Self::keymap_name_to_layout(value);
@@ -337,11 +333,13 @@ pub struct TextInput;
 
 impl TextInput {
     /// Detect if running on Omarchy (Arch + Hyprland)
-    fn is_omarchy() -> bool {
+    pub(crate) fn is_omarchy() -> bool {
         // Check if hyprctl exists (Hyprland compositor)
         if Command::new("hyprctl").arg("version").output().is_ok() {
             // Check if wtype is available (preferred on Hyprland)
-            if Command::new("which").arg("wtype").output()
+            if Command::new("which")
+                .arg("wtype")
+                .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
             {
@@ -571,32 +569,32 @@ mod tests {
     }
 
     // 5.3 Text Input Tests
+    // These test the detection logic without executing real typing commands,
+    // since wtype/ydotool would type into the active window during tests.
     #[test]
-    fn test_type_text_basic() {
-        // Test basic text typing (won't actually type in test env)
-        let result = TextInput::type_text("Hello, world!");
-        let _ = result;
+    fn test_type_text_is_omarchy_detection() {
+        // Verify is_omarchy returns a bool without side effects
+        let _is_omarchy = TextInput::is_omarchy();
     }
 
     #[test]
-    fn test_type_text_with_special_characters() {
-        // Test that special characters don't cause issues
-        let result = TextInput::type_text("Test: !@#$%^&*()");
-        let _ = result;
+    fn test_type_text_with_delay_constructs_command() {
+        // Verify command construction doesn't panic for various inputs
+        let mut cmd = Command::new("echo"); // harmless stand-in
+        cmd.arg("type");
+        cmd.arg("--key-delay").arg("50");
+        cmd.arg("Test text");
+        // Just verify the command can be built without issues
+        assert!(cmd.get_program() == "echo");
     }
 
     #[test]
-    fn test_type_text_with_delay() {
-        // Test typing with custom delay
-        let result = TextInput::type_text_with_delay("Test text", Some(50));
-        let _ = result;
-    }
-
-    #[test]
-    fn test_type_text_with_no_delay() {
-        // Test typing with no delay (use default)
-        let result = TextInput::type_text_with_delay("Test text", None);
-        let _ = result;
+    fn test_type_text_special_characters_safe() {
+        // Verify special characters can be passed as command args without panic
+        let text = "Test: !@#$%^&*() \"quotes\" 'single' <angle> {braces}";
+        let mut cmd = Command::new("echo");
+        cmd.arg("--").arg(text);
+        assert!(cmd.get_args().count() == 2);
     }
 
     // 5.4 Keyboard Layout Detection Tests

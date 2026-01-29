@@ -44,16 +44,22 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
 /// Render the header with title and status
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
-    let status_char = if app.is_recording { '●' } else { '○' };
-    let status_color = if app.is_recording {
-        Color::Red
+    let (status_char, status_color, status_text) = if app.is_recording {
+        (
+            '●',
+            Color::Red,
+            format!("Recording ({}s)", app.recording_duration),
+        )
+    } else if app.vad_active {
+        let ch = if app.is_speaking { '●' } else { '◉' };
+        let color = if app.is_speaking {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        (ch, color, "VAD Active".to_string())
     } else {
-        Color::Gray
-    };
-    let status_text = if app.is_recording {
-        format!("Recording ({}s)", app.recording_duration)
-    } else {
-        "Idle".to_string()
+        ('○', Color::Gray, "Idle".to_string())
     };
 
     let title = Line::from(vec![
@@ -207,20 +213,77 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
             Span::raw(&app.model),
         ]),
         Line::from(""),
-        Line::from(vec![
+    ];
+
+    // Device picker: show list when open, single line when closed
+    let mut device_list_start: usize = 0;
+    if app.device_picker_open {
+        text.push(Line::from(vec![
+            Span::styled(
+                "Audio Device: ",
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Yellow),
+            ),
+            Span::styled(
+                "(j/k navigate, Enter select, Esc cancel)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        if let Some(ref error) = app.device_picker_error {
+            text.push(Line::from(vec![Span::styled(
+                format!("  {}", error),
+                Style::default().fg(Color::Red),
+            )]));
+        } else {
+            device_list_start = text.len();
+            for (i, device) in app.device_picker_devices.iter().enumerate() {
+                let is_current = device.name == app.device;
+                let is_selected = i == app.device_picker_selected;
+
+                let marker = if is_selected { ">" } else { " " };
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_current {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
+
+                let mut spans = vec![
+                    Span::styled(format!("  {} ", marker), style),
+                    Span::styled(device.description.as_str(), style),
+                ];
+                if is_current {
+                    spans.push(Span::styled(
+                        " (current)",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                text.push(Line::from(spans));
+            }
+        }
+    } else {
+        text.push(Line::from(vec![
             Span::styled(
                 "Audio Device: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(&app.device),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Language: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(app.language.as_deref().unwrap_or("auto")),
-            Span::styled(" (Shift+L to cycle)", Style::default().fg(Color::DarkGray)),
-        ]),
-    ];
+            Span::styled(" [d]", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    text.push(Line::from(""));
+    text.push(Line::from(vec![
+        Span::styled("Language: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(app.language.as_deref().unwrap_or("auto")),
+        Span::styled(" (Shift+L to cycle)", Style::default().fg(Color::DarkGray)),
+    ]));
 
     // Text Filters section
     text.push(Line::from(""));
@@ -259,7 +322,16 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     text.push(Line::from(""));
 
     // Show appropriate help text
-    if is_editing_server {
+    if app.device_picker_open {
+        text.push(Line::from(vec![
+            Span::styled("[j/k] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Navigate  "),
+            Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Select  "),
+            Span::styled("[Esc] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel"),
+        ]));
+    } else if is_editing_server {
         text.push(Line::from(vec![
             Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
             Span::raw("Save  "),
@@ -268,12 +340,12 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[e] Edit URL  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
+            "[e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
             Style::default().fg(Color::DarkGray),
         )));
     }
 
-    let border_color = if is_editing_server {
+    let border_color = if app.device_picker_open || is_editing_server {
         Color::Yellow
     } else {
         Color::Blue
@@ -306,6 +378,22 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
         ClickAction::TogglePunctuationFilter,
     );
+
+    // Device picker clickable regions
+    if app.device_picker_open && app.device_picker_error.is_none() {
+        let device_count = app.device_picker_devices.len();
+        for i in 0..device_count {
+            app.add_clickable_region(
+                Rect::new(
+                    inner_x,
+                    inner_y + (device_list_start + i) as u16,
+                    inner_width,
+                    1,
+                ),
+                ClickAction::SelectDevice(i),
+            );
+        }
+    }
 }
 
 /// Render the logs panel
@@ -344,7 +432,23 @@ fn render_logs_panel(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the footer with key bindings and command mode
 fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
-    let footer_text = if app.editing_field.is_some() {
+    let footer_text = if app.device_picker_open {
+        // Device picker mode
+        Line::from(vec![
+            Span::styled(
+                "DEVICE: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("[j/k] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Navigate  "),
+            Span::styled("[Enter] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Select  "),
+            Span::styled("[Esc] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel"),
+        ])
+    } else if app.editing_field.is_some() {
         // Edit mode
         Line::from(vec![
             Span::styled(
@@ -381,6 +485,8 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("[e] ", Style::default().fg(Color::Cyan)),
             Span::raw("URL  "),
+            Span::styled("[d] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Device  "),
             Span::styled("[L] ", Style::default().fg(Color::Cyan)),
             Span::raw("Lang  "),
             Span::styled("[f] ", Style::default().fg(Color::Cyan)),
