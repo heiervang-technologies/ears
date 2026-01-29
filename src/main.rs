@@ -303,7 +303,7 @@ async fn handle_vad() -> Result<()> {
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
 
     // Start pipeline
-    let (shutdown_tx, pipeline_handle) =
+    let (shutdown_tx, _settings_tx, pipeline_handle) =
         match ears::tui::start_vad_pipeline(&config, event_tx).await {
             Ok(result) => result,
             Err(e) => {
@@ -319,10 +319,7 @@ async fn handle_vad() -> Result<()> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                ears::streaming_engine::StreamingEvent::SegmentCompleted {
-                    text,
-                    duration_ms,
-                } => {
+                ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
                 }
                 ears::streaming_engine::StreamingEvent::Error(msg) => {
@@ -569,6 +566,7 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     #[serial_test::serial]

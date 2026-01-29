@@ -69,13 +69,33 @@ impl Drop for StateCleanupGuard {
     }
 }
 
+/// Typing settings sent from the TUI to the engine via watch channel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypingSettings {
+    pub progressive_typing: bool,
+    pub auto_correction: bool,
+}
+
+impl Default for TypingSettings {
+    fn default() -> Self {
+        Self {
+            progressive_typing: true,
+            auto_correction: true,
+        }
+    }
+}
+
 /// Start the VAD audio processing pipeline.
 ///
-/// Returns the shutdown sender and a join handle for the processing task.
+/// Returns the shutdown sender, typing settings sender, and a join handle.
 pub async fn start_vad_pipeline(
     config: &Config,
     event_tx: mpsc::UnboundedSender<StreamingEvent>,
-) -> Result<(watch::Sender<bool>, tokio::task::JoinHandle<()>)> {
+) -> Result<(
+    watch::Sender<bool>,
+    watch::Sender<TypingSettings>,
+    tokio::task::JoinHandle<()>,
+)> {
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let whisper_client =
@@ -116,6 +136,9 @@ pub async fn start_vad_pipeline(
     // Shutdown channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
+    // Typing settings channel
+    let (settings_tx, mut settings_rx) = watch::channel(TypingSettings::default());
+
     // Spawn audio processing task
     let handle = tokio::spawn(async move {
         loop {
@@ -133,6 +156,11 @@ pub async fn start_vad_pipeline(
                         }
                     }
                 }
+                _ = settings_rx.changed() => {
+                    let s = *settings_rx.borrow_and_update();
+                    engine.set_typing_enabled(s.progressive_typing, s.auto_correction);
+                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}", s.progressive_typing, s.auto_correction);
+                }
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
                     break;
@@ -143,7 +171,7 @@ pub async fn start_vad_pipeline(
         drop(capture);
     });
 
-    Ok((shutdown_tx, handle))
+    Ok((shutdown_tx, settings_tx, handle))
 }
 
 /// Run the TUI application
@@ -167,6 +195,7 @@ pub async fn run() -> Result<()> {
     // VAD pipeline state
     let mut vad_running = false;
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
+    let mut vad_settings: Option<watch::Sender<TypingSettings>> = None;
     let mut vad_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     let result: Result<()> = async {
@@ -174,6 +203,10 @@ pub async fn run() -> Result<()> {
             // Clear clickable regions before rendering
             app.clear_clickable_regions();
             terminal.draw(|f| ui::render(&mut app, f))?;
+
+            // Snapshot settings before handling events to detect changes
+            let prev_progressive = app.progressive_typing;
+            let prev_auto_correction = app.auto_correction;
 
             match event_handler.next()? {
                 Event::Key(key) => {
@@ -195,6 +228,18 @@ pub async fn run() -> Result<()> {
                 }
             }
 
+            // Push typing settings to engine if they changed
+            if app.progressive_typing != prev_progressive
+                || app.auto_correction != prev_auto_correction
+            {
+                if let Some(ref tx) = vad_settings {
+                    let _ = tx.send(TypingSettings {
+                        progressive_typing: app.progressive_typing,
+                        auto_correction: app.auto_correction,
+                    });
+                }
+            }
+
             // Drain streaming events
             while let Ok(event) = event_rx.try_recv() {
                 app.handle_streaming_event(event);
@@ -204,8 +249,14 @@ pub async fn run() -> Result<()> {
             if app.vad_active && !vad_running {
                 // Start VAD pipeline
                 match start_vad_pipeline(&config, event_tx.clone()).await {
-                    Ok((shutdown, handle)) => {
+                    Ok((shutdown, settings, handle)) => {
+                        // Send current settings immediately so engine matches TUI state
+                        let _ = settings.send(TypingSettings {
+                            progressive_typing: app.progressive_typing,
+                            auto_correction: app.auto_correction,
+                        });
                         vad_shutdown = Some(shutdown);
+                        vad_settings = Some(settings);
                         vad_handle = Some(handle);
                         vad_running = true;
                         if let Err(e) = state_mgr.transition(EarsState::VadActive) {
@@ -223,6 +274,7 @@ pub async fn run() -> Result<()> {
                 if let Some(tx) = vad_shutdown.take() {
                     let _ = tx.send(true);
                 }
+                vad_settings.take();
                 if let Some(handle) = vad_handle.take() {
                     let _ = handle.await;
                 }
