@@ -44,6 +44,9 @@ async fn main() -> Result<()> {
             // Toggle recording/transcription (for keyboard shortcuts)
             handle_toggle().await?;
         }
+        Some(Commands::Vad) => {
+            handle_vad().await?;
+        }
         Some(Commands::Select) => {
             select_device()?;
         }
@@ -254,6 +257,99 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
             Err(e) => tracing::warn!("Failed to run post-transcribe hook: {}", e),
         }
     });
+}
+
+/// Toggle VAD mode: start or stop headless voice activity detection
+async fn handle_vad() -> Result<()> {
+    let config = Config::load().context("Failed to load configuration")?;
+    let vad_pid_file = config.state_dir.join("vad.pid");
+
+    // Check if a headless VAD process is already running
+    if let Ok(pid_str) = std::fs::read_to_string(&vad_pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+
+            if kill(Pid::from_raw(pid), None).is_ok() {
+                // Process is alive, send SIGTERM to stop it
+                kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
+                eprintln!("VAD stopped");
+                return Ok(());
+            }
+        }
+        // Stale PID file
+        std::fs::remove_file(&vad_pid_file).ok();
+    }
+
+    // Start VAD mode
+    let mut state_mgr =
+        StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
+    state_mgr.load_state().ok();
+
+    // Write our PID
+    std::fs::write(&vad_pid_file, std::process::id().to_string())
+        .context("Failed to write VAD PID file")?;
+
+    // Force state to Idle if stale, then transition to VadActive
+    if state_mgr.current_state() != StateEnum::Idle {
+        state_mgr.transition(StateEnum::Idle).ok();
+    }
+    state_mgr
+        .transition(StateEnum::VadActive)
+        .context("Failed to transition to VadActive")?;
+
+    // Create event channel
+    let (event_tx, mut event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
+
+    // Start pipeline
+    let (shutdown_tx, pipeline_handle) =
+        match ears::tui::start_vad_pipeline(&config, event_tx).await {
+            Ok(result) => result,
+            Err(e) => {
+                std::fs::remove_file(&vad_pid_file).ok();
+                state_mgr.transition(StateEnum::Idle).ok();
+                anyhow::bail!("Failed to start VAD: {}", e);
+            }
+        };
+
+    eprintln!("VAD started - listening...");
+
+    // Drain events in background (log segment completions and errors)
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                ears::streaming_engine::StreamingEvent::SegmentCompleted {
+                    text,
+                    duration_ms,
+                } => {
+                    tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
+                }
+                ears::streaming_engine::StreamingEvent::Error(msg) => {
+                    tracing::warn!("Streaming error: {}", msg);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Wait for termination signal (SIGTERM from second `ears vad`, or Ctrl+C)
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+
+    tokio::select! {
+        _ = sigterm.recv() => {}
+        _ = sigint.recv() => {}
+    }
+
+    // Shutdown
+    let _ = shutdown_tx.send(true);
+    let _ = pipeline_handle.await;
+    std::fs::remove_file(&vad_pid_file).ok();
+    state_mgr.transition(StateEnum::Idle).ok();
+
+    Ok(())
 }
 
 /// Main toggle logic: start recording or stop and transcribe

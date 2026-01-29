@@ -72,7 +72,7 @@ impl Drop for StateCleanupGuard {
 /// Start the VAD audio processing pipeline.
 ///
 /// Returns the shutdown sender and a join handle for the processing task.
-async fn start_vad_pipeline(
+pub async fn start_vad_pipeline(
     config: &Config,
     event_tx: mpsc::UnboundedSender<StreamingEvent>,
 ) -> Result<(watch::Sender<bool>, tokio::task::JoinHandle<()>)> {
