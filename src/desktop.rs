@@ -510,14 +510,22 @@ mod tests {
     #[test]
     fn test_notification_warn() {
         let mut cmd = Command::new("notify-send");
-        cmd.args(["--app-name=ears", "--urgency=normal", "Test warning message"]);
+        cmd.args([
+            "--app-name=ears",
+            "--urgency=normal",
+            "Test warning message",
+        ]);
         assert_eq!(cmd.get_program(), "notify-send");
     }
 
     #[test]
     fn test_notification_error() {
         let mut cmd = Command::new("notify-send");
-        cmd.args(["--app-name=ears", "--urgency=critical", "Test error message"]);
+        cmd.args([
+            "--app-name=ears",
+            "--urgency=critical",
+            "Test error message",
+        ]);
         assert_eq!(cmd.get_program(), "notify-send");
     }
 
