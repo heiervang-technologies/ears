@@ -473,7 +473,6 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     #[serial_test::serial]

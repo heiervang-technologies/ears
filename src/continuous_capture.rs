@@ -144,8 +144,9 @@ impl ContinuousCapture {
 
         let chunk_size = self.config.chunk_size;
 
-        // Spawn task to read from stdout
-        tokio::spawn(async move {
+        // Use spawn_blocking for the reader since it does blocking std::io::Read.
+        // tokio::spawn with blocking I/O would starve the async runtime.
+        tokio::task::spawn_blocking(move || {
             let mut stdout = match process.stdout.take() {
                 Some(stdout) => stdout,
                 None => {

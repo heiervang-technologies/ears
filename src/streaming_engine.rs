@@ -215,7 +215,10 @@ impl StreamingEngine {
 
         info!("Transcribed: {}", transcript);
 
-        // Process through LocalAgreement
+        // In VAD mode, each segment is a complete utterance — commit directly.
+        // LocalAgreement requires two matching transcriptions to commit, which
+        // never happens for discrete segments. Feed it twice so it commits.
+        self.local_agreement.process(transcript.clone());
         let (newly_committed, uncommitted) = self.local_agreement.process(transcript.clone());
 
         // Update progressive typing
