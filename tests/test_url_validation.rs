@@ -6,10 +6,30 @@ use ears::Config;
 use std::env;
 use tempfile::TempDir;
 
-#[test]
-fn test_url_with_trailing_slash_normalization() {
+fn setup_test_env() -> (TempDir, Option<String>, Option<String>) {
+    let original_home = env::var("HOME").ok();
+    let original_xdg = env::var("XDG_CONFIG_HOME").ok();
     let temp_dir = TempDir::new().unwrap();
     env::set_var("HOME", temp_dir.path());
+    env::set_var("XDG_CONFIG_HOME", temp_dir.path().join(".config"));
+    (temp_dir, original_home, original_xdg)
+}
+
+fn restore_test_env(original_home: Option<String>, original_xdg: Option<String>) {
+    match original_home {
+        Some(h) => env::set_var("HOME", h),
+        None => env::remove_var("HOME"),
+    }
+    match original_xdg {
+        Some(x) => env::set_var("XDG_CONFIG_HOME", x),
+        None => env::remove_var("XDG_CONFIG_HOME"),
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn test_url_with_trailing_slash_normalization() {
+    let (_temp_dir, orig_home, orig_xdg) = setup_test_env();
 
     let mut config = Config::new().unwrap();
 
@@ -19,6 +39,8 @@ fn test_url_with_trailing_slash_normalization() {
 
     // Load it back
     let loaded = Config::load().unwrap();
+
+    restore_test_env(orig_home, orig_xdg);
 
     // url crate automatically adds trailing slash
     assert_eq!(loaded.whisper_server.as_str(), "http://localhost:8178/");
@@ -35,9 +57,9 @@ fn test_url_with_trailing_slash_normalization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_url_without_port() {
-    let temp_dir = TempDir::new().unwrap();
-    env::set_var("HOME", temp_dir.path());
+    let (_temp_dir, orig_home, orig_xdg) = setup_test_env();
 
     let mut config = Config::new().unwrap();
 
@@ -46,6 +68,9 @@ fn test_url_without_port() {
     config.save().unwrap();
 
     let loaded = Config::load().unwrap();
+
+    restore_test_env(orig_home, orig_xdg);
+
     assert_eq!(
         loaded.whisper_server.as_str(),
         "http://whisper.example.com/"
@@ -56,9 +81,9 @@ fn test_url_without_port() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_url_with_path() {
-    let temp_dir = TempDir::new().unwrap();
-    env::set_var("HOME", temp_dir.path());
+    let (_temp_dir, orig_home, orig_xdg) = setup_test_env();
 
     let mut config = Config::new().unwrap();
 
@@ -67,6 +92,9 @@ fn test_url_with_path() {
     config.save().unwrap();
 
     let loaded = Config::load().unwrap();
+
+    restore_test_env(orig_home, orig_xdg);
+
     // URL with path does NOT get trailing slash added (unlike root URLs)
     assert!(
         loaded
@@ -89,9 +117,9 @@ fn test_url_with_path() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_url_validation_allows_trailing_slash() {
-    let temp_dir = TempDir::new().unwrap();
-    env::set_var("HOME", temp_dir.path());
+    let (_temp_dir, orig_home, orig_xdg) = setup_test_env();
 
     let mut config = Config::new().unwrap();
 
@@ -100,6 +128,9 @@ fn test_url_validation_allows_trailing_slash() {
     config.save().unwrap();
 
     let loaded = Config::load().unwrap();
+
+    restore_test_env(orig_home, orig_xdg);
+
     assert_eq!(loaded.whisper_server.as_str(), "http://localhost:8178/");
 
     // Still creates double slash

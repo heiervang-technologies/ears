@@ -536,6 +536,9 @@ async fn stop_and_transcribe(
             AudioFeedback::beep_error().ok();
             Notifications::info("No speech detected").ok();
             tracing::info!("No speech detected");
+
+            // Reset state to Idle on empty transcription
+            state_mgr.transition(StateEnum::Idle).ok();
         }
         Err(e) => {
             AudioFeedback::beep_error().ok();
