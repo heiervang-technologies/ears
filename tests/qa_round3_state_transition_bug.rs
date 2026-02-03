@@ -174,8 +174,8 @@ fn test_state_reconciliation_logic() {
 }
 
 #[test]
-fn test_reconciliation_only_affects_recording_state() {
-    println!("\n🔍 BUG INVESTIGATION: Reconciliation should only affect Recording state");
+fn test_reconciliation_only_affects_recording_and_transcribing_state() {
+    println!("\n🔍 BUG INVESTIGATION: Reconciliation should affect Recording and Transcribing state");
 
     let temp_dir = TempDir::new().unwrap();
     let state_dir = temp_dir.path();
@@ -185,17 +185,18 @@ fn test_reconciliation_only_affects_recording_state() {
     let reconciled = mgr.reconcile_state(|| Ok(false)).unwrap();
     assert!(!reconciled, "Idle state should not need reconciliation");
 
-    // Test Transcribing state
+    // Test Transcribing state - should be reconciled to Idle since it means
+    // a previous process crashed before resetting state
     mgr.transition(State::Recording).unwrap();
     mgr.transition(State::Transcribing).unwrap();
     let reconciled = mgr.reconcile_state(|| Ok(false)).unwrap();
     assert!(
-        !reconciled,
-        "Transcribing state should not need reconciliation"
+        reconciled,
+        "Stale Transcribing state should be reconciled to Idle"
     );
-    assert_eq!(mgr.current_state(), State::Transcribing);
+    assert_eq!(mgr.current_state(), State::Idle);
 
-    println!("✓ Reconciliation only applies to Recording state");
+    println!("✓ Reconciliation applies to Recording and Transcribing states");
 }
 
 #[test]
