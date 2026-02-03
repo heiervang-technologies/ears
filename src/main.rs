@@ -522,11 +522,17 @@ async fn stop_and_transcribe(
             let filtered_text = config.text_filters.apply(&text);
             tracing::debug!("Filtered text: {}", filtered_text);
 
-            // Type the text
-            TextInput::type_text(&filtered_text)?;
-
-            // Play success beep
-            AudioFeedback::beep_done().ok();
+            // Type the text (don't bail on failure — state cleanup must happen)
+            match TextInput::type_text(&filtered_text) {
+                Ok(()) => {
+                    AudioFeedback::beep_done().ok();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to type text: {}", e);
+                    AudioFeedback::beep_error().ok();
+                    Notifications::error(&format!("Failed to type text: {}", e)).ok();
+                }
+            }
 
             // Run post-transcribe hook if it exists (with filtered text)
             run_post_transcribe_hook(&audio_file, &filtered_text);
@@ -536,6 +542,9 @@ async fn stop_and_transcribe(
             AudioFeedback::beep_error().ok();
             Notifications::info("No speech detected").ok();
             tracing::info!("No speech detected");
+
+            // Reset state to Idle on empty transcription
+            state_mgr.transition(StateEnum::Idle).ok();
         }
         Err(e) => {
             AudioFeedback::beep_error().ok();

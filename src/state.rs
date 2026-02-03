@@ -203,7 +203,17 @@ impl StateManager {
     where
         F: FnOnce() -> Result<bool, Box<dyn std::error::Error>>,
     {
-        // Only need to reconcile if state claims we're recording
+        // Transcribing state is always stale on startup - it means a previous
+        // process crashed or exited before resetting to Idle
+        if self.current_state == State::Transcribing {
+            tracing::warn!("Stale Transcribing state detected on startup, resetting to Idle");
+            self.current_state = State::Idle;
+            self.recording_started = None;
+            self.persist_state()?;
+            return Ok(true);
+        }
+
+        // Only need to reconcile Recording if process is dead
         if self.current_state != State::Recording {
             return Ok(false);
         }
