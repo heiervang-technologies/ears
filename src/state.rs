@@ -206,9 +206,7 @@ impl StateManager {
         // Transcribing state is always stale on startup - it means a previous
         // process crashed or exited before resetting to Idle
         if self.current_state == State::Transcribing {
-            tracing::warn!(
-                "Stale Transcribing state detected on startup, resetting to Idle"
-            );
+            tracing::warn!("Stale Transcribing state detected on startup, resetting to Idle");
             self.current_state = State::Idle;
             self.recording_started = None;
             self.persist_state()?;

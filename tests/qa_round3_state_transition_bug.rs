@@ -175,7 +175,9 @@ fn test_state_reconciliation_logic() {
 
 #[test]
 fn test_reconciliation_only_affects_recording_and_transcribing_state() {
-    println!("\n🔍 BUG INVESTIGATION: Reconciliation should affect Recording and Transcribing state");
+    println!(
+        "\n🔍 BUG INVESTIGATION: Reconciliation should affect Recording and Transcribing state"
+    );
 
     let temp_dir = TempDir::new().unwrap();
     let state_dir = temp_dir.path();
