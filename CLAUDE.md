@@ -13,7 +13,7 @@ Context and instructions for AI agents working on the ears repository.
 - **TUI**: Ratatui + Crossterm
 - **HTTP Client**: Reqwest with rustls
 - **Audio**: PipeWire (via `pw-record`)
-- **Text Input**: ydotool
+- **Text Input**: wtype (Hyprland/Omarchy), ydotool (fallback)
 - **CLI**: Clap
 
 ## Project Structure
@@ -101,12 +101,39 @@ Use conventional commits:
 
 ## External Dependencies
 
+### Required
+
+| Dependency | Package (Arch) | Purpose |
+|------------|----------------|---------|
+| `pw-record` | `pipewire` | Audio capture from PipeWire device |
+| `pw-cli` | `pipewire` | Audio device discovery and listing |
+| `timeout` | `coreutils` | Recording duration limit (wraps pw-record) |
+| `pkill` | `procps-ng` | Signal waybar on state changes (SIGRTMIN+9) |
+| `notify-send` | `libnotify` | Desktop notifications (info, warning, error) |
+| `paplay` | `libpulse` | Audio feedback sounds (start/stop/error beeps) |
+
+### Text Input (one required)
+
+| Dependency | Package (Arch) | Purpose |
+|------------|----------------|---------|
+| `wtype` | `wtype` | Direct text typing on Hyprland/Wayland (preferred on Omarchy) |
+| `ydotool` | `ydotool` | Keyboard simulation fallback (Ctrl+V paste on non-Omarchy) |
+
+On Omarchy/Hyprland systems, `wtype` is used. On other systems, `ydotool` + `wl-copy`/`wl-paste` are used for clipboard-based paste.
+
+### Optional
+
+| Dependency | Package (Arch) | Purpose |
+|------------|----------------|---------|
+| `hyprctl` | `hyprland` | Keyboard layout detection, Omarchy detection |
+| `dconf` | `dconf` | GNOME keyboard layout detection (fallback) |
+| `wl-copy` | `wl-clipboard` | Clipboard write (non-Omarchy text input path) |
+| `wl-paste` | `wl-clipboard` | Clipboard read/restore (non-Omarchy text input path) |
+| `fzf` | `fzf` | Interactive device selection (`ears select`) |
+| `column` | `util-linux` | Device list formatting (graceful fallback) |
+
+### External Service
+
 | Dependency | Purpose |
 |------------|---------|
-| PipeWire | Audio capture (`pw-record`) |
-| whisper.cpp | Transcription server |
-| ydotool | Text input |
-| wl-clipboard | Clipboard operations (Wayland) |
-| notify-send | Desktop notifications |
-| paplay | Audio feedback |
-| fzf | Interactive selection |
+| whisper.cpp / faster-whisper server | Transcription API (OpenAI-compatible `/v1/audio/transcriptions` endpoint) |
