@@ -53,6 +53,8 @@ pub struct WhisperClient {
     server_url: String,
     /// Language code for transcription (None = auto-detect)
     language: Option<String>,
+    /// API key for authenticated services (None = no auth)
+    api_key: Option<String>,
     /// Maximum number of retry attempts
     #[allow(dead_code)]
     max_retries: u32,
@@ -83,6 +85,7 @@ impl WhisperClient {
                 .expect("Failed to build HTTP client"),
             server_url: server_url.into(),
             language: None,
+            api_key: None,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
@@ -95,6 +98,15 @@ impl WhisperClient {
     /// * `language` - Language code (e.g., "en", "no") or None for auto-detect
     pub fn with_language(mut self, language: Option<String>) -> Self {
         self.language = language;
+        self
+    }
+
+    /// Sets the API key for authenticated ASR services
+    ///
+    /// When set, adds an `Authorization: Bearer {key}` header to all requests.
+    /// When None, no authorization header is sent (default).
+    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
+        self.api_key = api_key;
         self
     }
 
@@ -119,6 +131,7 @@ impl WhisperClient {
                 .expect("Failed to build HTTP client"),
             server_url: server_url.into(),
             language: None,
+            api_key: None,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -145,9 +158,12 @@ impl WhisperClient {
         let url = format!("{}/health", base);
         debug!("Performing health check on {}", url);
 
-        let response = self
-            .client
-            .get(&url)
+        let mut request = self.client.get(&url);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
@@ -264,10 +280,12 @@ impl WhisperClient {
         }
 
         // Send request
-        let response = self
-            .client
-            .post(&url)
-            .multipart(form)
+        let mut request = self.client.post(&url).multipart(form);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;

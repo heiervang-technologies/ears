@@ -15,6 +15,9 @@ pub struct Config {
     pub device: String,
     /// Language code for transcription (None = auto-detect)
     pub language: Option<String>,
+    /// API key for authenticated ASR services (None = no auth)
+    #[serde(skip)]
+    pub api_key: Option<String>,
     /// Text filters for transcription output
     pub text_filters: TextFilters,
     /// Configuration directory
@@ -42,6 +45,7 @@ impl Config {
             device: "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
                 .to_string(),
             language: None, // Auto-detect by default
+            api_key: None,
             text_filters: TextFilters::new(),
             config_dir,
             state_dir,
@@ -72,6 +76,15 @@ impl Config {
                 None
             } else {
                 Some(language.to_string())
+            };
+        }
+
+        if let Ok(api_key) = std::env::var("EARS_API_KEY") {
+            let api_key = api_key.trim().to_string();
+            config.api_key = if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key)
             };
         }
 
@@ -151,6 +164,24 @@ impl Config {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to read language config: {}", e);
+                }
+            }
+        }
+
+        // Load API key if file exists (env var takes precedence)
+        if config.api_key.is_none() {
+            let api_key_file = config.config_dir.join("api_key");
+            if api_key_file.exists() {
+                match fs::read_to_string(&api_key_file) {
+                    Ok(key_str) => {
+                        let key = key_str.trim().to_string();
+                        if !key.is_empty() {
+                            config.api_key = Some(key);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read api_key config: {}", e);
+                    }
                 }
             }
         }

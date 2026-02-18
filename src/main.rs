@@ -396,7 +396,7 @@ async fn start_recording(
     tracing::info!("Starting recording");
 
     // Check server health
-    let client = WhisperClient::new(config.whisper_server.clone());
+    let client = WhisperClient::new(config.whisper_server.clone()).with_api_key(config.api_key.clone());
     if client.health_check().await.is_err() {
         tracing::error!("Whisper server health check failed");
         AudioFeedback::beep_error().ok();
@@ -513,7 +513,7 @@ async fn stop_and_transcribe(
     }
 
     // Transcribe
-    let client = WhisperClient::new(config.whisper_server.clone()).with_language(language);
+    let client = WhisperClient::new(config.whisper_server.clone()).with_language(language).with_api_key(config.api_key.clone());
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!("Transcription successful: {}", text);

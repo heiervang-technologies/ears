@@ -114,6 +114,8 @@ pub struct App {
     pub language: Option<String>,
     /// Config directory path
     config_dir: std::path::PathBuf,
+    /// API key for authenticated ASR services (never displayed)
+    api_key: Option<String>,
     /// Log messages
     pub logs: Vec<String>,
     /// Selected log index (for scrolling)
@@ -156,6 +158,7 @@ impl App {
         let server_url = config.whisper_server.to_string();
         let device = config.device.clone();
         let language = config.language.clone();
+        let api_key = config.api_key.clone();
         let config_dir = config.config_dir.clone();
         let text_filters = config.text_filters.clone();
 
@@ -176,6 +179,7 @@ impl App {
             device,
             language,
             config_dir,
+            api_key,
             logs: vec![
                 "Application started".to_string(),
                 "TUI initialized".to_string(),
@@ -199,7 +203,7 @@ impl App {
     }
 
     /// Fetch the model name from the whisper server
-    fn fetch_model_name(server_url: &str) -> Option<String> {
+    fn fetch_model_name(server_url: &str, api_key: Option<&str>) -> Option<String> {
         let base = server_url.trim_end_matches('/');
         let url = format!("{}/v1/models", base);
 
@@ -209,7 +213,11 @@ impl App {
             .timeout(std::time::Duration::from_secs(3))
             .build()
             .ok()?;
-        let response = client.get(&url).send().ok()?;
+        let mut request = client.get(&url);
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().ok()?;
         let json: serde_json::Value = response.json().ok()?;
 
         // OpenAI-compatible response: {"data": [{"id": "model-name", ...}]}
@@ -463,7 +471,7 @@ impl App {
                                 self.logs
                                     .push(format!("Server URL set to: {}", self.server));
                                 // Update model from new server
-                                if let Some(model) = Self::fetch_model_name(&self.server) {
+                                if let Some(model) = Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
                                     self.model = model;
                                     self.logs.push(format!("Model updated: {}", self.model));
                                 }
@@ -850,7 +858,7 @@ impl App {
         // Lazy fetch model on first tick (after UI has rendered once)
         if self.tick_count == 1 && self.model == "(connecting...)" {
             self.model =
-                Self::fetch_model_name(&self.server).unwrap_or_else(|| "(offline)".to_string());
+                Self::fetch_model_name(&self.server, self.api_key.as_deref()).unwrap_or_else(|| "(offline)".to_string());
         }
 
         if self.is_recording {
