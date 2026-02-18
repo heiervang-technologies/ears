@@ -41,7 +41,6 @@ pub struct ClickableRegion {
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
-    Status,
     Configuration,
     Logs,
     LiveTranscription,
@@ -57,18 +56,16 @@ impl Panel {
     /// Get the next panel (tab right)
     pub fn next(self) -> Self {
         match self {
-            Panel::Status => Panel::Configuration,
             Panel::Configuration => Panel::Logs,
             Panel::Logs => Panel::LiveTranscription,
-            Panel::LiveTranscription => Panel::Status,
+            Panel::LiveTranscription => Panel::Configuration,
         }
     }
 
     /// Get the previous panel (tab left)
     pub fn prev(self) -> Self {
         match self {
-            Panel::Status => Panel::LiveTranscription,
-            Panel::Configuration => Panel::Status,
+            Panel::Configuration => Panel::LiveTranscription,
             Panel::Logs => Panel::Configuration,
             Panel::LiveTranscription => Panel::Logs,
         }
@@ -77,7 +74,6 @@ impl Panel {
     /// Get the panel title
     pub fn title(self) -> &'static str {
         match self {
-            Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
             Panel::LiveTranscription => "Live",
@@ -171,7 +167,7 @@ impl App {
         let model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
 
         Self {
-            current_panel: Panel::Status,
+            current_panel: Panel::LiveTranscription,
             command_mode: false,
             command_buffer: String::new(),
             editing_field: None,
@@ -290,13 +286,9 @@ impl App {
                 self.scroll_up();
             }
 
-            // Space to toggle recording (in Status panel) or VAD mode (in Live panel)
+            // Space to toggle VAD mode (consistent across all panels)
             (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
-                    self.toggle_vad_mode();
-                } else {
-                    self.toggle_recording();
-                }
+                self.toggle_vad_mode();
             }
 
             // 'v' to toggle VAD mode
@@ -304,16 +296,16 @@ impl App {
                 self.toggle_vad_mode();
             }
 
-            // 't' to toggle progressive typing (in Live panel)
+            // 't' to toggle progressive typing (in Configuration panel)
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::Configuration {
                     self.toggle_progressive_typing();
                 }
             }
 
-            // 'a' to toggle auto-correction (in Live panel)
+            // 'a' to toggle auto-correction (in Configuration panel)
             (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::Configuration {
                     self.toggle_auto_correction();
                 }
             }
@@ -578,31 +570,6 @@ impl App {
         }
     }
 
-    /// Toggle recording state
-    fn toggle_recording(&mut self) {
-        if self.vad_active {
-            self.add_log("Cannot record while VAD is active");
-            return;
-        }
-
-        // Check if user is viewing the last log before adding a new one
-        let was_viewing_last_log =
-            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
-
-        self.is_recording = !self.is_recording;
-        if self.is_recording {
-            self.logs.push("Started recording".to_string());
-            self.recording_duration = 0;
-            self.tick_count = 0;
-        } else {
-            self.logs.push("Stopped recording".to_string());
-        }
-
-        // If user was viewing the last log, update selected_log to follow the new log
-        if was_viewing_last_log {
-            self.selected_log = self.logs.len() - 1;
-        }
-    }
 
     /// Cycle through languages: auto -> en -> no -> auto
     fn cycle_language(&mut self) {
