@@ -55,6 +55,8 @@ pub struct WhisperClient {
     language: Option<String>,
     /// API key for authenticated services (None = no auth)
     api_key: Option<String>,
+    /// Model name for transcription (None = server default)
+    model: Option<String>,
     /// Maximum number of retry attempts
     #[allow(dead_code)]
     max_retries: u32,
@@ -86,6 +88,7 @@ impl WhisperClient {
             server_url: server_url.into(),
             language: None,
             api_key: None,
+            model: None,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
@@ -107,6 +110,15 @@ impl WhisperClient {
     /// When None, no authorization header is sent (default).
     pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
         self.api_key = api_key;
+        self
+    }
+
+    /// Sets the model name for transcription
+    ///
+    /// When set, includes a `model` field in the multipart form.
+    /// When None, no model field is sent (server uses its default).
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
         self
     }
 
@@ -132,6 +144,7 @@ impl WhisperClient {
             server_url: server_url.into(),
             language: None,
             api_key: None,
+            model: None,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -155,10 +168,29 @@ impl WhisperClient {
     /// ```
     pub async fn health_check(&self) -> Result<(), WhisperError> {
         let base = self.server_url.trim_end_matches('/');
-        let url = format!("{}/health", base);
-        debug!("Performing health check on {}", url);
 
-        let mut request = self.client.get(&url);
+        // Try /health first (local whisper servers)
+        let health_url = format!("{}/health", base);
+        debug!("Performing health check on {}", health_url);
+
+        let mut request = self.client.get(&health_url);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                info!("Whisper server is healthy");
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Fall back to /v1/models (cloud APIs like Groq)
+        let models_url = format!("{}/v1/models", base);
+        debug!("Health check fallback: trying {}", models_url);
+
+        let mut request = self.client.get(&models_url);
         if let Some(ref key) = self.api_key {
             request = request.bearer_auth(key);
         }
@@ -169,7 +201,7 @@ impl WhisperClient {
             .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
 
         if response.status().is_success() {
-            info!("Whisper server is healthy");
+            info!("Whisper server is healthy (via /v1/models)");
             Ok(())
         } else {
             Err(WhisperError::ConnectionError(format!(
@@ -277,6 +309,12 @@ impl WhisperClient {
         if let Some(ref lang) = self.language {
             debug!("Using language: {}", lang);
             form = form.text("language", lang.clone());
+        }
+
+        // Add model parameter only if explicitly set (otherwise server default)
+        if let Some(ref model) = self.model {
+            debug!("Using model: {}", model);
+            form = form.text("model", model.clone());
         }
 
         // Send request

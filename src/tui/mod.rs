@@ -99,7 +99,7 @@ pub async fn start_vad_pipeline(
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let whisper_client =
-        Arc::new(WhisperClient::new(config.whisper_server.to_string()).with_language(language).with_api_key(config.api_key.clone()));
+        Arc::new(WhisperClient::new(config.whisper_server.to_string()).with_language(language).with_api_key(config.api_key.clone()).with_model(config.model.clone()));
 
     // Health check
     whisper_client
@@ -175,13 +175,13 @@ pub async fn start_vad_pipeline(
 }
 
 /// Run the TUI application
-pub async fn run() -> Result<()> {
+pub async fn run(profile: Option<&str>) -> Result<()> {
     let mut terminal = init_terminal()?;
-    let mut app = App::new();
+    let mut app = App::with_profile(profile);
     let event_handler = EventHandler::new(250);
 
     // Load config and create state manager for waybar integration
-    let config = Config::load().unwrap_or_default();
+    let config = Config::load_profile(profile).unwrap_or_default();
     let mut state_mgr = StateManager::new(&config.state_dir)?;
 
     // Drop guard ensures state resets to idle even on panic/crash

@@ -112,8 +112,6 @@ pub struct App {
     pub device: String,
     /// Language for transcription (None = auto-detect)
     pub language: Option<String>,
-    /// Config directory path
-    config_dir: std::path::PathBuf,
     /// API key for authenticated ASR services (never displayed)
     api_key: Option<String>,
     /// Log messages
@@ -148,22 +146,27 @@ pub struct App {
     pub device_picker_selected: usize,
     /// Error message if device list fetch failed
     pub device_picker_error: Option<String>,
+    /// Active config profile name (None = default)
+    profile: Option<String>,
 }
 
 impl App {
     /// Create a new application instance
     pub fn new() -> Self {
+        Self::with_profile(None)
+    }
+
+    pub fn with_profile(profile: Option<&str>) -> Self {
         // Load config from files
-        let config = Config::load().unwrap_or_default();
+        let config = Config::load_profile(profile).unwrap_or_default();
         let server_url = config.whisper_server.to_string();
         let device = config.device.clone();
         let language = config.language.clone();
         let api_key = config.api_key.clone();
-        let config_dir = config.config_dir.clone();
         let text_filters = config.text_filters.clone();
 
-        // Model will be fetched lazily on first tick to avoid blocking startup
-        let model = "(connecting...)".to_string();
+        // Use configured model if set, otherwise fetch lazily on first tick
+        let model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
 
         Self {
             current_panel: Panel::Status,
@@ -178,7 +181,6 @@ impl App {
             server: server_url,
             device,
             language,
-            config_dir,
             api_key,
             logs: vec![
                 "Application started".to_string(),
@@ -199,6 +201,7 @@ impl App {
             device_picker_devices: Vec::new(),
             device_picker_selected: 0,
             device_picker_error: None,
+            profile: profile.map(|s| s.to_string()),
         }
     }
 
@@ -463,18 +466,13 @@ impl App {
                     match Url::parse(&self.edit_buffer) {
                         Ok(url) => {
                             self.server = url.to_string();
-                            // Save to config file
-                            let server_file = self.config_dir.join("server");
-                            if let Err(e) = std::fs::write(&server_file, &self.server) {
-                                self.logs.push(format!("Failed to save server URL: {}", e));
-                            } else {
-                                self.logs
-                                    .push(format!("Server URL set to: {}", self.server));
-                                // Update model from new server
-                                if let Some(model) = Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
-                                    self.model = model;
-                                    self.logs.push(format!("Model updated: {}", self.model));
-                                }
+                            self.save_config();
+                            self.logs
+                                .push(format!("Server URL set to: {}", self.server));
+                            // Update model from new server
+                            if let Some(model) = Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
+                                self.model = model;
+                                self.logs.push(format!("Model updated: {}", self.model));
                             }
                         }
                         Err(e) => {
@@ -610,12 +608,7 @@ impl App {
         let lang_display = self.language.as_deref().unwrap_or("auto");
         self.logs.push(format!("Language set to: {}", lang_display));
 
-        // Save to config file
-        let language_file = self.config_dir.join("language");
-        let content = self.language.as_deref().unwrap_or("");
-        if let Err(e) = std::fs::write(&language_file, content) {
-            self.logs.push(format!("Failed to save language: {}", e));
-        }
+        self.save_config();
 
         if was_viewing_last_log {
             self.selected_log = self.logs.len() - 1;
@@ -674,7 +667,7 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Lowercase filter {}", status));
-        self.save_text_filters();
+        self.save_config();
     }
 
     /// Toggle punctuation removal filter
@@ -686,16 +679,21 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Punctuation filter {}", status));
-        self.save_text_filters();
+        self.save_config();
     }
 
-    /// Save text filter settings to config file
-    fn save_text_filters(&self) {
-        let filters_file = self.config_dir.join("text_filters.json");
-        if let Ok(json) = serde_json::to_string_pretty(&self.text_filters) {
-            if let Err(e) = std::fs::write(&filters_file, json) {
-                tracing::warn!("Failed to save text filters: {}", e);
-            }
+    /// Save current settings to config.toml
+    fn save_config(&self) {
+        // Reconstruct Config from App fields and save as TOML
+        let mut config = Config::load_profile(self.profile.as_deref()).unwrap_or_default();
+        if let Ok(url) = Url::parse(&self.server) {
+            config.whisper_server = url;
+        }
+        config.device = self.device.clone();
+        config.language = self.language.clone();
+        config.text_filters = self.text_filters.clone();
+        if let Err(e) = config.save() {
+            tracing::warn!("Failed to save config: {}", e);
         }
     }
 
@@ -750,13 +748,8 @@ impl App {
         let description = selected.description.clone();
 
         self.device = new_name.clone();
-
-        let device_file = self.config_dir.join("device");
-        if let Err(e) = std::fs::write(&device_file, &new_name) {
-            self.logs.push(format!("Failed to save device: {}", e));
-        } else {
-            self.logs.push(format!("Device set to: {}", description));
-        }
+        self.save_config();
+        self.logs.push(format!("Device set to: {}", description));
 
         self.close_device_picker();
 
@@ -855,7 +848,7 @@ impl App {
     pub fn handle_tick(&mut self) {
         self.tick_count += 1;
 
-        // Lazy fetch model on first tick (after UI has rendered once)
+        // Lazy fetch model on first tick, only if not already configured
         if self.tick_count == 1 && self.model == "(connecting...)" {
             self.model =
                 Self::fetch_model_name(&self.server, self.api_key.as_deref()).unwrap_or_else(|| "(offline)".to_string());

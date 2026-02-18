@@ -6,203 +6,112 @@ use std::fs;
 use std::path::PathBuf;
 use url::Url;
 
+fn default_server() -> Url {
+    Url::parse("http://127.0.0.1:8178").expect("Default server URL is valid")
+}
+
+fn default_device() -> String {
+    "default".to_string()
+}
+
 /// Configuration for the ears daemon
+///
+/// Loaded from `~/.config/ears/config.toml` (or `config.{profile}.toml`).
+/// Environment variables override file values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Whisper server URL
+    #[serde(rename = "server", default = "default_server")]
     pub whisper_server: Url,
     /// Audio input device name
+    #[serde(default = "default_device")]
     pub device: String,
     /// Language code for transcription (None = auto-detect)
     pub language: Option<String>,
     /// API key for authenticated ASR services (None = no auth)
-    #[serde(skip)]
     pub api_key: Option<String>,
+    /// Model name for transcription (None = server default)
+    pub model: Option<String>,
     /// Text filters for transcription output
+    #[serde(default)]
     pub text_filters: TextFilters,
-    /// Configuration directory
+    /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
-    /// State directory (runtime files)
+    /// State directory (computed, not stored)
     #[serde(skip)]
     pub state_dir: PathBuf,
 }
 
 impl Config {
-    /// Create a new Config with default values
-    pub fn new() -> Result<Self> {
+    /// Compute config and state directory paths
+    fn computed_dirs() -> Result<(PathBuf, PathBuf)> {
         let project_dirs = ProjectDirs::from("com", "heiervang", "ears")
             .context("Failed to determine project directories")?;
-
         let config_dir = project_dirs.config_dir().to_path_buf();
         let state_dir = std::env::var("XDG_RUNTIME_DIR")
             .map(|p| PathBuf::from(p).join("ears"))
-            .unwrap_or_else(|_| PathBuf::from("/tmp").join(format!("ears-{}", std::process::id())));
+            .unwrap_or_else(|_| {
+                PathBuf::from("/tmp").join(format!("ears-{}", std::process::id()))
+            });
+        Ok((config_dir, state_dir))
+    }
 
+    /// Get config file path for a given profile
+    fn config_file_path(config_dir: &PathBuf, profile: Option<&str>) -> PathBuf {
+        match profile {
+            Some(name) => config_dir.join(format!("config.{}.toml", name)),
+            None => config_dir.join("config.toml"),
+        }
+    }
+
+    /// Create a new Config with default values
+    pub fn new() -> Result<Self> {
+        let (config_dir, state_dir) = Self::computed_dirs()?;
         Ok(Self {
-            whisper_server: Url::parse("http://127.0.0.1:8178")
-                .expect("Default server URL is valid"),
-            device: "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
-                .to_string(),
-            language: None, // Auto-detect by default
+            whisper_server: default_server(),
+            device: default_device(),
+            language: None,
             api_key: None,
+            model: None,
             text_filters: TextFilters::new(),
             config_dir,
             state_dir,
         })
     }
 
-    /// Load configuration from environment variables
+    /// Load configuration with an optional profile name
     ///
-    /// Supports the following environment variables:
-    /// - EARS_SERVER: Whisper server URL
-    /// - EARS_DEVICE: Audio device name
-    /// - EARS_LANGUAGE: Language code (e.g., "en", "no") or empty for auto-detect
-    pub fn from_env() -> Result<Self> {
-        let mut config = Self::new()?;
-
-        if let Ok(server) = std::env::var("EARS_SERVER") {
-            config.whisper_server = Url::parse(&server)
-                .with_context(|| format!("Invalid EARS_SERVER URL: {}", server))?;
-        }
-
-        if let Ok(device) = std::env::var("EARS_DEVICE") {
-            config.device = device;
-        }
-
-        if let Ok(language) = std::env::var("EARS_LANGUAGE") {
-            let language = language.trim();
-            config.language = if language.is_empty() {
-                None
-            } else {
-                Some(language.to_string())
-            };
-        }
-
-        if let Ok(api_key) = std::env::var("EARS_API_KEY") {
-            let api_key = api_key.trim().to_string();
-            config.api_key = if api_key.is_empty() {
-                None
-            } else {
-                Some(api_key)
-            };
-        }
-
-        Ok(config)
-    }
-
-    /// Load configuration from file
+    /// Priority: env vars > config file > defaults
     ///
-    /// Reads from:
-    /// - `~/.config/ears/server` for whisper server URL
-    /// - `~/.config/ears/device` for audio device name
-    /// - `~/.config/ears/language` for language code (empty or missing = auto-detect)
-    pub fn load() -> Result<Self> {
-        let mut config = Self::from_env()?;
+    /// Profile resolution: `profile` arg > `EARS_PROFILE` env var > default
+    pub fn load_profile(profile: Option<&str>) -> Result<Self> {
+        let (config_dir, state_dir) = Self::computed_dirs()?;
+        fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-        // Ensure config directory exists
-        fs::create_dir_all(&config.config_dir).context("Failed to create config directory")?;
+        // Resolve profile: CLI arg > env var
+        let env_profile = std::env::var("EARS_PROFILE").ok().filter(|s| !s.trim().is_empty());
+        let profile_name = profile.map(|s| s.to_string()).or(env_profile);
 
-        // Load server URL if file exists (with error handling for partial recovery)
-        let server_file = config.config_dir.join("server");
-        if server_file.exists() {
-            match fs::read_to_string(&server_file) {
-                Ok(server_str) => {
-                    let server_str = server_str.trim().to_string();
-                    match Url::parse(&server_str) {
-                        Ok(url) => {
-                            config.whisper_server = url;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Invalid URL in server config file ({}), using default: {}",
-                                e,
-                                config.whisper_server
-                            );
-                            eprintln!(
-                                "Warning: Invalid server URL in config file, using default: {}",
-                                config.whisper_server
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to read server config: {}", e);
-                }
-            }
-        }
+        let config_file = Self::config_file_path(&config_dir, profile_name.as_deref());
 
-        // Load device if file exists (independent of server config)
-        let device_file = config.config_dir.join("device");
-        if device_file.exists() {
-            match fs::read_to_string(&device_file) {
-                Ok(device_str) => {
-                    let device = device_str.trim().to_string();
-                    if !device.is_empty() {
-                        config.device = device;
-                    } else {
-                        tracing::warn!("Empty device name in config, using default");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to read device config: {}", e);
-                }
-            }
-        }
+        let mut config = if config_file.exists() {
+            let content = fs::read_to_string(&config_file)
+                .with_context(|| format!("Failed to read {}", config_file.display()))?;
+            toml::from_str(&content)
+                .with_context(|| format!("Failed to parse {}", config_file.display()))?
+        } else if profile_name.is_some() {
+            anyhow::bail!("Profile config not found: {}", config_file.display());
+        } else {
+            // No config.toml — try migrating old files or use defaults
+            Self::migrate_old_files(&config_dir)?
+        };
 
-        // Load language if file exists (empty or missing = auto-detect)
-        let language_file = config.config_dir.join("language");
-        if language_file.exists() {
-            match fs::read_to_string(&language_file) {
-                Ok(language_str) => {
-                    let language = language_str.trim().to_string();
-                    config.language = if language.is_empty() {
-                        None
-                    } else {
-                        Some(language)
-                    };
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to read language config: {}", e);
-                }
-            }
-        }
+        config.config_dir = config_dir;
+        config.state_dir = state_dir;
 
-        // Load API key if file exists (env var takes precedence)
-        if config.api_key.is_none() {
-            let api_key_file = config.config_dir.join("api_key");
-            if api_key_file.exists() {
-                match fs::read_to_string(&api_key_file) {
-                    Ok(key_str) => {
-                        let key = key_str.trim().to_string();
-                        if !key.is_empty() {
-                            config.api_key = Some(key);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to read api_key config: {}", e);
-                    }
-                }
-            }
-        }
-
-        // Load text filters if file exists
-        let filters_file = config.config_dir.join("text_filters.json");
-        if filters_file.exists() {
-            match fs::read_to_string(&filters_file) {
-                Ok(filters_str) => match serde_json::from_str(&filters_str) {
-                    Ok(filters) => {
-                        config.text_filters = filters;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Invalid text_filters.json ({}), using defaults", e);
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to read text_filters config: {}", e);
-                }
-            }
-        }
+        // Apply env var overrides (highest priority)
+        config.apply_env_overrides()?;
 
         // Ensure state directory exists
         fs::create_dir_all(&config.state_dir).context("Failed to create state directory")?;
@@ -210,65 +119,149 @@ impl Config {
         Ok(config)
     }
 
-    /// Save configuration to file
-    ///
-    /// Writes to:
-    /// - `~/.config/ears/server` for whisper server URL
-    /// - `~/.config/ears/device` for audio device name
-    /// - `~/.config/ears/text_filters.json` for text filter settings
-    pub fn save(&self) -> Result<()> {
-        // Ensure config directory exists
-        fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
+    /// Load configuration (default profile)
+    pub fn load() -> Result<Self> {
+        Self::load_profile(None)
+    }
 
-        // Save server URL
-        let server_file = self.config_dir.join("server");
-        fs::write(&server_file, self.whisper_server.as_str())
-            .context("Failed to write server config file")?;
-
-        // Save device
-        let device_file = self.config_dir.join("device");
-        fs::write(&device_file, &self.device).context("Failed to write device config file")?;
-
-        // Save text filters
-        self.save_text_filters()?;
-
+    /// Apply environment variable overrides
+    fn apply_env_overrides(&mut self) -> Result<()> {
+        if let Ok(server) = std::env::var("EARS_SERVER") {
+            self.whisper_server = Url::parse(&server)
+                .with_context(|| format!("Invalid EARS_SERVER URL: {}", server))?;
+        }
+        if let Ok(device) = std::env::var("EARS_DEVICE") {
+            let device = device.trim().to_string();
+            if !device.is_empty() {
+                self.device = device;
+            }
+        }
+        if let Ok(language) = std::env::var("EARS_LANGUAGE") {
+            let language = language.trim();
+            self.language = if language.is_empty() {
+                None
+            } else {
+                Some(language.to_string())
+            };
+        }
+        if let Ok(api_key) = std::env::var("EARS_API_KEY") {
+            let api_key = api_key.trim().to_string();
+            self.api_key = if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key)
+            };
+        }
+        if let Ok(model) = std::env::var("EARS_MODEL") {
+            let model = model.trim().to_string();
+            self.model = if model.is_empty() {
+                None
+            } else {
+                Some(model)
+            };
+        }
         Ok(())
     }
 
-    /// Save text filter settings to file
-    pub fn save_text_filters(&self) -> Result<()> {
-        // Ensure config directory exists
+    /// Migrate from old multi-file config to config.toml
+    fn migrate_old_files(config_dir: &PathBuf) -> Result<Self> {
+        let mut config = Self {
+            whisper_server: default_server(),
+            device: default_device(),
+            language: None,
+            api_key: None,
+            model: None,
+            text_filters: TextFilters::new(),
+            config_dir: PathBuf::new(),
+            state_dir: PathBuf::new(),
+        };
+
+        let mut migrated_any = false;
+
+        if let Ok(s) = fs::read_to_string(config_dir.join("server")) {
+            if let Ok(url) = Url::parse(s.trim()) {
+                config.whisper_server = url;
+                migrated_any = true;
+            }
+        }
+        if let Ok(s) = fs::read_to_string(config_dir.join("device")) {
+            let d = s.trim().to_string();
+            if !d.is_empty() {
+                config.device = d;
+                migrated_any = true;
+            }
+        }
+        if let Ok(s) = fs::read_to_string(config_dir.join("language")) {
+            let l = s.trim().to_string();
+            if !l.is_empty() {
+                config.language = Some(l);
+                migrated_any = true;
+            }
+        }
+        if let Ok(s) = fs::read_to_string(config_dir.join("api_key")) {
+            let k = s.trim().to_string();
+            if !k.is_empty() {
+                config.api_key = Some(k);
+                migrated_any = true;
+            }
+        }
+        if let Ok(s) = fs::read_to_string(config_dir.join("model")) {
+            let m = s.trim().to_string();
+            if !m.is_empty() {
+                config.model = Some(m);
+                migrated_any = true;
+            }
+        }
+        if let Ok(s) = fs::read_to_string(config_dir.join("text_filters.json")) {
+            if let Ok(filters) = serde_json::from_str(&s) {
+                config.text_filters = filters;
+                migrated_any = true;
+            }
+        }
+
+        // Write migrated config as config.toml
+        if migrated_any {
+            let toml_path = config_dir.join("config.toml");
+            if let Ok(toml_str) = toml::to_string_pretty(&config) {
+                fs::write(&toml_path, &toml_str).ok();
+                tracing::info!("Migrated old config files to {}", toml_path.display());
+                eprintln!("Migrated config to {}", toml_path.display());
+            }
+        }
+
+        Ok(config)
+    }
+
+    /// Save configuration to TOML file
+    pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
-
-        let filters_file = self.config_dir.join("text_filters.json");
-        let json = serde_json::to_string_pretty(&self.text_filters)
-            .context("Failed to serialize text filters")?;
-        fs::write(&filters_file, json).context("Failed to write text_filters config file")?;
-
+        let config_file = self.config_dir.join("config.toml");
+        let toml_str =
+            toml::to_string_pretty(self).context("Failed to serialize config")?;
+        fs::write(&config_file, toml_str).context("Failed to write config.toml")?;
         Ok(())
+    }
+
+    /// Save text filter settings (saves the full config.toml)
+    pub fn save_text_filters(&self) -> Result<()> {
+        self.save()
     }
 
     /// Validate the configuration
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<()> {
-        // Validate server URL scheme
         if !matches!(self.whisper_server.scheme(), "http" | "https") {
             anyhow::bail!(
                 "Invalid server URL scheme: {} (must be http or https)",
                 self.whisper_server.scheme()
             );
         }
-
-        // Validate server URL has a host
         if self.whisper_server.host().is_none() {
             anyhow::bail!("Server URL must have a host");
         }
-
-        // Validate device is not empty
         if self.device.is_empty() {
             anyhow::bail!("Device name cannot be empty");
         }
-
         Ok(())
     }
 }
@@ -296,37 +289,27 @@ mod tests {
     fn test_new_config() {
         let config = Config::new().unwrap();
         assert_eq!(config.whisper_server.as_str(), "http://127.0.0.1:8178/");
-        assert!(!config.device.is_empty());
     }
 
     #[test]
-    fn test_save_and_load() {
+    fn test_save_and_load_toml() {
         let (mut config, _temp_dir) = setup_test_config();
 
         config.whisper_server = Url::parse("http://localhost:9000").unwrap();
         config.device = "test-device".to_string();
+        config.model = Some("whisper-large-v3-turbo".to_string());
 
         config.save().unwrap();
 
-        // Load config and verify
-        let loaded = {
-            let mut new_config = Config::new().unwrap();
-            new_config.config_dir = config.config_dir.clone();
-            new_config.state_dir = config.state_dir.clone();
-
-            // Load from files
-            let server_file = new_config.config_dir.join("server");
-            let server_str = fs::read_to_string(&server_file).unwrap().trim().to_string();
-            new_config.whisper_server = Url::parse(&server_str).unwrap();
-
-            let device_file = new_config.config_dir.join("device");
-            new_config.device = fs::read_to_string(&device_file).unwrap().trim().to_string();
-
-            new_config
-        };
+        // Verify TOML file exists and can be parsed
+        let toml_path = config.config_dir.join("config.toml");
+        assert!(toml_path.exists());
+        let content = fs::read_to_string(&toml_path).unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
 
         assert_eq!(loaded.whisper_server.as_str(), "http://localhost:9000/");
         assert_eq!(loaded.device, "test-device");
+        assert_eq!(loaded.model, Some("whisper-large-v3-turbo".to_string()));
     }
 
     #[test]
@@ -350,25 +333,64 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
-    fn test_from_env() {
-        std::env::set_var("EARS_SERVER", "http://test-server:8080");
-        std::env::set_var("EARS_DEVICE", "test-mic");
+    fn test_migration_from_old_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
 
-        let config = Config::from_env().unwrap();
-        assert_eq!(config.whisper_server.as_str(), "http://test-server:8080/");
-        assert_eq!(config.device, "test-mic");
+        // Write old-style config files
+        fs::write(config_dir.join("server"), "http://old-server:8080").unwrap();
+        fs::write(config_dir.join("device"), "old-device").unwrap();
+        fs::write(config_dir.join("language"), "no").unwrap();
 
-        std::env::remove_var("EARS_SERVER");
-        std::env::remove_var("EARS_DEVICE");
+        let config = Config::migrate_old_files(&config_dir).unwrap();
+
+        assert_eq!(config.whisper_server.as_str(), "http://old-server:8080/");
+        assert_eq!(config.device, "old-device");
+        assert_eq!(config.language, Some("no".to_string()));
+
+        // Verify config.toml was created
+        assert!(config_dir.join("config.toml").exists());
+    }
+
+    #[test]
+    fn test_toml_partial_config() {
+        // Only some fields specified — others should use defaults
+        let toml_str = r#"
+server = "http://my-server:9000"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.whisper_server.as_str(), "http://my-server:9000/");
+        assert_eq!(config.device, "default");
+        assert!(config.language.is_none());
+        assert!(config.model.is_none());
     }
 
     #[test]
     #[serial_test::serial]
-    fn test_from_env_invalid_url() {
+    fn test_env_overrides() {
+        std::env::set_var("EARS_SERVER", "http://env-server:8080");
+        std::env::set_var("EARS_DEVICE", "env-mic");
+        std::env::set_var("EARS_MODEL", "env-model");
+
+        let mut config = Config::new().unwrap();
+        config.apply_env_overrides().unwrap();
+
+        assert_eq!(config.whisper_server.as_str(), "http://env-server:8080/");
+        assert_eq!(config.device, "env-mic");
+        assert_eq!(config.model, Some("env-model".to_string()));
+
+        std::env::remove_var("EARS_SERVER");
+        std::env::remove_var("EARS_DEVICE");
+        std::env::remove_var("EARS_MODEL");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_env_invalid_url() {
         std::env::set_var("EARS_SERVER", "not-a-valid-url");
 
-        let result = Config::from_env();
+        let mut config = Config::new().unwrap();
+        let result = config.apply_env_overrides();
         assert!(result.is_err());
 
         std::env::remove_var("EARS_SERVER");

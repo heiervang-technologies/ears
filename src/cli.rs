@@ -5,6 +5,10 @@ use clap::{Parser, Subcommand};
 #[command(name = "ears")]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+    /// Configuration profile (loads config.{profile}.toml instead of config.toml)
+    #[arg(long, short = 'p', global = true)]
+    pub profile: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -46,6 +50,7 @@ mod tests {
     fn test_cli_no_args() {
         let cli = Cli::try_parse_from(["ears"]).unwrap();
         assert!(cli.command.is_none()); // Should launch TUI
+        assert!(cli.profile.is_none());
     }
 
     #[test]
@@ -114,5 +119,18 @@ mod tests {
             }
             _ => panic!("Expected Server command"),
         }
+    }
+
+    #[test]
+    fn test_cli_profile() {
+        let cli = Cli::try_parse_from(["ears", "--profile", "groq", "toggle"]).unwrap();
+        assert_eq!(cli.profile.as_deref(), Some("groq"));
+        assert!(matches!(cli.command, Some(Commands::Toggle)));
+    }
+
+    #[test]
+    fn test_cli_profile_short() {
+        let cli = Cli::try_parse_from(["ears", "-p", "groq"]).unwrap();
+        assert_eq!(cli.profile.as_deref(), Some("groq"));
     }
 }
