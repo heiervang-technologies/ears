@@ -533,12 +533,14 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
                 Style::default().fg(Color::DarkGray),
             )]));
         } else {
-            // Show committed text
+            // Show committed text (split by newlines to handle multi-line transcriptions)
             if !app.committed_text.is_empty() {
-                text.push(Line::from(vec![Span::styled(
-                    app.committed_text.clone(),
-                    Style::default().fg(Color::White),
-                )]));
+                for line in app.committed_text.lines() {
+                    text.push(Line::from(vec![Span::styled(
+                        line.to_string(),
+                        Style::default().fg(Color::White),
+                    )]));
+                }
             }
 
             // Show uncommitted text on same or next line
