@@ -28,6 +28,8 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 backoff = { version = "0.4", features = ["tokio"] }
+regex = "1.11"
+urlencoding = "2.1"
 
 # TUI framework (Iteration 7)
 ratatui = "0.29"

@@ -4,9 +4,11 @@
 //! It handles health checks, transcription requests, and includes retry logic
 //! with exponential backoff.
 
+use crate::provider::{ProviderConfig, RequestFormat};
 use backoff::{future::retry, ExponentialBackoff};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
@@ -35,6 +37,9 @@ pub enum WhisperError {
 
     #[error("JSON parsing error: {0}")]
     JsonError(#[from] serde_json::Error),
+
+    #[error("Provider configuration error: {0}")]
+    ProviderError(String),
 }
 
 /// Response from the whisper.cpp inference endpoint
@@ -55,6 +60,8 @@ pub struct WhisperClient {
     language: Option<String>,
     /// API key for authenticated services (None = no auth)
     api_key: Option<String>,
+    /// Optional provider configuration (None = use default OpenAI-compatible behavior)
+    provider: Option<ProviderConfig>,
     /// Maximum number of retry attempts
     #[allow(dead_code)]
     max_retries: u32,
@@ -86,6 +93,7 @@ impl WhisperClient {
             server_url: server_url.into(),
             language: None,
             api_key: None,
+            provider: None,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
@@ -107,6 +115,15 @@ impl WhisperClient {
     /// When None, no authorization header is sent (default).
     pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
         self.api_key = api_key;
+        self
+    }
+
+    /// Sets a custom provider configuration
+    ///
+    /// When set, uses the provider config to format requests and parse responses.
+    /// When None, uses default OpenAI-compatible behavior (current behavior).
+    pub fn with_provider(mut self, provider: Option<ProviderConfig>) -> Self {
+        self.provider = provider;
         self
     }
 
@@ -132,6 +149,7 @@ impl WhisperClient {
             server_url: server_url.into(),
             language: None,
             api_key: None,
+            provider: None,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -154,28 +172,59 @@ impl WhisperClient {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<(), WhisperError> {
-        let base = self.server_url.trim_end_matches('/');
-        let url = format!("{}/health", base);
-        debug!("Performing health check on {}", url);
+        // If using a provider with a custom health check, use that
+        if let Some(ref provider) = self.provider {
+            if let Some(ref health_config) = provider.health_check {
+                let vars = self.build_variable_map();
+                let url = provider.substitute_vars(&health_config.url, &vars)
+                    .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
 
-        let mut request = self.client.get(&url);
-        if let Some(ref key) = self.api_key {
-            request = request.bearer_auth(key);
-        }
+                debug!("Performing health check on {} (provider: {})", url, provider.name);
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
+                let response = self.client.get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
 
-        if response.status().is_success() {
-            info!("Whisper server is healthy");
-            Ok(())
+                if response.status().is_success() {
+                    info!("{} provider is healthy", provider.name);
+                    Ok(())
+                } else {
+                    Err(WhisperError::ConnectionError(format!(
+                        "Server returned status: {}",
+                        response.status()
+                    )))
+                }
+            } else {
+                // No health check configured, skip
+                debug!("No health check configured for provider: {}", provider.name);
+                Ok(())
+            }
         } else {
-            Err(WhisperError::ConnectionError(format!(
-                "Server returned status: {}",
-                response.status()
-            )))
+            // Default behavior - OpenAI-compatible health check
+            let base = self.server_url.trim_end_matches('/');
+            let url = format!("{}/health", base);
+            debug!("Performing health check on {}", url);
+
+            let mut request = self.client.get(&url);
+            if let Some(ref key) = self.api_key {
+                request = request.bearer_auth(key);
+            }
+
+            let response = request
+                .send()
+                .await
+                .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
+
+            if response.status().is_success() {
+                info!("Whisper server is healthy");
+                Ok(())
+            } else {
+                Err(WhisperError::ConnectionError(format!(
+                    "Server returned status: {}",
+                    response.status()
+                )))
+            }
         }
     }
 
@@ -254,17 +303,38 @@ impl WhisperClient {
         Ok(())
     }
 
+    /// Build variable map for provider template substitution
+    fn build_variable_map(&self) -> HashMap<String, String> {
+        ProviderConfig::build_vars(
+            Some(&self.server_url),
+            self.api_key.as_deref(),
+            self.language.as_deref(),
+            None, // model not currently supported in WhisperClient
+        )
+    }
+
     /// Internal transcription logic without retry
     async fn transcribe_internal(&self, path: &Path) -> Result<String, WhisperError> {
+        // Read audio file
+        let audio_data = tokio::fs::read(path).await?;
+
+        // Use provider-based transcription if configured
+        if let Some(ref provider) = self.provider {
+            self.transcribe_with_provider(&audio_data, provider).await
+        } else {
+            // Default behavior - OpenAI-compatible multipart
+            self.transcribe_default(&audio_data).await
+        }
+    }
+
+    /// Default OpenAI-compatible transcription (current behavior)
+    async fn transcribe_default(&self, audio_data: &[u8]) -> Result<String, WhisperError> {
         let base = self.server_url.trim_end_matches('/');
         let url = format!("{}/v1/audio/transcriptions", base);
         debug!("Sending transcription request to {}", url);
 
-        // Read audio file
-        let audio_data = tokio::fs::read(path).await?;
-
         // Create multipart form
-        let file_part = multipart::Part::bytes(audio_data)
+        let file_part = multipart::Part::bytes(audio_data.to_vec())
             .file_name("recording.wav")
             .mime_str("audio/wav")
             .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
@@ -302,6 +372,156 @@ impl WhisperClient {
         debug!("Received transcription: {}", transcription.text);
 
         Ok(transcription.text)
+    }
+
+    /// Provider-based transcription
+    async fn transcribe_with_provider(
+        &self,
+        audio_data: &[u8],
+        provider: &ProviderConfig,
+    ) -> Result<String, WhisperError> {
+        let vars = self.build_variable_map();
+
+        // Build URL with variable substitution
+        let url = provider.substitute_vars(&provider.url, &vars)
+            .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+
+        // Validate URL security
+        ProviderConfig::validate_url_security(&url)
+            .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+
+        debug!("Sending transcription request to {} (provider: {})", url, provider.name);
+
+        // Build request based on format
+        let request = match provider.request.format {
+            RequestFormat::Multipart => {
+                self.build_multipart_request(&url, audio_data, provider, &vars).await?
+            }
+            RequestFormat::RawBinary => {
+                self.build_raw_binary_request(&url, audio_data, provider, &vars).await?
+            }
+        };
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(WhisperError::TranscriptionError(format!(
+                "Server returned status {}: {}",
+                status,
+                body.chars().take(200).collect::<String>()
+            )));
+        }
+
+        // Parse JSON response
+        let json: serde_json::Value = response.json().await?;
+        debug!("Received response: {:?}", json);
+
+        // Extract text using configured path
+        let text = provider.extract_text_from_response(&json)
+            .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+
+        debug!("Extracted transcription: {}", text);
+        Ok(text)
+    }
+
+    /// Build multipart form request
+    async fn build_multipart_request(
+        &self,
+        url: &str,
+        audio_data: &[u8],
+        provider: &ProviderConfig,
+        vars: &HashMap<String, String>,
+    ) -> Result<reqwest::RequestBuilder, WhisperError> {
+        let config = provider.request.multipart_config.as_ref()
+            .ok_or_else(|| WhisperError::ProviderError("Multipart config missing".to_string()))?;
+
+        // Create file part
+        let file_part = multipart::Part::bytes(audio_data.to_vec())
+            .file_name(config.filename.clone())
+            .mime_str(&config.mime_type)
+            .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+
+        let mut form = multipart::Form::new().part(config.file_field.clone(), file_part);
+
+        // Add extra fields with variable substitution
+        for (key, value_template) in &config.extra_fields {
+            let value = provider.substitute_vars(value_template, vars)
+                .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+            form = form.text(key.clone(), value);
+        }
+
+        // Build request with headers
+        let mut request = self.client.post(url).multipart(form);
+        request = self.add_headers(request, provider, vars)?;
+
+        Ok(request)
+    }
+
+    /// Build raw binary request
+    async fn build_raw_binary_request(
+        &self,
+        url: &str,
+        audio_data: &[u8],
+        provider: &ProviderConfig,
+        vars: &HashMap<String, String>,
+    ) -> Result<reqwest::RequestBuilder, WhisperError> {
+        let config = provider.request.raw_binary_config.as_ref()
+            .ok_or_else(|| WhisperError::ProviderError("RawBinary config missing".to_string()))?;
+
+        // Build URL with query params
+        let mut final_url = url.to_string();
+        if !config.query_params.is_empty() {
+            let mut query_parts = Vec::new();
+            for (key, value_template) in &config.query_params {
+                let value = provider.substitute_vars(value_template, vars)
+                    .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+                query_parts.push(format!("{}={}",
+                    urlencoding::encode(key),
+                    urlencoding::encode(&value)
+                ));
+            }
+            let separator = if final_url.contains('?') { '&' } else { '?' };
+            final_url = format!("{}{}{}", final_url, separator, query_parts.join("&"));
+        }
+
+        // Build request
+        let mut request = self.client
+            .post(&final_url)
+            .header("Content-Type", &config.content_type)
+            .body(audio_data.to_vec());
+
+        request = self.add_headers(request, provider, vars)?;
+
+        Ok(request)
+    }
+
+    /// Add headers to request with variable substitution
+    fn add_headers(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        provider: &ProviderConfig,
+        vars: &HashMap<String, String>,
+    ) -> Result<reqwest::RequestBuilder, WhisperError> {
+        for (key, value_template) in &provider.headers {
+            let value = provider.substitute_vars(value_template, vars)
+                .map_err(|e| WhisperError::ProviderError(e.to_string()))?;
+
+            // Mask API keys in debug output
+            if key.to_lowercase().contains("auth") || key.to_lowercase().contains("key") {
+                debug!("Adding header: {} = ***", key);
+            } else {
+                debug!("Adding header: {} = {}", key, value);
+            }
+
+            request = request.header(key, value);
+        }
+
+        Ok(request)
     }
 
     /// Filters out common silence artifacts from whisper.cpp

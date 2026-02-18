@@ -103,6 +103,8 @@ Configuration is stored as individual files in `~/.config/ears/`:
 | `server` | Whisper server URL | `http://127.0.0.1:8178` |
 | `device` | PipeWire audio device name | `alsa_input.usb-...` |
 | `language` | Language code (empty = auto-detect) | `en` |
+| `api_key` | API key for authenticated providers (optional) | `sk-...` |
+| `provider.json` | Custom ASR provider configuration (optional) | See [Provider Configuration](#custom-asr-providers) |
 | `text_filters.json` | Text filter settings | `{"lowercase":true,...}` |
 
 ### Set server URL
@@ -127,6 +129,51 @@ ears current   # Show current device
 | `EARS_SERVER` | Override whisper server URL |
 | `EARS_DEVICE` | Override audio device |
 | `EARS_LANGUAGE` | Override language code |
+| `EARS_API_KEY` | API key for authenticated providers |
+
+### Custom ASR Providers
+
+`ears` supports custom ASR providers through JSON configuration. This allows you to use services like Deepgram, OpenAI Whisper, Groq, or Azure Speech instead of a local whisper.cpp server.
+
+**Quick setup for Deepgram:**
+
+```bash
+# 1. Create provider config
+cat > ~/.config/ears/provider.json <<'EOF'
+{
+  "name": "Deepgram Nova-2",
+  "url": "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=${LANGUAGE}",
+  "headers": {
+    "Authorization": "Token ${API_KEY}"
+  },
+  "request": {
+    "format": "raw_binary",
+    "raw_binary_config": {
+      "content_type": "audio/wav"
+    }
+  },
+  "response": {
+    "text_path": "results.channels[0].alternatives[0].transcript"
+  }
+}
+EOF
+
+# 2. Add API key
+echo "your-deepgram-api-key" > ~/.config/ears/api_key
+chmod 600 ~/.config/ears/api_key
+
+# 3. Run ears - it automatically uses the provider config
+ears
+```
+
+**Supported providers:**
+- **Deepgram** - Fast, accurate cloud transcription
+- **OpenAI Whisper** - Official OpenAI API
+- **Groq** - Ultra-fast Whisper inference (216x real-time, ~9x cheaper than OpenAI)
+- **Azure Speech Services** - Microsoft cloud STT
+- **Local whisper.cpp** - Default (no config needed)
+
+See [docs/PROVIDER_CONFIGURATION.md](docs/PROVIDER_CONFIGURATION.md) for detailed configuration examples and schema documentation.
 
 ## Usage
 

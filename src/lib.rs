@@ -17,6 +17,9 @@ pub mod state;
 // Iteration 4: Whisper integration
 pub mod whisper;
 
+// Iteration 4.5: Provider configuration
+pub mod provider;
+
 // Iteration 6: Desktop integration
 pub mod desktop;
 
@@ -43,6 +46,9 @@ pub use state::{State, StateError, StateManager};
 
 // Re-exports from Iteration 4
 pub use whisper::{WhisperClient, WhisperError};
+
+// Re-exports from Iteration 4.5
+pub use provider::{ProviderConfig, RequestFormat};
 
 // Re-exports from Iteration 6
 pub use desktop::{AudioFeedback, KeyboardLayout, Notifications, TextInput, Urgency};

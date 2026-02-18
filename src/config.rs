@@ -1,3 +1,4 @@
+use crate::provider::ProviderConfig;
 use crate::text_filters::TextFilters;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -18,6 +19,9 @@ pub struct Config {
     /// API key for authenticated ASR services (None = no auth)
     #[serde(skip)]
     pub api_key: Option<String>,
+    /// Optional provider configuration (None = use default OpenAI-compatible)
+    #[serde(skip)]
+    pub provider: Option<ProviderConfig>,
     /// Text filters for transcription output
     pub text_filters: TextFilters,
     /// Configuration directory
@@ -46,6 +50,7 @@ impl Config {
                 .to_string(),
             language: None, // Auto-detect by default
             api_key: None,
+            provider: None,
             text_filters: TextFilters::new(),
             config_dir,
             state_dir,
@@ -200,6 +205,21 @@ impl Config {
                 },
                 Err(e) => {
                     tracing::warn!("Failed to read text_filters config: {}", e);
+                }
+            }
+        }
+
+        // Load provider configuration if file exists
+        let provider_file = config.config_dir.join("provider.json");
+        if provider_file.exists() {
+            match ProviderConfig::from_file(&provider_file) {
+                Ok(provider) => {
+                    tracing::info!("Loaded provider config: {}", provider.name);
+                    config.provider = Some(provider);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load provider config ({}), using default OpenAI-compatible behavior", e);
+                    eprintln!("Warning: Failed to load provider config: {}", e);
                 }
             }
         }
