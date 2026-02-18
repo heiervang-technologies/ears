@@ -1,73 +1,59 @@
 # ears
 
-A production-grade speech recognition daemon for Linux that integrates whisper.cpp with your desktop workflow.
+A production-grade speech recognition daemon for Linux that integrates with whisper.cpp (or any OpenAI-compatible ASR server) and your desktop workflow.
 
 ![ears TUI demo](demo.gif)
 
 ## Features
 
-- **Push-to-talk interface**: Press once to start recording, press again to transcribe
-- **Interactive TUI mode**: Terminal user interface for real-time status monitoring (--tui flag)
-- **Whisper.cpp integration**: Leverages GPU-accelerated whisper.cpp server
+- **Interactive TUI**: Terminal UI with real-time status, VAD mode, live transcription, and configuration (default mode)
+- **Push-to-talk**: Bind `ears toggle` to a keyboard shortcut for quick dictation
+- **VAD mode**: Voice Activity Detection for hands-free continuous transcription (`ears vad`)
+- **Streaming transcription**: Real-time text output using LocalAgreement policy for stable text
+- **Text filters**: Optional lowercase conversion and punctuation removal
+- **Language detection**: Automatic language selection from keyboard layout (Hyprland + GNOME)
+- **Smart text input**: Uses `wtype` on Hyprland/Wayland, clipboard paste via `ydotool` elsewhere
 - **PipeWire audio**: Native support for modern Linux audio stack
-- **Configurable devices**: Easy microphone selection with fzf
-- **Audio feedback**: Beep sounds for start/stop confirmation
-- **Desktop notifications**: System notifications for errors and status
-- **Direct text input**: Automatically types transcribed text using ydotool
-- **State management**: Proper locking and cleanup of recording sessions with automatic reconciliation
-- **Timeout protection**: Automatically stops runaway recordings after 2 minutes
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Keyboard       │
-│  Shortcut       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌──────────────┐     ┌─────────────┐
-│  ears daemon    │────▶│  PipeWire    │────▶│ Audio       │
-│  (toggle)       │     │  Recording   │     │ Device      │
-└────────┬────────┘     └──────────────┘     └─────────────┘
-         │
-         │ (on second press)
-         ▼
-┌─────────────────┐     ┌──────────────┐     ┌─────────────┐
-│  whisper.cpp    │────▶│  ydotool     │────▶│ Active      │
-│  Server         │     │  (type text) │     │ Window      │
-└─────────────────┘     └──────────────┘     └─────────────┘
-```
+- **Audio feedback**: Embedded beep sounds with custom sound override support
+- **State management**: File-based locking and state with automatic crash recovery
+- **Post-transcribe hooks**: Run custom scripts after each transcription
 
 ## Prerequisites
 
+### Required
+
 - Linux with PipeWire audio system
-- [whisper.cpp server](https://github.com/ggerganov/whisper.cpp) running
-- `ydotool` for text input
-- `wl-clipboard` for clipboard operations (Wayland)
-- `notify-send` for notifications
+- A whisper.cpp or OpenAI-compatible ASR server running
+- Text input tool: `wtype` (Hyprland/Wayland) or `ydotool` (other systems)
+
+### Optional
+
+- `notify-send` for desktop notifications
 - `paplay` for audio feedback
-- `fzf` for device selection
-- `jq` for JSON parsing
-- `curl` for API communication
+- `fzf` for interactive device selection
+- `wl-clipboard` (`wl-copy`/`wl-paste`) for clipboard-based text input on non-Hyprland systems
 
 ### Installing Dependencies
 
 ```bash
-# Ubuntu/Debian
-sudo apt install pipewire ydotool wl-clipboard libnotify-bin pulseaudio-utils fzf jq curl
+# Arch Linux (Hyprland/Omarchy)
+sudo pacman -S pipewire wtype libnotify pulseaudio fzf
 
-# Arch Linux
-sudo pacman -S pipewire ydotool wl-clipboard libnotify pulseaudio fzf jq curl
+# Ubuntu/Debian
+sudo apt install pipewire ydotool wl-clipboard libnotify-bin pulseaudio-utils fzf
+
+# Fedora
+sudo dnf install pipewire ydotool libnotify pulseaudio-utils fzf
 ```
 
-### Setting up whisper.cpp Server
+### Setting up a Whisper Server
 
 1. Clone and build whisper.cpp:
 ```bash
 git clone https://github.com/ggerganov/whisper.cpp
 cd whisper.cpp
-make server
+make server            # CPU only
+make server WHISPER_CUDA=1  # With NVIDIA GPU
 ```
 
 2. Download a model:
@@ -80,36 +66,14 @@ bash ./models/download-ggml-model.sh base.en
 ./server -m models/ggml-base.en.bin -p 8178
 ```
 
-For GPU acceleration with CUDA:
-```bash
-make server WHISPER_CUDA=1
-./server -m models/ggml-base.en.bin -p 8178 --gpu
-```
-
-### Setting up ydotool
-
-ydotool requires running as a background service:
-
-```bash
-# Start the daemon
-ydotoold &
-
-# Or enable as a systemd user service
-systemctl --user enable ydotool
-systemctl --user start ydotool
-```
-
 ## Installation
 
-### From GitHub Releases (Easiest)
+### From GitHub Releases
 
 ```bash
-# Download and install (requires gh CLI with repo access)
 mkdir -p ~/.local/bin
 gh release download latest --repo heiervang-technologies/ears --pattern 'ears' --dir ~/.local/bin --clobber
 chmod +x ~/.local/bin/ears
-
-# Ensure ~/.local/bin is in PATH (add to ~/.bashrc or ~/.zshrc)
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -118,7 +82,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 git clone https://github.com/heiervang-technologies/ears
 cd ears
-cargo build --release --all-features
+cargo build --release
 cargo install --path .
 ```
 
@@ -130,207 +94,143 @@ cd ears
 ./install.sh
 ```
 
-This will:
-- Build the Rust binary with all features
-- Install `ears` to `~/.local/bin/ears`
-- Create config directory at `~/.config/ears`
-- Create sounds directory at `~/.local/share/ears-sounds`
-
-Make sure `~/.local/bin` is in your PATH:
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
 ## Configuration
 
-### Whisper Server
+Configuration is stored as individual files in `~/.config/ears/`:
 
-Set the whisper.cpp server URL:
+| File | Purpose | Example |
+|------|---------|---------|
+| `server` | Whisper server URL | `http://127.0.0.1:8178` |
+| `device` | PipeWire audio device name | `alsa_input.usb-...` |
+| `language` | Language code (empty = auto-detect) | `en` |
+| `text_filters.json` | Text filter settings | `{"lowercase":true,...}` |
+
+### Set server URL
+
 ```bash
-ears --server http://localhost:8178
+ears server http://localhost:8178   # Set
+ears server                          # Show current
 ```
 
-View current server:
+### Select microphone
+
 ```bash
-ears --server
+ears list      # List available devices
+ears select    # Interactive selection (fzf)
+ears current   # Show current device
 ```
 
-Config is stored in: `~/.config/ears/server`
+### Environment variables
 
-### Microphone Device
-
-List available devices:
-```bash
-ears --list
-```
-
-Select device interactively:
-```bash
-ears --select
-```
-
-Show current device:
-```bash
-ears --current
-```
-
-Config is stored in: `~/.config/ears/device`
+| Variable | Purpose |
+|----------|---------|
+| `EARS_SERVER` | Override whisper server URL |
+| `EARS_DEVICE` | Override audio device |
+| `EARS_LANGUAGE` | Override language code |
 
 ## Usage
 
-### Interactive TUI Mode
-
-Launch the interactive Terminal UI:
+### TUI Mode (default)
 
 ```bash
 ears
 ```
 
-The TUI provides:
-- Real-time status monitoring
-- VAD (Voice Activity Detection) mode with live transcription
-- Configuration management
-- Log viewing
-- Multiple panels: Status, Configuration, Logs, Live
+Launches an interactive terminal UI with status monitoring, VAD mode controls, configuration, and logs.
 
-### Push-to-Talk Mode (Keyboard Shortcuts)
+### Push-to-Talk (keyboard shortcut)
 
-Bind a keyboard shortcut to run `ears toggle`. Then:
+Bind `ears toggle` to a keyboard shortcut:
 
-1. **Press shortcut once** - Starts recording (you'll hear a beep)
-2. **Speak your message**
-3. **Press shortcut again** - Stops recording and transcribes
-4. **Text is typed** into your active window
+```ini
+# Hyprland (~/.config/hypr/bindings.conf)
+bind = SUPER SHIFT, V, exec, ears toggle
 
-### Keyboard Shortcut Setup
-
-#### GNOME/Ubuntu
-```bash
-# Settings → Keyboard → Custom Shortcuts
-# Add new shortcut:
-#   Name: ears toggle
-#   Command: /home/yourusername/.local/bin/ears toggle
-#   Shortcut: Your preferred key combo (e.g., Super+Shift+V)
-```
-
-#### KDE Plasma
-```bash
-# System Settings → Shortcuts → Custom Shortcuts
-# Edit → New → Global Shortcut → Command/URL
-#   Trigger: Your preferred key combo
-#   Action: /home/yourusername/.local/bin/ears toggle
-```
-
-#### i3/Sway
-```bash
-# Add to config:
+# i3/Sway
 bindsym $mod+Shift+v exec ears toggle
 ```
 
-### Command-Line Options
+Then: press shortcut → speak → press again → text is typed.
+
+### VAD Mode (headless)
+
+```bash
+ears vad    # Start VAD (or stop if already running)
+```
+
+Continuously listens and auto-transcribes when speech is detected. Toggle on/off by running the command again.
+
+### All Commands
 
 ```
-Usage: ears [COMMAND]
-
-Without commands: Launch interactive TUI
-
-Commands:
-  toggle, t          Toggle recording/transcription (for keyboard shortcuts)
-  select, s          Select audio device with fzf
-  list, l            List available audio devices
-  current, c         Show current device
-  server             Manage whisper server configuration
-  help               Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help         Show this help
-  -V, --version      Print version
+ears              Launch interactive TUI (default)
+ears toggle, t    Toggle recording/transcription
+ears vad, v       Toggle VAD mode
+ears list, l      List audio devices
+ears select, s    Select device interactively
+ears current, c   Show current device
+ears server [URL] Show or set whisper server URL
+ears help         Show help
 ```
 
 ## How It Works
 
-### State Management
+### State Machine
 
-ears uses files in `$XDG_RUNTIME_DIR/ears/` to maintain state:
-- **State file**: `state` - Tracks current state (Idle/Recording/Transcribing)
-- **Lock file**: `lock` - Prevents concurrent instances
-- **PID file**: `recording.pid` - Tracks recording process
-- **Audio file**: `recording.wav` - Temporary recording storage
+States: `Idle` → `Recording` → `Transcribing` → `Idle`, plus `VadActive` for VAD mode.
 
-The state is automatically reconciled on startup to handle crashed processes.
-
-### Audio Recording
-
-- Records at 16kHz, mono, signed 16-bit PCM (whisper.cpp's preferred format)
-- Uses PipeWire's `pw-record` with explicit device targeting
-- 2-minute timeout prevents runaway recordings
-- Cleans up stale processes automatically
+State is persisted to `$XDG_RUNTIME_DIR/ears/state` and reconciled on startup.
 
 ### Transcription Flow
 
-1. Stops the recording process
-2. Waits 300ms for file to be fully written
-3. Validates audio file exists and has content
-4. POSTs audio to whisper.cpp server
-5. Extracts text from JSON response
-6. Filters out whisper.cpp silence artifacts ("Thank you.")
-7. Types text using ydotool
-8. Cleans up temporary files
+1. Stops `pw-record` process (SIGTERM)
+2. Waits 300ms for file flush
+3. Validates WAV file (RIFF header check)
+4. Detects language from keyboard layout (if not configured)
+5. POSTs audio to `/v1/audio/transcriptions` endpoint
+6. Filters silence artifacts ("Thank you.", etc.)
+7. Applies text filters (lowercase, punctuation removal)
+8. Types text via `wtype` or clipboard paste
+9. Runs post-transcribe hook if configured
+10. Cleans up temporary files
 
-### Noise Filtering
+### Post-Transcribe Hook
 
-ears filters common whisper.cpp false positives:
-- Empty transcriptions
-- The phrase "Thank you." (common silence artifact)
+Place an executable script at `~/.config/ears/hooks/post-transcribe`. It receives:
+- `$1` - Path to a copy of the audio file
+- `$2` - The transcribed text
 
 ## Custom Sounds
 
 Place custom WAV files in `~/.local/share/ears-sounds/`:
-- `start.wav` - Played when recording starts
-- `done.wav` - Played when transcription completes
-- `bell.wav` - Played on errors
+- `start.wav` - Recording started
+- `done.wav` - Transcription complete
+- `bell.wav` - Error occurred
 
-Falls back to system sounds if custom sounds aren't found.
+Falls back to embedded sounds if not found.
 
 ## Troubleshooting
 
 ### "Whisper server not running!"
-- Ensure whisper.cpp server is running
-- Check server URL: `ears --server`
-- Test server: `curl http://localhost:8178/health`
+- Check server: `curl http://localhost:8178/health`
+- Check config: `ears server`
 
 ### "No active recording"
 - Recording may have timed out (2 minute limit)
-- Check state: `cat $XDG_RUNTIME_DIR/ears/state` (should show "idle" or "recording")
-- Check PID: `cat $XDG_RUNTIME_DIR/ears/recording.pid`
-- View logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
-
-### "Transcription failed"
-- Check whisper.cpp server logs
-- Verify audio file was created: `ls -lh $XDG_RUNTIME_DIR/ears/recording.wav`
-- Test manually: `curl -X POST http://localhost:8178/inference -F "file=@/path/to/recording.wav" -F "response_format=json"`
+- Check state: `cat $XDG_RUNTIME_DIR/ears/state`
+- Check logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
 
 ### Text isn't being typed
-- Ensure ydotool daemon is running: `pgrep ydotoold`
-- Test ydotool: `ydotool type "test"`
-- Check permissions (ydotool may need special setup)
+- Hyprland: ensure `wtype` is installed
+- Other: ensure `ydotoold` is running (`pgrep ydotoold`)
+- Test manually: `wtype "test"` or `ydotool type "test"`
 
-### Wrong microphone being used
-- List devices: `ears --list`
-- Select correct device: `ears --select`
-- Verify: `ears --current`
-
-### Audio quality issues
-- Check microphone input level in system settings
-- Test with: `pw-record --target YOUR_DEVICE test.wav` (Ctrl+C after a few seconds)
-- Play back: `paplay test.wav`
-
-## Performance Notes
-
-- Recording uses minimal CPU (PipeWire handles it)
-- Transcription speed depends on whisper.cpp server (GPU recommended)
-- State management is instant (lock files are very fast)
-- Audio feedback is non-blocking (plays in background)
+### Wrong microphone
+```bash
+ears list       # See all devices
+ears select     # Pick the right one
+ears current    # Verify
+```
 
 ## Development
 
@@ -338,78 +238,55 @@ Falls back to system sounds if custom sounds aren't found.
 
 ```
 ears/
-├── src/               # Rust source code
-│   ├── main.rs        # Main entry point and core logic
-│   ├── lib.rs         # Library modules
-│   ├── audio.rs       # Audio feedback
-│   ├── cli.rs         # Command-line interface
-│   ├── config.rs      # Configuration management
-│   ├── notifications.rs  # Desktop notifications
-│   ├── process.rs     # Process management
-│   ├── recording.rs   # Audio recording
-│   ├── state.rs       # State management
-│   ├── text_input.rs  # Text input automation
-│   ├── tui.rs         # Terminal UI
-│   └── whisper.rs     # Whisper API client
-├── bin/
-│   └── ears           # Legacy bash script
-├── sounds/            # Optional custom sound files
-├── install.sh         # Installation script
-├── Cargo.toml         # Rust package manifest
-├── README.md          # This file
-├── CLAUDE.md          # Agent instructions
-└── .github/           # GitHub workflows
+├── src/
+│   ├── main.rs              # Entry point, command dispatch
+│   ├── lib.rs               # Library exports
+│   ├── cli.rs               # CLI argument parsing (clap)
+│   ├── config.rs            # Configuration management
+│   ├── state.rs             # Recording state machine
+│   ├── lock.rs              # File locking (single instance)
+│   ├── process.rs           # Child process management
+│   ├── audio.rs             # Audio device discovery
+│   ├── recording.rs         # Recording orchestration
+│   ├── whisper.rs           # Whisper HTTP client
+│   ├── desktop.rs           # Notifications, audio feedback, text input, keyboard detection
+│   ├── text_filters.rs      # Text transformation filters
+│   ├── streaming.rs         # Streaming transcription + LocalAgreement
+│   ├── streaming_engine.rs  # Streaming engine coordinator
+│   ├── vad.rs               # Voice activity detection
+│   ├── continuous_capture.rs# Continuous audio capture
+│   ├── progressive_typing.rs# Progressive text output
+│   └── tui/
+│       ├── mod.rs           # TUI module exports
+│       ├── app.rs           # TUI application state
+│       ├── ui.rs            # TUI rendering
+│       └── event.rs         # TUI event handling
+├── sounds/                  # Embedded sound files
+├── docs/                    # Documentation
+├── tests/                   # Integration tests
+├── install.sh               # Installation script
+├── Cargo.toml               # Rust package manifest
+├── README.md                # This file
+└── CLAUDE.md                # Agent instructions
 ```
 
-### Running from Source
+### Build & Test
 
 ```bash
-cd ears
-cargo run
-# Or with TUI mode:
-cargo run -- --tui
+cargo build                    # Debug build
+cargo build --release          # Release build
+cargo test                     # Run all tests
+cargo clippy                   # Lint
+cargo fmt                      # Format
+RUST_LOG=debug cargo run       # Run with debug logging
 ```
 
-### Debugging
+## Security
 
-Enable debug logging by checking `$XDG_RUNTIME_DIR/ears/debug.log`:
-```bash
-tail -f $XDG_RUNTIME_DIR/ears/debug.log
-```
-
-### Testing
-
-Run the test suite:
-
-```bash
-cargo test
-```
-
-Test individual components:
-
-```bash
-# Run ears with debug output
-RUST_LOG=debug cargo run
-
-# Test server connection
-curl -sf http://localhost:8178/health
-
-# Test recording (5 seconds)
-timeout 5 pw-record --target YOUR_DEVICE test.wav
-
-# Test transcription
-curl -X POST http://localhost:8178/inference \
-  -F "file=@test.wav" \
-  -F "response_format=json" | jq
-```
-
-## Security Considerations
-
-- Audio is sent to whisper.cpp server (defaults to localhost)
-- Configure `--server` to point to your server only
-- Audio files are stored temporarily in `$XDG_RUNTIME_DIR` (cleared on logout)
-- No audio is saved permanently by default
-- Lock file prevents multiple recording sessions
+- Audio is sent to whisper server only (defaults to localhost)
+- Temporary audio files in `$XDG_RUNTIME_DIR` (cleared on logout)
+- No audio is saved permanently
+- No telemetry or cloud services
 
 ## License
 
@@ -417,9 +294,8 @@ MIT
 
 ## Credits
 
-Originally developed as `asr` for personal use, now production-ready as `ears`.
-
 Built with:
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - Fast whisper inference
 - [PipeWire](https://pipewire.org/) - Modern Linux audio
-- [ydotool](https://github.com/ReimuNotMoe/ydotool) - Generic input automation
+- [ratatui](https://github.com/ratatui-org/ratatui) - TUI framework
+- [wtype](https://github.com/atx/wtype) / [ydotool](https://github.com/ReimuNotMoe/ydotool) - Text input automation
