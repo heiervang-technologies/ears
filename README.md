@@ -96,14 +96,40 @@ cd ears
 
 ## Configuration
 
-Configuration is stored as individual files in `~/.config/ears/`:
+Configuration is stored in `~/.config/ears/config.toml`:
 
-| File | Purpose | Example |
-|------|---------|---------|
-| `server` | Whisper server URL | `http://127.0.0.1:8178` |
-| `device` | PipeWire audio device name | `alsa_input.usb-...` |
-| `language` | Language code (empty = auto-detect) | `en` |
-| `text_filters.json` | Text filter settings | `{"lowercase":true,...}` |
+```toml
+server = "http://127.0.0.1:8178"
+device = "alsa_input.usb-..."
+# language = "en"          # Optional (auto-detects from keyboard layout)
+# api_key = "sk-..."       # Optional (for authenticated ASR services)
+# model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
+
+[text_filters]
+lowercase = false
+remove_punctuation = false
+```
+
+### Profiles
+
+Named profiles let you switch between ASR backends. Create `config.{name}.toml` alongside the default:
+
+```bash
+# ~/.config/ears/config.toml        ← default (e.g. local whisper)
+# ~/.config/ears/config.groq.toml   ← Groq cloud API
+
+ears -p groq          # Launch TUI with Groq profile
+ears -p groq toggle   # Push-to-talk with Groq profile
+```
+
+You can also set the profile via environment variable:
+
+```bash
+export EARS_PROFILE=groq
+ears toggle
+```
+
+Priority: `-p` flag > `EARS_PROFILE` env var > default `config.toml`.
 
 ### Set server URL
 
@@ -122,11 +148,16 @@ ears current   # Show current device
 
 ### Environment variables
 
+Environment variables override config file values:
+
 | Variable | Purpose |
 |----------|---------|
 | `EARS_SERVER` | Override whisper server URL |
 | `EARS_DEVICE` | Override audio device |
 | `EARS_LANGUAGE` | Override language code |
+| `EARS_API_KEY` | Override API key |
+| `EARS_MODEL` | Override model name |
+| `EARS_PROFILE` | Set config profile |
 
 ## Usage
 
@@ -163,14 +194,15 @@ Continuously listens and auto-transcribes when speech is detected. Toggle on/off
 ### All Commands
 
 ```
-ears              Launch interactive TUI (default)
-ears toggle, t    Toggle recording/transcription
-ears vad, v       Toggle VAD mode
-ears list, l      List audio devices
-ears select, s    Select device interactively
-ears current, c   Show current device
-ears server [URL] Show or set whisper server URL
-ears help         Show help
+ears                   Launch interactive TUI (default)
+ears -p groq           Launch TUI with named profile
+ears toggle, t         Toggle recording/transcription
+ears vad, v            Toggle VAD mode
+ears list, l           List audio devices
+ears select, s         Select device interactively
+ears current, c        Show current device
+ears server [URL]      Show or set whisper server URL
+ears help              Show help
 ```
 
 ## How It Works
@@ -212,7 +244,7 @@ Falls back to embedded sounds if not found.
 ## Troubleshooting
 
 ### "Whisper server not running!"
-- Check server: `curl http://localhost:8178/health`
+- Check server: `curl http://localhost:8178/health` (local) or `curl -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models` (cloud)
 - Check config: `ears server`
 
 ### "No active recording"
@@ -283,10 +315,11 @@ RUST_LOG=debug cargo run       # Run with debug logging
 
 ## Security
 
-- Audio is sent to whisper server only (defaults to localhost)
+- Audio is sent to the configured whisper server only (defaults to localhost)
+- API keys are stored in `config.toml` (ensure appropriate file permissions)
 - Temporary audio files in `$XDG_RUNTIME_DIR` (cleared on logout)
 - No audio is saved permanently
-- No telemetry or cloud services
+- No telemetry
 
 ## License
 

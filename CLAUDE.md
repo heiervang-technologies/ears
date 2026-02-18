@@ -65,6 +65,7 @@ cargo install --path .         # Install to ~/.cargo/bin/ears
 
 ```bash
 ears                          # Launch TUI (default)
+ears -p groq                  # Launch TUI with named profile
 ears toggle                   # Toggle recording (for keybinds)
 ears list                     # List audio devices
 ears select                   # Interactive device selection
