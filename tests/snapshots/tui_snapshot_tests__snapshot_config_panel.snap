@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshot_tests.rs
-assertion_line: 87
 expression: output
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -11,11 +10,13 @@ expression: output
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Configuration ───────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
+│Profile: default [Shift+P]                                                                        │
+│                                                                                                  │
 │Server URL: http://127.0.0.1:8178/ [e]                                                            │
 │                                                                                                  │
 │Model: [MODEL]                                                                            │
 │                                                                                                  │
-│Audio Device: alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback [d]              │
+│Audio Device: default [d]                                                                         │
 │                                                                                                  │
 │Language: auto (Shift+L to cycle)                                                                 │
 │                                                                                                  │
@@ -24,12 +25,10 @@ expression: output
 │  [ ] Lowercase [f]                                                                               │
 │  [ ] Remove Punctuation [p]                                                                      │
 │                                                                                                  │
-│[e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation                      │
-│                                                                                                  │
-│                                                                                                  │
+│[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation   │
 │                                                                                                  │
 │                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│[e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [q] Quit                                     │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [q] Quit                        │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

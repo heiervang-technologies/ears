@@ -123,7 +123,7 @@ fn test_config_from_env_precedence() {
     std::env::set_var("EARS_SERVER", "http://env-server:9999");
     std::env::set_var("EARS_DEVICE", "env-device");
 
-    let config = Config::from_env().unwrap();
+    let config = Config::load().unwrap();
 
     std::env::remove_var("EARS_SERVER");
     std::env::remove_var("EARS_DEVICE");

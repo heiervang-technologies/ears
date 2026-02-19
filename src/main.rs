@@ -3,7 +3,7 @@ mod recording;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, DeviceAction};
 use ears::audio;
 use ears::Config;
 use ears::{
@@ -51,14 +51,17 @@ async fn main() -> Result<()> {
         Some(Commands::Vad) => {
             handle_vad(&config).await?;
         }
-        Some(Commands::Select) => {
-            select_device(&config)?;
-        }
-        Some(Commands::List) => {
-            list_devices()?;
-        }
-        Some(Commands::Current) => {
-            show_current(&config)?;
+        Some(Commands::Device { action }) => match action {
+            Some(DeviceAction::List) => list_devices()?,
+            Some(DeviceAction::Select) => select_device(&config)?,
+            Some(DeviceAction::Current) | None => show_current(&config)?,
+        },
+        Some(Commands::Profile { name }) => {
+            if let Some(name) = name {
+                set_profile(&name)?;
+            } else {
+                show_profile()?;
+            }
         }
         Some(Commands::Server { url }) => {
             if let Some(url_str) = url {
@@ -67,6 +70,10 @@ async fn main() -> Result<()> {
                 show_server(&config)?;
             }
         }
+        // Hidden backwards-compat aliases
+        Some(Commands::Select) => select_device(&config)?,
+        Some(Commands::List) => list_devices()?,
+        Some(Commands::Current) => show_current(&config)?,
         None => {
             // Default: Launch TUI
             return ears::tui::run(cli.profile.as_deref()).await;
@@ -175,6 +182,39 @@ fn set_server(config: &Config, url_str: &str) -> Result<()> {
 
     println!("Server set to: {}", config.whisper_server);
 
+    Ok(())
+}
+
+fn show_profile() -> Result<()> {
+    let current = Config::get_default_profile()?;
+    match current {
+        Some(ref name) => println!("Default profile: {}", name),
+        None => println!("No default profile set (using config.toml)"),
+    }
+
+    let profiles = Config::list_profiles()?;
+    if profiles.is_empty() {
+        println!("\nNo named profiles found.");
+        println!("Create one at ~/.config/ears/config.<name>.toml");
+    } else {
+        println!("\nAvailable profiles:");
+        for p in &profiles {
+            let marker = if current.as_deref() == Some(p) { " *" } else { "" };
+            println!("  {}{}", p, marker);
+        }
+    }
+
+    Ok(())
+}
+
+fn set_profile(name: &str) -> Result<()> {
+    if name == "default" || name.is_empty() {
+        Config::set_default_profile("")?;
+        println!("Profile cleared (using config.toml)");
+    } else {
+        Config::set_default_profile(name)?;
+        println!("Default profile set to: {}", name);
+    }
     Ok(())
 }
 

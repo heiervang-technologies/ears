@@ -134,6 +134,8 @@ fn render_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
 
 /// Render the status panel
 fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
+    let profile_display = app.profile.as_deref().unwrap_or("default");
+
     let text = vec![
         Line::from(""),
         Line::from(vec![
@@ -146,6 +148,10 @@ fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 "Idle"
             }),
+        ]),
+        Line::from(vec![
+            Span::styled("Profile: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(profile_display, Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
             Span::styled("Model: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -204,7 +210,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ])
     };
 
+    let profile_display = app.profile.as_deref().unwrap_or("default");
+
     let mut text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Profile: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(profile_display, Style::default().fg(Color::Cyan)),
+            Span::styled(" [Shift+P]", Style::default().fg(Color::DarkGray)),
+        ]),
         Line::from(""),
         server_line,
         Line::from(""),
@@ -340,7 +354,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
+            "[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -483,6 +497,8 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     } else if app.current_panel == Panel::Configuration {
         // Configuration panel shortcuts
         Line::from(vec![
+            Span::styled("[P] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Profile  "),
             Span::styled("[e] ", Style::default().fg(Color::Cyan)),
             Span::raw("URL  "),
             Span::styled("[d] ", Style::default().fg(Color::Cyan)),

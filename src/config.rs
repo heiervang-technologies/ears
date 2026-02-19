@@ -89,9 +89,13 @@ impl Config {
         let (config_dir, state_dir) = Self::computed_dirs()?;
         fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-        // Resolve profile: CLI arg > env var
+        // Resolve profile: CLI arg > env var > persistent file
         let env_profile = std::env::var("EARS_PROFILE").ok().filter(|s| !s.trim().is_empty());
-        let profile_name = profile.map(|s| s.to_string()).or(env_profile);
+        let file_profile = fs::read_to_string(config_dir.join("profile"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let profile_name = profile.map(|s| s.to_string()).or(env_profile).or(file_profile);
 
         let config_file = Self::config_file_path(&config_dir, profile_name.as_deref());
 
@@ -230,6 +234,60 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// List available profile names by scanning config.*.toml files
+    pub fn list_profiles() -> Result<Vec<String>> {
+        let (config_dir, _) = Self::computed_dirs()?;
+        let mut profiles = Vec::new();
+        if let Ok(entries) = fs::read_dir(&config_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Some(profile) = name.strip_prefix("config.").and_then(|s| s.strip_suffix(".toml")) {
+                    profiles.push(profile.to_string());
+                }
+            }
+        }
+        profiles.sort();
+        Ok(profiles)
+    }
+
+    /// Get the currently persisted default profile name
+    pub fn get_default_profile() -> Result<Option<String>> {
+        let (config_dir, _) = Self::computed_dirs()?;
+        let profile_file = config_dir.join("profile");
+        Ok(fs::read_to_string(profile_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()))
+    }
+
+    /// Set the default profile (persists to ~/.config/ears/profile)
+    pub fn set_default_profile(name: &str) -> Result<()> {
+        let (config_dir, _) = Self::computed_dirs()?;
+        fs::create_dir_all(&config_dir)?;
+
+        if name == "default" || name.is_empty() {
+            // Clear the profile
+            let profile_file = config_dir.join("profile");
+            if profile_file.exists() {
+                fs::remove_file(&profile_file)?;
+            }
+            return Ok(());
+        }
+
+        // Validate that the profile config exists
+        let config_file = config_dir.join(format!("config.{}.toml", name));
+        if !config_file.exists() {
+            anyhow::bail!(
+                "Profile '{}' not found (expected {})",
+                name,
+                config_file.display()
+            );
+        }
+
+        fs::write(config_dir.join("profile"), name)?;
+        Ok(())
     }
 
     /// Save configuration to TOML file

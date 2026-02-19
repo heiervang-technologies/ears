@@ -147,7 +147,9 @@ pub struct App {
     /// Error message if device list fetch failed
     pub device_picker_error: Option<String>,
     /// Active config profile name (None = default)
-    profile: Option<String>,
+    pub profile: Option<String>,
+    /// Available profile names (cached)
+    pub available_profiles: Vec<String>,
 }
 
 impl App {
@@ -202,6 +204,7 @@ impl App {
             device_picker_selected: 0,
             device_picker_error: None,
             profile: profile.map(|s| s.to_string()),
+            available_profiles: Config::list_profiles().unwrap_or_default(),
         }
     }
 
@@ -337,6 +340,13 @@ impl App {
             // 'L' to cycle language (auto -> en -> no -> auto)
             (KeyCode::Char('L'), KeyModifiers::SHIFT) => {
                 self.cycle_language();
+            }
+
+            // 'P' to cycle profile
+            (KeyCode::Char('P'), KeyModifiers::SHIFT) => {
+                if self.current_panel == Panel::Configuration {
+                    self.cycle_profile();
+                }
             }
 
             // 'e' to edit server URL (in Configuration panel)
@@ -613,6 +623,46 @@ impl App {
         if was_viewing_last_log {
             self.selected_log = self.logs.len() - 1;
         }
+    }
+
+    /// Cycle through available profiles: default -> profile1 -> profile2 -> ... -> default
+    fn cycle_profile(&mut self) {
+        if self.available_profiles.is_empty() {
+            self.add_log("No named profiles found");
+            return;
+        }
+
+        let current = self.profile.as_deref();
+        let next = match current {
+            None => Some(self.available_profiles[0].as_str()),
+            Some(name) => {
+                let idx = self.available_profiles.iter().position(|p| p == name);
+                match idx {
+                    Some(i) if i + 1 < self.available_profiles.len() => {
+                        Some(self.available_profiles[i + 1].as_str())
+                    }
+                    _ => None, // wrap to default
+                }
+            }
+        };
+
+        let profile_name = next.map(|s| s.to_string());
+        let display = profile_name.as_deref().unwrap_or("default").to_string();
+
+        // Persist the choice
+        Config::set_default_profile(profile_name.as_deref().unwrap_or("")).ok();
+
+        // Reload config from the new profile
+        let config = Config::load_profile(profile_name.as_deref()).unwrap_or_default();
+        self.server = config.whisper_server.to_string();
+        self.device = config.device.clone();
+        self.language = config.language.clone();
+        self.api_key = config.api_key.clone();
+        self.model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
+        self.text_filters = config.text_filters.clone();
+        self.profile = profile_name;
+
+        self.add_log(&format!("Profile switched to: {}", display));
     }
 
     /// Toggle VAD mode
