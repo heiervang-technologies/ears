@@ -1,5 +1,6 @@
-# Qwen3-ASR-0.6B via vLLM
+# Qwen3-ASR via vLLM
 # Copy to ~/.config/ears/config.qwen3-asr.toml
 # Usage: ears -p qwen3-asr
-server = "http://192.168.8.170:8100"
-model = "Qwen/Qwen3-ASR-0.6B"
+server = "http://192.168.8.170:8102"
+model = "Qwen/Qwen3-ASR-1.7B"
+language = "en"
