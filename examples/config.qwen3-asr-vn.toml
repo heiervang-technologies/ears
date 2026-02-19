@@ -1,0 +1,7 @@
+# Qwen3-ASR-1.7B via vLLM on Vast AI (Vietnam, RTX 3060)
+# Requires SSH tunnel: ssh -f -N -L 38200:localhost:8000 -p 50316 root@220.82.46.3
+# Copy to ~/.config/ears/config.qwen3-asr-vn.toml
+# Usage: ears -p qwen3-asr-vn
+server = "http://localhost:38200"
+model = "Qwen/Qwen3-ASR-1.7B"
+language = "en"

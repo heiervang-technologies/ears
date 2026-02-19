@@ -1,6 +1,6 @@
-# Qwen3-ASR via vLLM
+# Qwen3-ASR-1.7B via vLLM on K8s (Rogue RTX 3090)
 # Copy to ~/.config/ears/config.qwen3-asr.toml
 # Usage: ears -p qwen3-asr
-server = "http://192.168.8.170:8102"
+server = "http://192.168.8.123:30189"
 model = "Qwen/Qwen3-ASR-1.7B"
 language = "en"
