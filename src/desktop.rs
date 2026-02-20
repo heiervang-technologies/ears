@@ -3,8 +3,42 @@
 //! Handles notifications, audio feedback, text input automation, and keyboard layout detection.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Text input method for typing transcribed text
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TypingMode {
+    /// Auto-detect: wtype on Omarchy/Hyprland, clipboard paste otherwise
+    #[default]
+    Auto,
+    /// Force wtype (character-by-character with inter-key delay)
+    Wtype,
+    /// Force clipboard paste (wl-copy + Ctrl+V, instant)
+    Paste,
+}
+
+impl TypingMode {
+    /// Display name for TUI rendering
+    pub fn display_name(self) -> &'static str {
+        match self {
+            TypingMode::Auto => "Auto",
+            TypingMode::Wtype => "Wtype",
+            TypingMode::Paste => "Paste",
+        }
+    }
+
+    /// Cycle to the next mode
+    pub fn next(self) -> Self {
+        match self {
+            TypingMode::Auto => TypingMode::Wtype,
+            TypingMode::Wtype => TypingMode::Paste,
+            TypingMode::Paste => TypingMode::Auto,
+        }
+    }
+}
 
 /// Keyboard layout detection for Hyprland and GNOME
 pub struct KeyboardLayout;
@@ -349,25 +383,36 @@ impl TextInput {
         false
     }
 
-    /// Type text using ydotool with optional delay
+    /// Type text using the specified mode
     ///
-    /// The `delay_ms` parameter controls the delay between keystrokes.
-    /// Default is 12ms if not specified (ydotool's default).
-    pub fn type_text(text: &str) -> Result<()> {
-        if Self::is_omarchy() {
-            // On Omarchy/Hyprland: use wtype for direct typing
-            Self::type_with_wtype(text)
-        } else {
-            // On other systems: use clipboard + paste for reliable Unicode support
-            Self::paste_text(text)
+    /// - `Auto`: wtype on Omarchy/Hyprland, clipboard paste otherwise
+    /// - `Wtype`: force wtype (character-by-character with inter-key delay)
+    /// - `Paste`: force clipboard paste (wl-copy + Ctrl+V)
+    pub fn type_text(text: &str, mode: TypingMode) -> Result<()> {
+        match mode {
+            TypingMode::Auto => {
+                if Self::is_omarchy() {
+                    Self::type_with_wtype(text)
+                } else {
+                    Self::paste_text(text)
+                }
+            }
+            TypingMode::Wtype => Self::type_with_wtype(text),
+            TypingMode::Paste => Self::paste_text(text),
         }
     }
 
     /// Type text directly using wtype (Wayland native, for Hyprland/Omarchy)
+    ///
+    /// Uses a small inter-key delay (`-d 4`) to prevent web browsers from
+    /// dropping characters — especially spaces — when key events arrive too
+    /// fast for the JavaScript event loop.
     fn type_with_wtype(text: &str) -> Result<()> {
         use std::process::Stdio;
 
         let status = Command::new("wtype")
+            .arg("-d")
+            .arg("4")
             .arg("--")
             .arg(text)
             .stdin(Stdio::null())

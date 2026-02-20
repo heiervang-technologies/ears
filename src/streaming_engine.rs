@@ -355,13 +355,19 @@ impl StreamingEngine {
         self.progressive_typing.set_config(config);
     }
 
-    /// Update just the typing-related settings (progressive typing + auto-correction)
-    pub fn set_typing_enabled(&mut self, progressive: bool, auto_correction: bool) {
+    /// Update just the typing-related settings (progressive typing + auto-correction + mode)
+    pub fn set_typing_enabled(
+        &mut self,
+        progressive: bool,
+        auto_correction: bool,
+        typing_mode: crate::desktop::TypingMode,
+    ) {
         self.config.progressive_typing = progressive;
         self.config.auto_correction = auto_correction;
         self.progressive_typing.set_config(ProgressiveTypingConfig {
             enabled: progressive,
             auto_correction,
+            typing_mode,
         });
     }
 

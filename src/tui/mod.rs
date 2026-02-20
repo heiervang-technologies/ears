@@ -75,6 +75,7 @@ impl Drop for StateCleanupGuard {
 pub struct TypingSettings {
     pub progressive_typing: bool,
     pub auto_correction: bool,
+    pub typing_mode: crate::desktop::TypingMode,
 }
 
 impl Default for TypingSettings {
@@ -82,6 +83,7 @@ impl Default for TypingSettings {
         Self {
             progressive_typing: true,
             auto_correction: true,
+            typing_mode: crate::desktop::TypingMode::Auto,
         }
     }
 }
@@ -163,8 +165,8 @@ pub async fn start_vad_pipeline(
                 }
                 _ = settings_rx.changed() => {
                     let s = *settings_rx.borrow_and_update();
-                    engine.set_typing_enabled(s.progressive_typing, s.auto_correction);
-                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}", s.progressive_typing, s.auto_correction);
+                    engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode);
+                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}", s.progressive_typing, s.auto_correction, s.typing_mode);
                 }
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
@@ -212,6 +214,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             // Snapshot settings before handling events to detect changes
             let prev_progressive = app.progressive_typing;
             let prev_auto_correction = app.auto_correction;
+            let prev_typing_mode = app.typing_mode;
 
             match event_handler.next()? {
                 Event::Key(key) => {
@@ -236,11 +239,13 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             // Push typing settings to engine if they changed
             if app.progressive_typing != prev_progressive
                 || app.auto_correction != prev_auto_correction
+                || app.typing_mode != prev_typing_mode
             {
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
                         progressive_typing: app.progressive_typing,
                         auto_correction: app.auto_correction,
+                        typing_mode: app.typing_mode,
                     });
                 }
             }
@@ -259,6 +264,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         let _ = settings.send(TypingSettings {
                             progressive_typing: app.progressive_typing,
                             auto_correction: app.auto_correction,
+                            typing_mode: app.typing_mode,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

@@ -1,3 +1,4 @@
+use crate::desktop::TypingMode;
 use crate::text_filters::TextFilters;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -35,6 +36,9 @@ pub struct Config {
     /// Text filters for transcription output
     #[serde(default)]
     pub text_filters: TextFilters,
+    /// Text input method (auto/wtype/paste)
+    #[serde(default)]
+    pub typing_mode: TypingMode,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -73,6 +77,7 @@ impl Config {
             api_key: None,
             model: None,
             text_filters: TextFilters::new(),
+            typing_mode: TypingMode::default(),
             config_dir,
             state_dir,
         })
@@ -175,6 +180,7 @@ impl Config {
             api_key: None,
             model: None,
             text_filters: TextFilters::new(),
+            typing_mode: TypingMode::default(),
             config_dir: PathBuf::new(),
             state_dir: PathBuf::new(),
         };

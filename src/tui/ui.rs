@@ -312,6 +312,39 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         Span::raw(" Remove Punctuation [p]"),
     ]));
 
+    // Typing Settings section
+    text.push(Line::from(""));
+    text.push(Line::from(vec![Span::styled(
+        "Typing Settings:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    let progressive_typing_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.progressive_typing { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Progressive Typing [t]"),
+    ]));
+    let auto_correction_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.auto_correction { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Auto-correction [a]"),
+    ]));
+    let typing_mode_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            app.typing_mode.display_name(),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(" [m]", Style::default().fg(Color::DarkGray)),
+    ]));
     text.push(Line::from(""));
 
     // Show appropriate help text
@@ -333,7 +366,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [t] Typing  [a] Auto-corr  [m] Mode",
             Style::default().fg(theme.dim),
         )));
     }
@@ -370,6 +403,34 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
         ClickAction::TogglePunctuationFilter,
+    );
+
+    // Progressive typing toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + progressive_typing_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleProgressiveTyping,
+    );
+
+    // Auto-correction toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + auto_correction_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleAutoCorrection,
+    );
+
+    // Typing mode cycle
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + typing_mode_line as u16, inner_width, 1),
+        ClickAction::CycleTypingMode,
     );
 
     // Device picker clickable regions
