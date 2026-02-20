@@ -99,8 +99,12 @@ pub async fn start_vad_pipeline(
 )> {
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
-    let whisper_client =
-        Arc::new(WhisperClient::new(config.whisper_server.to_string()).with_language(language).with_api_key(config.api_key.clone()).with_model(config.model.clone()));
+    let whisper_client = Arc::new(
+        WhisperClient::new(config.whisper_server.to_string())
+            .with_language(language)
+            .with_api_key(config.api_key.clone())
+            .with_model(config.model.clone()),
+    );
 
     // Health check
     whisper_client

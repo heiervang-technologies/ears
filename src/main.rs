@@ -19,11 +19,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load config with profile
-    let config = Config::load_profile(cli.profile.as_deref())
-        .unwrap_or_else(|e| {
-            eprintln!("Warning: Failed to load config: {}", e);
-            Config::new().expect("Failed to create config")
-        });
+    let config = Config::load_profile(cli.profile.as_deref()).unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load config: {}", e);
+        Config::new().expect("Failed to create config")
+    });
 
     // Set up debug logging to file
     let log_file_path = config.state_dir.join("debug.log");
@@ -113,7 +112,10 @@ fn select_device(config: &Config) -> Result<()> {
 
     println!("Selected: {}", device.description);
     println!("Device ID: {}", device_name);
-    println!("Saved to: {}", config.config_dir.join("config.toml").display());
+    println!(
+        "Saved to: {}",
+        config.config_dir.join("config.toml").display()
+    );
 
     Ok(())
 }
@@ -157,7 +159,10 @@ fn list_devices() -> Result<()> {
 
 fn show_current(config: &Config) -> Result<()> {
     println!("Current device: {}", config.device);
-    println!("Config: {}", config.config_dir.join("config.toml").display());
+    println!(
+        "Config: {}",
+        config.config_dir.join("config.toml").display()
+    );
 
     Ok(())
 }
@@ -199,7 +204,11 @@ fn show_profile() -> Result<()> {
     } else {
         println!("\nAvailable profiles:");
         for p in &profiles {
-            let marker = if current.as_deref() == Some(p) { " *" } else { "" };
+            let marker = if current.as_deref() == Some(p) {
+                " *"
+            } else {
+                ""
+            };
             println!("  {}{}", p, marker);
         }
     }
@@ -220,7 +229,10 @@ fn set_profile(name: &str) -> Result<()> {
 
 fn show_server(config: &Config) -> Result<()> {
     println!("Current server: {}", config.whisper_server);
-    println!("Config: {}", config.config_dir.join("config.toml").display());
+    println!(
+        "Config: {}",
+        config.config_dir.join("config.toml").display()
+    );
 
     Ok(())
 }

@@ -93,11 +93,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
 /// Render the tab bar
 fn render_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     let titles = vec!["▸ Configuration", "▸ Logs", "▸ Live"];
-    let panels = [
-        Panel::Configuration,
-        Panel::Logs,
-        Panel::LiveTranscription,
-    ];
+    let panels = [Panel::Configuration, Panel::Logs, Panel::LiveTranscription];
     let index = match app.current_panel {
         Panel::Configuration => 0,
         Panel::Logs => 1,
@@ -156,7 +152,10 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
             Span::raw(&app.server),
         ];
         if app.env_server {
-            spans.push(Span::styled(" [env]", Style::default().fg(theme.env_indicator)));
+            spans.push(Span::styled(
+                " [env]",
+                Style::default().fg(theme.env_indicator),
+            ));
         } else {
             spans.push(Span::styled(" [e]", Style::default().fg(theme.dim)));
         }
@@ -181,7 +180,10 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
                 Span::raw(&app.model),
             ];
             if app.env_model {
-                spans.push(Span::styled(" [env]", Style::default().fg(theme.env_indicator)));
+                spans.push(Span::styled(
+                    " [env]",
+                    Style::default().fg(theme.env_indicator),
+                ));
             }
             spans
         }),
@@ -232,10 +234,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
                     Span::styled(device.description.as_str(), style),
                 ];
                 if is_current {
-                    spans.push(Span::styled(
-                        " (current)",
-                        Style::default().fg(theme.dim),
-                    ));
+                    spans.push(Span::styled(" (current)", Style::default().fg(theme.dim)));
                 }
                 text.push(Line::from(spans));
             }
@@ -249,7 +248,10 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
             Span::raw(&app.device),
         ];
         if app.env_device {
-            spans.push(Span::styled(" [env]", Style::default().fg(theme.env_indicator)));
+            spans.push(Span::styled(
+                " [env]",
+                Style::default().fg(theme.env_indicator),
+            ));
         } else {
             spans.push(Span::styled(" [d]", Style::default().fg(theme.dim)));
         }
@@ -263,9 +265,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
             Span::raw(app.language.as_deref().unwrap_or("auto")),
         ];
         if app.env_language {
-            spans.push(Span::styled(" [env]", Style::default().fg(theme.env_indicator)));
+            spans.push(Span::styled(
+                " [env]",
+                Style::default().fg(theme.env_indicator),
+            ));
         } else {
-            spans.push(Span::styled(" (Shift+L to cycle)", Style::default().fg(theme.dim)));
+            spans.push(Span::styled(
+                " (Shift+L to cycle)",
+                Style::default().fg(theme.dim),
+            ));
         }
         spans
     }));
@@ -435,7 +443,12 @@ fn render_logs_panel(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Highlight search matches in a log line
-fn highlight_search<'a>(text: &'a str, query: &str, is_selected: bool, theme: &Theme) -> Vec<Span<'a>> {
+fn highlight_search<'a>(
+    text: &'a str,
+    query: &str,
+    is_selected: bool,
+    theme: &Theme,
+) -> Vec<Span<'a>> {
     let base_style = if is_selected {
         Style::default()
             .fg(theme.accent)
@@ -443,7 +456,9 @@ fn highlight_search<'a>(text: &'a str, query: &str, is_selected: bool, theme: &T
     } else {
         Style::default()
     };
-    let match_style = Style::default().bg(theme.search_match_bg).fg(theme.search_match_fg);
+    let match_style = Style::default()
+        .bg(theme.search_match_bg)
+        .fg(theme.search_match_fg);
 
     let lower = text.to_lowercase();
     let mut spans = Vec::new();
@@ -453,10 +468,7 @@ fn highlight_search<'a>(text: &'a str, query: &str, is_selected: bool, theme: &T
         if start > last {
             spans.push(Span::styled(&text[last..start], base_style));
         }
-        spans.push(Span::styled(
-            &text[start..start + query.len()],
-            match_style,
-        ));
+        spans.push(Span::styled(&text[start..start + query.len()], match_style));
         last = start + query.len();
     }
 
@@ -699,27 +711,18 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
         Span::raw(format!("{}ms", app.avg_latency_ms)),
     ]));
     text.push(Line::from(vec![
-        Span::styled(
-            "  Segments processed: ",
-            Style::default().fg(theme.dim),
-        ),
+        Span::styled("  Segments processed: ", Style::default().fg(theme.dim)),
         Span::raw(format!("{}", app.segments_processed)),
     ]));
     text.push(Line::from(vec![
-        Span::styled(
-            "  Transcriptions: ",
-            Style::default().fg(theme.dim),
-        ),
+        Span::styled("  Transcriptions: ", Style::default().fg(theme.dim)),
         Span::raw(format!(
             "{} total, {} ok, {} failed",
             app.total_transcriptions, app.successful_transcriptions, app.failed_transcriptions
         )),
     ]));
     text.push(Line::from(vec![
-        Span::styled(
-            "  Words transcribed: ",
-            Style::default().fg(theme.dim),
-        ),
+        Span::styled("  Words transcribed: ", Style::default().fg(theme.dim)),
         Span::raw(format!("{}", app.total_words)),
     ]));
 
@@ -830,7 +833,12 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
 
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
     let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
-    let overlay_area = Rect::new(x, y, overlay_width.min(area.width), overlay_height.min(area.height));
+    let overlay_area = Rect::new(
+        x,
+        y,
+        overlay_width.min(area.width),
+        overlay_height.min(area.height),
+    );
 
     frame.render_widget(Clear, overlay_area);
 

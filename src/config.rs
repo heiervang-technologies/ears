@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 fn default_server() -> Url {
@@ -51,14 +51,12 @@ impl Config {
         let config_dir = project_dirs.config_dir().to_path_buf();
         let state_dir = std::env::var("XDG_RUNTIME_DIR")
             .map(|p| PathBuf::from(p).join("ears"))
-            .unwrap_or_else(|_| {
-                PathBuf::from("/tmp").join(format!("ears-{}", std::process::id()))
-            });
+            .unwrap_or_else(|_| PathBuf::from("/tmp").join(format!("ears-{}", std::process::id())));
         Ok((config_dir, state_dir))
     }
 
     /// Get config file path for a given profile
-    fn config_file_path(config_dir: &PathBuf, profile: Option<&str>) -> PathBuf {
+    fn config_file_path(config_dir: &Path, profile: Option<&str>) -> PathBuf {
         match profile {
             Some(name) => config_dir.join(format!("config.{}.toml", name)),
             None => config_dir.join("config.toml"),
@@ -90,12 +88,17 @@ impl Config {
         fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
         // Resolve profile: CLI arg > env var > persistent file
-        let env_profile = std::env::var("EARS_PROFILE").ok().filter(|s| !s.trim().is_empty());
+        let env_profile = std::env::var("EARS_PROFILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
         let file_profile = fs::read_to_string(config_dir.join("profile"))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let profile_name = profile.map(|s| s.to_string()).or(env_profile).or(file_profile);
+        let profile_name = profile
+            .map(|s| s.to_string())
+            .or(env_profile)
+            .or(file_profile);
 
         let config_file = Self::config_file_path(&config_dir, profile_name.as_deref());
 
@@ -158,17 +161,13 @@ impl Config {
         }
         if let Ok(model) = std::env::var("EARS_MODEL") {
             let model = model.trim().to_string();
-            self.model = if model.is_empty() {
-                None
-            } else {
-                Some(model)
-            };
+            self.model = if model.is_empty() { None } else { Some(model) };
         }
         Ok(())
     }
 
     /// Migrate from old multi-file config to config.toml
-    fn migrate_old_files(config_dir: &PathBuf) -> Result<Self> {
+    fn migrate_old_files(config_dir: &Path) -> Result<Self> {
         let mut config = Self {
             whisper_server: default_server(),
             device: default_device(),
@@ -243,7 +242,10 @@ impl Config {
         if let Ok(entries) = fs::read_dir(&config_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if let Some(profile) = name.strip_prefix("config.").and_then(|s| s.strip_suffix(".toml")) {
+                if let Some(profile) = name
+                    .strip_prefix("config.")
+                    .and_then(|s| s.strip_suffix(".toml"))
+                {
                     profiles.push(profile.to_string());
                 }
             }
@@ -294,8 +296,7 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
         let config_file = self.config_dir.join("config.toml");
-        let toml_str =
-            toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let toml_str = toml::to_string_pretty(self).context("Failed to serialize config")?;
         fs::write(&config_file, toml_str).context("Failed to write config.toml")?;
         Ok(())
     }

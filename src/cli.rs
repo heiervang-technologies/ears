@@ -98,7 +98,9 @@ mod tests {
         let cli = Cli::try_parse_from(["ears", "device", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Commands::Device { action: Some(DeviceAction::List) })
+            Some(Commands::Device {
+                action: Some(DeviceAction::List)
+            })
         ));
     }
 
@@ -107,7 +109,9 @@ mod tests {
         let cli = Cli::try_parse_from(["ears", "device", "select"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Commands::Device { action: Some(DeviceAction::Select) })
+            Some(Commands::Device {
+                action: Some(DeviceAction::Select)
+            })
         ));
     }
 
@@ -116,7 +120,9 @@ mod tests {
         let cli = Cli::try_parse_from(["ears", "device", "current"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Commands::Device { action: Some(DeviceAction::Current) })
+            Some(Commands::Device {
+                action: Some(DeviceAction::Current)
+            })
         ));
     }
 

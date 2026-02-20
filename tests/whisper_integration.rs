@@ -98,6 +98,13 @@ async fn test_health_check_server_error() {
         .mount(&mock_server)
         .await;
 
+    // Also mock the fallback endpoint so it returns 500 too
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
     // Create client and test
     let client = WhisperClient::new(mock_server.uri());
     let result = client.health_check().await;

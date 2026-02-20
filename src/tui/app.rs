@@ -1,9 +1,9 @@
 //! TUI application state and logic
 
+use super::theme::{Theme, ThemeName};
 use crate::config::Config;
 use crate::streaming_engine::StreamingEvent;
 use crate::text_filters::TextFilters;
-use super::theme::{Theme, ThemeName};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -71,13 +71,18 @@ impl LogFilter {
             LogFilter::All => true,
             LogFilter::Errors => {
                 let lower = msg.to_lowercase();
-                lower.contains("error") || lower.contains("failed") || lower.contains("cannot")
+                lower.contains("error")
+                    || lower.contains("failed")
+                    || lower.contains("cannot")
                     || lower.contains("invalid")
             }
             LogFilter::Warnings => {
                 let lower = msg.to_lowercase();
-                lower.contains("error") || lower.contains("failed") || lower.contains("cannot")
-                    || lower.contains("invalid") || lower.contains("warning")
+                lower.contains("error")
+                    || lower.contains("failed")
+                    || lower.contains("cannot")
+                    || lower.contains("invalid")
+                    || lower.contains("warning")
                     || lower.contains("offline")
             }
         }
@@ -238,7 +243,10 @@ impl App {
         let text_filters = config.text_filters.clone();
 
         // Use configured model if set, otherwise fetch lazily on first tick
-        let model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "(connecting...)".to_string());
 
         Self {
             current_panel: Panel::LiveTranscription,
@@ -636,7 +644,9 @@ impl App {
                                 }
                                 None => {
                                     self.model = "(offline)".to_string();
-                                    self.logs.push("Connection failed: server not responding".to_string());
+                                    self.logs.push(
+                                        "Connection failed: server not responding".to_string(),
+                                    );
                                 }
                             }
                         }
@@ -755,7 +765,8 @@ impl App {
                 // Toggle theme
                 self.theme_name = self.theme_name.next();
                 self.theme = Theme::from_name(self.theme_name);
-                self.logs.push(format!("Theme: {}", self.theme_name.label()));
+                self.logs
+                    .push(format!("Theme: {}", self.theme_name.label()));
                 Ok(true)
             }
             _ if cmd.starts_with("theme ") => {
@@ -767,7 +778,8 @@ impl App {
                         self.logs.push(format!("Theme: {}", t.label()));
                     }
                     None => {
-                        self.logs.push(format!("Unknown theme: {} (available: dark, light)", name));
+                        self.logs
+                            .push(format!("Unknown theme: {} (available: dark, light)", name));
                     }
                 }
                 Ok(true)
@@ -812,8 +824,7 @@ impl App {
         // Create parent directory if needed
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                self.logs
-                    .push(format!("Export failed (mkdir): {}", e));
+                self.logs.push(format!("Export failed (mkdir): {}", e));
                 return;
             }
         }
@@ -849,7 +860,6 @@ impl App {
             self.selected_log -= 1;
         }
     }
-
 
     /// Cycle through languages: auto -> en -> no -> auto
     fn cycle_language(&mut self) {
@@ -905,7 +915,10 @@ impl App {
         self.device = config.device.clone();
         self.language = config.language.clone();
         self.api_key = config.api_key.clone();
-        self.model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
+        self.model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "(connecting...)".to_string());
         self.text_filters = config.text_filters.clone();
         self.profile = profile_name;
 
@@ -1150,10 +1163,9 @@ impl App {
 
         // Lazy fetch model on first tick, only if not already configured
         if self.tick_count == 1 && self.model == "(connecting...)" {
-            self.model =
-                Self::fetch_model_name(&self.server, self.api_key.as_deref()).unwrap_or_else(|| "(offline)".to_string());
+            self.model = Self::fetch_model_name(&self.server, self.api_key.as_deref())
+                .unwrap_or_else(|| "(offline)".to_string());
         }
-
     }
 }
 

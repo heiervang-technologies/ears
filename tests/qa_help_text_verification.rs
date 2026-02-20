@@ -70,10 +70,7 @@ fn test_all_documented_keys_work() {
     let was_vad_active = app.vad_active;
     let key_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
     app.handle_key(key_space).unwrap();
-    assert_ne!(
-        app.vad_active, was_vad_active,
-        "Space should toggle VAD"
-    );
+    assert_ne!(app.vad_active, was_vad_active, "Space should toggle VAD");
 
     // [h/l] Tabs
     let initial_panel = app.current_panel;

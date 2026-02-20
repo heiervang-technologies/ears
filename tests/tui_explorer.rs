@@ -214,18 +214,12 @@ fn test_explorer_finds_all_panels() {
 fn test_explorer_finds_vad_states() {
     let discovered_states = explore_state_space(50);
 
-    let vad_states: Vec<_> = discovered_states
-        .keys()
-        .filter(|s| s.vad_active)
-        .collect();
+    let vad_states: Vec<_> = discovered_states.keys().filter(|s| s.vad_active).collect();
 
     println!("\nVAD active states found: {}", vad_states.len());
 
     // Should find at least one VAD active state
-    assert!(
-        !vad_states.is_empty(),
-        "Should discover VAD active state"
-    );
+    assert!(!vad_states.is_empty(), "Should discover VAD active state");
 }
 
 #[test]
