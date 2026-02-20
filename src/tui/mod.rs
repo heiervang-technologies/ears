@@ -4,6 +4,7 @@
 
 mod app;
 mod event;
+pub mod theme;
 pub mod ui; // Make ui module public for testing
 
 pub use app::{App, ClickAction, ClickableRegion, EditableField, Panel};
