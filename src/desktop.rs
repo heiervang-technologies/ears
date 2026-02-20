@@ -364,10 +364,16 @@ impl TextInput {
     }
 
     /// Type text directly using wtype (Wayland native, for Hyprland/Omarchy)
+    ///
+    /// Uses a small inter-key delay (`-d 4`) to prevent web browsers from
+    /// dropping characters — especially spaces — when key events arrive too
+    /// fast for the JavaScript event loop.
     fn type_with_wtype(text: &str) -> Result<()> {
         use std::process::Stdio;
 
         let status = Command::new("wtype")
+            .arg("-d")
+            .arg("4")
             .arg("--")
             .arg(text)
             .stdin(Stdio::null())
