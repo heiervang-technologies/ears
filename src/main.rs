@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
     }
 
     tracing::info!("ears started");
+    tracing::info!("Log file: {}", log_file_path.display());
 
     match cli.command {
         Some(Commands::Toggle) => {
@@ -400,8 +401,10 @@ async fn start_recording(
     state_mgr: &mut StateManager,
     process_mgr: &ProcessManager,
 ) -> Result<()> {
+    let toggle_start = std::time::Instant::now();
     tracing::info!("Starting recording");
 
+    let health_start = std::time::Instant::now();
     let client = WhisperClient::new(config.whisper_server.clone())
         .with_api_key(config.api_key.clone())
         .with_model(config.model.clone());
@@ -411,6 +414,8 @@ async fn start_recording(
         Notifications::error("Whisper server not running!").ok();
         anyhow::bail!("Whisper server not available");
     }
+
+    tracing::info!("Health check passed in {:?}", health_start.elapsed());
 
     let audio_file = config.state_dir.join("recording.wav");
     if audio_file.exists() {
@@ -427,7 +432,7 @@ async fn start_recording(
 
     AudioFeedback::beep_start().ok();
 
-    tracing::info!("Recording started (PID: {})", pid);
+    tracing::info!("Recording started (PID: {}) total start_recording: {:?}", pid, toggle_start.elapsed());
 
     Ok(())
 }
@@ -438,6 +443,7 @@ async fn stop_and_transcribe(
     state_mgr: &mut StateManager,
     process_mgr: &ProcessManager,
 ) -> Result<()> {
+    let total_start = std::time::Instant::now();
     tracing::info!("Stopping recording and transcribing");
 
     let pid = match process_mgr.read_pid()? {
@@ -458,11 +464,13 @@ async fn stop_and_transcribe(
         return Ok(());
     }
 
+    let stop_start = std::time::Instant::now();
     process_mgr
         .stop_recording()
         .context("Failed to stop recording")?;
 
     tokio::time::sleep(Duration::from_millis(300)).await;
+    tracing::info!("Recording stopped in {:?}", stop_start.elapsed());
 
     let audio_file = config.state_dir.join("recording.wav");
     if !audio_file.exists() {
@@ -502,28 +510,33 @@ async fn stop_and_transcribe(
         .transition(StateEnum::Transcribing)
         .context("Failed to transition to Transcribing state")?;
 
+    let lang_start = std::time::Instant::now();
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    tracing::info!("Language detection took {:?}", lang_start.elapsed());
     if let Some(ref lang) = language {
         tracing::info!("Using language: {} (from keyboard layout)", lang);
     }
 
+    let transcribe_start = std::time::Instant::now();
     let client = WhisperClient::new(config.whisper_server.clone())
         .with_language(language)
         .with_api_key(config.api_key.clone())
         .with_model(config.model.clone());
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
-            tracing::info!("Transcription successful: {}", text);
+            tracing::info!("Transcription completed in {:?}: {}", transcribe_start.elapsed(), text);
 
             let filtered_text = config.text_filters.apply(&text);
             tracing::debug!("Filtered text: {}", filtered_text);
 
+            let typing_start = std::time::Instant::now();
             match TextInput::type_text(&filtered_text, config.typing_mode) {
                 Ok(()) => {
+                    tracing::info!("Text typing completed in {:?} ({} chars)", typing_start.elapsed(), filtered_text.len());
                     AudioFeedback::beep_done().ok();
                 }
                 Err(e) => {
-                    tracing::error!("Failed to type text: {}", e);
+                    tracing::error!("Failed to type text in {:?}: {}", typing_start.elapsed(), e);
                     AudioFeedback::beep_error().ok();
                     Notifications::error(&format!("Failed to type text: {}", e)).ok();
                 }
@@ -556,6 +569,8 @@ async fn stop_and_transcribe(
     state_mgr
         .transition(StateEnum::Idle)
         .context("Failed to transition to Idle state")?;
+
+    tracing::info!("Total stop_and_transcribe: {:?}", total_start.elapsed());
 
     Ok(())
 }
