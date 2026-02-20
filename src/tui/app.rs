@@ -2,6 +2,7 @@
 
 use super::theme::{Theme, ThemeName};
 use crate::config::Config;
+use crate::desktop::TypingMode;
 use crate::streaming_engine::StreamingEvent;
 use crate::text_filters::TextFilters;
 use anyhow::Result;
@@ -26,6 +27,8 @@ pub enum ClickAction {
     ToggleVadMode,
     /// Select a log entry
     SelectLog(usize),
+    /// Cycle typing mode
+    CycleTypingMode,
     /// Select a device from the picker (by index)
     SelectDevice(usize),
 }
@@ -189,6 +192,8 @@ pub struct App {
     pub device_picker_selected: usize,
     /// Error message if device list fetch failed
     pub device_picker_error: Option<String>,
+    /// Text input method (auto/wtype/paste)
+    pub typing_mode: TypingMode,
     /// Active config profile name (None = default)
     pub profile: Option<String>,
     /// Available profile names (cached)
@@ -241,6 +246,7 @@ impl App {
         let language = config.language.clone();
         let api_key = config.api_key.clone();
         let text_filters = config.text_filters.clone();
+        let typing_mode = config.typing_mode;
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -274,6 +280,7 @@ impl App {
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
+            typing_mode,
             clickable_regions: Vec::new(),
             device_picker_open: false,
             device_picker_devices: Vec::new(),
@@ -441,6 +448,13 @@ impl App {
                 }
             }
 
+            // 'm' to cycle typing mode (in Configuration panel)
+            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.cycle_typing_mode();
+                }
+            }
+
             // 'c' to go to configuration panel
             (KeyCode::Char('c'), KeyModifiers::NONE) => {
                 self.current_panel = Panel::Configuration;
@@ -551,6 +565,9 @@ impl App {
                         }
                         ClickAction::ToggleVadMode => {
                             self.toggle_vad_mode();
+                        }
+                        ClickAction::CycleTypingMode => {
+                            self.cycle_typing_mode();
                         }
                         ClickAction::SelectLog(index) => {
                             self.selected_log = index;
@@ -920,6 +937,7 @@ impl App {
             .clone()
             .unwrap_or_else(|| "(connecting...)".to_string());
         self.text_filters = config.text_filters.clone();
+        self.typing_mode = config.typing_mode;
         self.profile = profile_name;
 
         self.add_log(&format!("Profile switched to: {}", display));
@@ -963,6 +981,13 @@ impl App {
         self.logs.push(format!("Auto-correction {}", status));
     }
 
+    /// Cycle typing mode: Auto -> Wtype -> Paste -> Auto
+    pub fn cycle_typing_mode(&mut self) {
+        self.typing_mode = self.typing_mode.next();
+        self.add_log(&format!("Typing mode: {}", self.typing_mode.display_name()));
+        self.save_config();
+    }
+
     /// Toggle lowercase filter
     pub fn toggle_lowercase_filter(&mut self) {
         self.text_filters.lowercase = !self.text_filters.lowercase;
@@ -997,6 +1022,7 @@ impl App {
         config.device = self.device.clone();
         config.language = self.language.clone();
         config.text_filters = self.text_filters.clone();
+        config.typing_mode = self.typing_mode;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }

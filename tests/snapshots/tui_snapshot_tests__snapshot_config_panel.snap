@@ -25,9 +25,9 @@ expression: output
 │  [ ] Lowercase [f]                                                                               │
 │  [ ] Remove Punctuation [p]                                                                      │
 │                                                                                                  │
-│[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation   │
-│                                                                                                  │
-│                                                                                                  │
+│Typing Settings:                                                                                  │
+│  [x] Progressive Typing [t]                                                                      │
+│  [x] Auto-correction [a]                                                                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [q] Quit                        │

@@ -30,7 +30,7 @@ fn test_type_text_waits_for_completion() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     env::set_var("TEST_TEMP_DIR", temp_dir.path());
 
-    let result = ears::TextInput::type_text("Test message");
+    let result = ears::TextInput::type_text("Test message", ears::TypingMode::Auto);
 
     // Restore original PATH
     if let Some(path) = original_path {
@@ -56,7 +56,7 @@ fn test_error_detection() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     env::set_var("TEST_TEMP_DIR", temp_dir.path());
 
-    let result = ears::TextInput::type_text("Test message");
+    let result = ears::TextInput::type_text("Test message", ears::TypingMode::Auto);
 
     if let Some(path) = original_path {
         env::set_var("PATH", path);
@@ -81,9 +81,9 @@ fn test_concurrent_typing_serialization() {
     env::set_var("TEST_TEMP_DIR", temp_dir.path());
 
     // These calls should be serialized (each waits for previous to complete)
-    let result1 = ears::TextInput::type_text("First");
-    let result2 = ears::TextInput::type_text("Second");
-    let result3 = ears::TextInput::type_text("Third");
+    let result1 = ears::TextInput::type_text("First", ears::TypingMode::Auto);
+    let result2 = ears::TextInput::type_text("Second", ears::TypingMode::Auto);
+    let result3 = ears::TextInput::type_text("Third", ears::TypingMode::Auto);
 
     if let Some(path) = original_path {
         env::set_var("PATH", path);

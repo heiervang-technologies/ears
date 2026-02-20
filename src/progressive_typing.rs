@@ -3,7 +3,7 @@
 //! This module handles typing text progressively as it becomes stable from the
 //! LocalAgreement policy, with optional backspace corrections for mistakes.
 
-use crate::desktop::TextInput;
+use crate::desktop::{TextInput, TypingMode};
 use thiserror::Error;
 
 /// Errors that can occur during progressive typing
@@ -23,6 +23,8 @@ pub struct ProgressiveTypingConfig {
     pub enabled: bool,
     /// Enable auto-correction (backspace and retype on changes)
     pub auto_correction: bool,
+    /// Text input method
+    pub typing_mode: TypingMode,
 }
 
 impl Default for ProgressiveTypingConfig {
@@ -30,6 +32,7 @@ impl Default for ProgressiveTypingConfig {
         Self {
             enabled: true,
             auto_correction: true,
+            typing_mode: TypingMode::Auto,
         }
     }
 }
@@ -115,9 +118,9 @@ impl ProgressiveTypingEngine {
         }
     }
 
-    /// Type text using ydotool
+    /// Type text using the configured input method
     fn type_text(&self, text: &str) -> Result<(), ProgressiveTypingError> {
-        TextInput::type_text(text)
+        TextInput::type_text(text, self.config.typing_mode)
             .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
         Ok(())
     }
@@ -126,7 +129,7 @@ impl ProgressiveTypingEngine {
     fn backspace(&self, count: usize) -> Result<(), ProgressiveTypingError> {
         // Type backspace characters
         let backspaces = "\x08".repeat(count);
-        TextInput::type_text(&backspaces)
+        TextInput::type_text(&backspaces, self.config.typing_mode)
             .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
         Ok(())
     }
@@ -187,6 +190,7 @@ mod tests {
         let config = ProgressiveTypingConfig {
             enabled: false,
             auto_correction: true,
+            typing_mode: TypingMode::Auto,
         };
 
         let engine = ProgressiveTypingEngine::new(config);
@@ -208,6 +212,7 @@ mod tests {
         engine.set_config(ProgressiveTypingConfig {
             enabled: false,
             auto_correction: false,
+            typing_mode: TypingMode::Auto,
         });
 
         assert!(!engine.config().enabled);

@@ -518,7 +518,7 @@ async fn stop_and_transcribe(
             let filtered_text = config.text_filters.apply(&text);
             tracing::debug!("Filtered text: {}", filtered_text);
 
-            match TextInput::type_text(&filtered_text) {
+            match TextInput::type_text(&filtered_text, config.typing_mode) {
                 Ok(()) => {
                     AudioFeedback::beep_done().ok();
                 }
