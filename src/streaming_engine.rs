@@ -248,7 +248,11 @@ impl StreamingEngine {
                     self.stats.chars_typed += chars;
                 }
                 Err(e) => {
-                    warn!("Progressive typing error after {:?}: {}", typing_start.elapsed(), e);
+                    warn!(
+                        "Progressive typing error after {:?}: {}",
+                        typing_start.elapsed(),
+                        e
+                    );
                     self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
                 }
             }

@@ -181,7 +181,10 @@ impl WhisperClient {
 
         match request.send().await {
             Ok(response) if response.status().is_success() => {
-                info!("Whisper server is healthy (via /health) in {:?}", start.elapsed());
+                info!(
+                    "Whisper server is healthy (via /health) in {:?}",
+                    start.elapsed()
+                );
                 return Ok(());
             }
             _ => {}
@@ -202,7 +205,10 @@ impl WhisperClient {
             .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
 
         if response.status().is_success() {
-            info!("Whisper server is healthy (via /v1/models) in {:?}", start.elapsed());
+            info!(
+                "Whisper server is healthy (via /v1/models) in {:?}",
+                start.elapsed()
+            );
             Ok(())
         } else {
             Err(WhisperError::ConnectionError(format!(
@@ -339,7 +345,11 @@ impl WhisperClient {
 
         // Parse response
         let transcription: TranscriptionResponse = response.json().await?;
-        info!("Whisper API call completed in {:?}: \"{}\"", start.elapsed(), transcription.text);
+        info!(
+            "Whisper API call completed in {:?}: \"{}\"",
+            start.elapsed(),
+            transcription.text
+        );
 
         Ok(transcription.text)
     }

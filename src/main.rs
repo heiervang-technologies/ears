@@ -432,7 +432,11 @@ async fn start_recording(
 
     AudioFeedback::beep_start().ok();
 
-    tracing::info!("Recording started (PID: {}) total start_recording: {:?}", pid, toggle_start.elapsed());
+    tracing::info!(
+        "Recording started (PID: {}) total start_recording: {:?}",
+        pid,
+        toggle_start.elapsed()
+    );
 
     Ok(())
 }
@@ -524,7 +528,11 @@ async fn stop_and_transcribe(
         .with_model(config.model.clone());
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
-            tracing::info!("Transcription completed in {:?}: {}", transcribe_start.elapsed(), text);
+            tracing::info!(
+                "Transcription completed in {:?}: {}",
+                transcribe_start.elapsed(),
+                text
+            );
 
             let filtered_text = config.text_filters.apply(&text);
             tracing::debug!("Filtered text: {}", filtered_text);
@@ -532,7 +540,11 @@ async fn stop_and_transcribe(
             let typing_start = std::time::Instant::now();
             match TextInput::type_text(&filtered_text, config.typing_mode) {
                 Ok(()) => {
-                    tracing::info!("Text typing completed in {:?} ({} chars)", typing_start.elapsed(), filtered_text.len());
+                    tracing::info!(
+                        "Text typing completed in {:?} ({} chars)",
+                        typing_start.elapsed(),
+                        filtered_text.len()
+                    );
                     AudioFeedback::beep_done().ok();
                 }
                 Err(e) => {
