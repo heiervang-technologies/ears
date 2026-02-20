@@ -9,20 +9,20 @@ expression: output
 │ ▸ Configuration │ ▸ Logs │ ▸ Live                                            │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Live Transcription ──────────────────────────────────────────────────────────┐
-│VAD mode is inactive. Press [Space] or [v] to enable.                         │
+│                                                                              │
+│VAD Mode: ○ Inactive                                                          │
+│                                                                              │
+│Transcription:                                                                │
+│                                                                              │
+│  VAD mode is inactive. Press [Space] or [v] to enable.                       │
 │                                                                              │
 │                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│Settings:                                                                     │
+│  [x] Progressive Typing [t]                                                  │
+│  [x] Auto-correction [a]                                                     │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│[Space/v] VAD  [c] Config  [Tab] Panels  [q] Quit                             │
+│[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                            │
 └──────────────────────────────────────────────────────────────────────────────┘

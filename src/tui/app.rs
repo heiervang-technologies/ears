@@ -3,6 +3,7 @@
 use crate::config::Config;
 use crate::streaming_engine::StreamingEvent;
 use crate::text_filters::TextFilters;
+use super::theme::{Theme, ThemeName};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -36,6 +37,51 @@ pub struct ClickableRegion {
     pub rect: Rect,
     /// The action to perform when clicked
     pub action: ClickAction,
+}
+
+/// Log filter level for the Logs panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFilter {
+    All,
+    Errors,
+    Warnings,
+}
+
+impl LogFilter {
+    /// Cycle to the next filter
+    pub fn next(self) -> Self {
+        match self {
+            LogFilter::All => LogFilter::Errors,
+            LogFilter::Errors => LogFilter::Warnings,
+            LogFilter::Warnings => LogFilter::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LogFilter::All => "All",
+            LogFilter::Errors => "Errors",
+            LogFilter::Warnings => "Warnings",
+        }
+    }
+
+    /// Check if a log message passes this filter
+    pub fn matches(self, msg: &str) -> bool {
+        match self {
+            LogFilter::All => true,
+            LogFilter::Errors => {
+                let lower = msg.to_lowercase();
+                lower.contains("error") || lower.contains("failed") || lower.contains("cannot")
+                    || lower.contains("invalid")
+            }
+            LogFilter::Warnings => {
+                let lower = msg.to_lowercase();
+                lower.contains("error") || lower.contains("failed") || lower.contains("cannot")
+                    || lower.contains("invalid") || lower.contains("warning")
+                    || lower.contains("offline")
+            }
+        }
+    }
 }
 
 /// The current panel being displayed
@@ -142,6 +188,38 @@ pub struct App {
     pub profile: Option<String>,
     /// Available profile names (cached)
     pub available_profiles: Vec<String>,
+    /// Active log filter
+    pub log_filter: LogFilter,
+    /// Whether the help overlay is open
+    pub help_overlay_open: bool,
+    /// Whether log search mode is active
+    pub search_mode: bool,
+    /// Current search query buffer
+    pub search_buffer: String,
+    /// Indices of log entries matching the search
+    pub search_matches: Vec<usize>,
+    /// Current position within search_matches
+    pub search_match_index: usize,
+    /// Whether server URL is set via EARS_SERVER env var
+    pub env_server: bool,
+    /// Whether device is set via EARS_DEVICE env var
+    pub env_device: bool,
+    /// Whether language is set via EARS_LANGUAGE env var
+    pub env_language: bool,
+    /// Whether model is set via EARS_MODEL env var
+    pub env_model: bool,
+    /// Total transcription attempts (success + failure)
+    pub total_transcriptions: usize,
+    /// Successful transcription count
+    pub successful_transcriptions: usize,
+    /// Failed transcription count
+    pub failed_transcriptions: usize,
+    /// Total words transcribed
+    pub total_words: usize,
+    /// Current theme name
+    pub theme_name: ThemeName,
+    /// Current theme colors
+    pub theme: Theme,
 }
 
 impl App {
@@ -195,6 +273,22 @@ impl App {
             device_picker_error: None,
             profile: profile.map(|s| s.to_string()),
             available_profiles: Config::list_profiles().unwrap_or_default(),
+            log_filter: LogFilter::All,
+            help_overlay_open: false,
+            search_mode: false,
+            search_buffer: String::new(),
+            search_matches: Vec::new(),
+            search_match_index: 0,
+            env_server: std::env::var("EARS_SERVER").is_ok(),
+            env_device: std::env::var("EARS_DEVICE").is_ok(),
+            env_language: std::env::var("EARS_LANGUAGE").is_ok(),
+            env_model: std::env::var("EARS_MODEL").is_ok(),
+            total_transcriptions: 0,
+            successful_transcriptions: 0,
+            failed_transcriptions: 0,
+            total_words: 0,
+            theme_name: ThemeName::Dark,
+            theme: Theme::dark(),
         }
     }
 
@@ -228,6 +322,17 @@ impl App {
     /// Handle a key press event
     /// Returns false if the app should quit
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        // Handle help overlay — absorbs all keys except ? and Esc (which close it)
+        if self.help_overlay_open {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc => {
+                    self.help_overlay_open = false;
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+
         // Handle edit mode separately
         if self.editing_field.is_some() {
             return self.handle_edit_key(key);
@@ -243,12 +348,22 @@ impl App {
             return self.handle_command_key(key);
         }
 
+        // Handle search mode separately
+        if self.search_mode {
+            return self.handle_search_key(key);
+        }
+
         // Global keybindings
         match (key.code, key.modifiers) {
             // Quit with 'q', Escape, or Ctrl+C
             (KeyCode::Char('q'), KeyModifiers::NONE) => return Ok(false),
             (KeyCode::Esc, KeyModifiers::NONE) => return Ok(false),
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(false),
+
+            // Toggle help overlay with '?'
+            (KeyCode::Char('?'), KeyModifiers::NONE) => {
+                self.help_overlay_open = true;
+            }
 
             // Enter command mode with ':'
             (KeyCode::Char(':'), KeyModifiers::NONE) => {
@@ -290,16 +405,16 @@ impl App {
                 self.toggle_vad_mode();
             }
 
-            // 't' to toggle progressive typing (in Configuration panel)
+            // 't' to toggle progressive typing (in Live panel)
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
+                if self.current_panel == Panel::LiveTranscription {
                     self.toggle_progressive_typing();
                 }
             }
 
-            // 'a' to toggle auto-correction (in Configuration panel)
+            // 'a' to toggle auto-correction (in Live panel)
             (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
+                if self.current_panel == Panel::LiveTranscription {
                     self.toggle_auto_correction();
                 }
             }
@@ -346,6 +461,45 @@ impl App {
             (KeyCode::Char('d'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Configuration {
                     self.open_device_picker();
+                }
+            }
+
+            // 'F' to cycle log filter (in Logs panel)
+            (KeyCode::Char('F'), KeyModifiers::SHIFT) => {
+                if self.current_panel == Panel::Logs {
+                    self.log_filter = self.log_filter.next();
+                    self.add_log(&format!("Log filter: {}", self.log_filter.label()));
+                }
+            }
+
+            // '/' to search logs (in Logs panel)
+            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Logs {
+                    self.search_mode = true;
+                    self.search_buffer.clear();
+                    self.search_matches.clear();
+                    self.search_match_index = 0;
+                }
+            }
+
+            // 'n' to jump to next search match
+            (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
+                    self.search_match_index =
+                        (self.search_match_index + 1) % self.search_matches.len();
+                    self.selected_log = self.search_matches[self.search_match_index];
+                }
+            }
+
+            // 'N' to jump to previous search match
+            (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
+                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
+                    self.search_match_index = if self.search_match_index == 0 {
+                        self.search_matches.len() - 1
+                    } else {
+                        self.search_match_index - 1
+                    };
+                    self.selected_log = self.search_matches[self.search_match_index];
                 }
             }
 
@@ -421,6 +575,15 @@ impl App {
 
     /// Start editing a field
     fn start_editing(&mut self, field: EditableField) {
+        // Block editing if field is set via env var
+        match field {
+            EditableField::ServerUrl => {
+                if self.env_server {
+                    self.add_log("Cannot edit: set via EARS_SERVER env var");
+                    return;
+                }
+            }
+        }
         self.editing_field = Some(field);
         self.edit_buffer = match field {
             EditableField::ServerUrl => self.server.clone(),
@@ -465,10 +628,16 @@ impl App {
                             self.save_config();
                             self.logs
                                 .push(format!("Server URL set to: {}", self.server));
-                            // Update model from new server
-                            if let Some(model) = Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
-                                self.model = model;
-                                self.logs.push(format!("Model updated: {}", self.model));
+                            // Test connection and update model
+                            match Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
+                                Some(model) => {
+                                    self.model = model.clone();
+                                    self.logs.push(format!("Connection OK — model: {}", model));
+                                }
+                                None => {
+                                    self.model = "(offline)".to_string();
+                                    self.logs.push("Connection failed: server not responding".to_string());
+                                }
                             }
                         }
                         Err(e) => {
@@ -511,6 +680,49 @@ impl App {
         Ok(true)
     }
 
+    /// Handle key press in search mode
+    fn handle_search_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Esc => {
+                self.search_mode = false;
+                self.search_buffer.clear();
+                self.search_matches.clear();
+                self.search_match_index = 0;
+            }
+            KeyCode::Enter => {
+                self.search_mode = false;
+                if !self.search_matches.is_empty() {
+                    self.search_match_index = 0;
+                    self.selected_log = self.search_matches[0];
+                }
+            }
+            KeyCode::Char(c) => {
+                self.search_buffer.push(c);
+                self.update_search_matches();
+            }
+            KeyCode::Backspace => {
+                self.search_buffer.pop();
+                self.update_search_matches();
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Recalculate search matches based on search_buffer
+    fn update_search_matches(&mut self) {
+        self.search_matches.clear();
+        self.search_match_index = 0;
+        if !self.search_buffer.is_empty() {
+            let query = self.search_buffer.to_lowercase();
+            for (i, log) in self.logs.iter().enumerate() {
+                if log.to_lowercase().contains(&query) {
+                    self.search_matches.push(i);
+                }
+            }
+        }
+    }
+
     /// Execute a vim-style command
     fn execute_command(&mut self) -> Result<bool> {
         let cmd = self.command_buffer.trim();
@@ -534,6 +746,32 @@ impl App {
                 self.logs.push("Configuration saved".to_string());
                 return Ok(false);
             }
+            _ if cmd == "export" || cmd.starts_with("export ") => {
+                let cmd_owned = cmd.to_string();
+                self.export_logs(&cmd_owned);
+                Ok(true)
+            }
+            "theme" => {
+                // Toggle theme
+                self.theme_name = self.theme_name.next();
+                self.theme = Theme::from_name(self.theme_name);
+                self.logs.push(format!("Theme: {}", self.theme_name.label()));
+                Ok(true)
+            }
+            _ if cmd.starts_with("theme ") => {
+                let name = cmd.strip_prefix("theme ").unwrap_or("").trim();
+                match ThemeName::parse(name) {
+                    Some(t) => {
+                        self.theme_name = t;
+                        self.theme = Theme::from_name(t);
+                        self.logs.push(format!("Theme: {}", t.label()));
+                    }
+                    None => {
+                        self.logs.push(format!("Unknown theme: {} (available: dark, light)", name));
+                    }
+                }
+                Ok(true)
+            }
             _ => {
                 self.logs.push(format!("Unknown command: {}", cmd));
                 Ok(true)
@@ -546,6 +784,54 @@ impl App {
         }
 
         result
+    }
+
+    /// Export logs to a file
+    fn export_logs(&mut self, cmd: &str) {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::time::SystemTime;
+
+        let path = if cmd == "export" {
+            // Default path: ~/.local/share/ears/logs/ears-{timestamp}.log
+            let secs = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let dir = directories::ProjectDirs::from("com", "heiervang", "ears")
+                .map(|p| p.data_dir().to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("logs");
+            dir.join(format!("ears-{}.log", secs))
+        } else {
+            // Custom path: :export /path/to/file
+            let path_str = cmd.strip_prefix("export ").unwrap_or("").trim();
+            PathBuf::from(path_str)
+        };
+
+        // Create parent directory if needed
+        if let Some(parent) = path.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                self.logs
+                    .push(format!("Export failed (mkdir): {}", e));
+                return;
+            }
+        }
+
+        let entry_count = self.logs.len();
+        let content = self.logs.join("\n");
+        match fs::write(&path, &content) {
+            Ok(()) => {
+                self.logs.push(format!(
+                    "Logs exported to: {} ({} entries)",
+                    path.display(),
+                    entry_count
+                ));
+            }
+            Err(e) => {
+                self.logs.push(format!("Export failed: {}", e));
+            }
+        }
     }
 
     /// Scroll down in the current panel
@@ -705,6 +991,10 @@ impl App {
 
     /// Open the device picker
     fn open_device_picker(&mut self) {
+        if self.env_device {
+            self.add_log("Cannot change device: set via EARS_DEVICE env var");
+            return;
+        }
         match crate::audio::list_devices() {
             Ok(devices) => {
                 if devices.is_empty() {
@@ -835,6 +1125,9 @@ impl App {
             }
             StreamingEvent::SegmentCompleted { text, duration_ms } => {
                 self.add_log(&format!("Segment: \"{}\" ({}ms)", text, duration_ms));
+                self.total_transcriptions += 1;
+                self.successful_transcriptions += 1;
+                self.total_words += text.split_whitespace().count();
             }
             StreamingEvent::StatsUpdate {
                 segments_processed,
@@ -845,6 +1138,8 @@ impl App {
             }
             StreamingEvent::Error(msg) => {
                 self.add_log(&format!("Streaming error: {}", msg));
+                self.total_transcriptions += 1;
+                self.failed_transcriptions += 1;
             }
         }
     }
@@ -865,5 +1160,433 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn shift_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
+    // --- Panel navigation ---
+
+    #[test]
+    fn test_panel_navigation_tab() {
+        let mut app = App::new();
+        assert_eq!(app.current_panel, Panel::LiveTranscription);
+
+        app.handle_key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(app.current_panel, Panel::Configuration);
+
+        app.handle_key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(app.current_panel, Panel::Logs);
+
+        app.handle_key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(app.current_panel, Panel::LiveTranscription);
+    }
+
+    #[test]
+    fn test_panel_navigation_hl() {
+        let mut app = App::new();
+        app.handle_key(key(KeyCode::Char('h'))).unwrap();
+        assert_eq!(app.current_panel, Panel::Logs);
+
+        app.handle_key(key(KeyCode::Char('h'))).unwrap();
+        assert_eq!(app.current_panel, Panel::Configuration);
+
+        // Wrap backwards
+        app.handle_key(key(KeyCode::Char('h'))).unwrap();
+        assert_eq!(app.current_panel, Panel::LiveTranscription);
+    }
+
+    // --- Help overlay ---
+
+    #[test]
+    fn test_help_overlay_toggle() {
+        let mut app = App::new();
+        assert!(!app.help_overlay_open);
+
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(app.help_overlay_open);
+
+        // Other keys should be absorbed
+        app.handle_key(key(KeyCode::Char('q'))).unwrap();
+        assert!(app.help_overlay_open); // Should still be open, not quit
+
+        // Close with Esc
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.help_overlay_open);
+    }
+
+    #[test]
+    fn test_help_overlay_close_with_question_mark() {
+        let mut app = App::new();
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(app.help_overlay_open);
+
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(!app.help_overlay_open);
+    }
+
+    // --- Command mode ---
+
+    #[test]
+    fn test_command_mode_enter_exit() {
+        let mut app = App::new();
+        assert!(!app.command_mode);
+
+        app.handle_key(key(KeyCode::Char(':'))).unwrap();
+        assert!(app.command_mode);
+
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.command_mode);
+    }
+
+    #[test]
+    fn test_command_mode_quit() {
+        let mut app = App::new();
+        app.handle_key(key(KeyCode::Char(':'))).unwrap();
+        app.handle_key(key(KeyCode::Char('q'))).unwrap();
+        let should_continue = app.handle_key(key(KeyCode::Enter)).unwrap();
+        assert!(!should_continue);
+    }
+
+    #[test]
+    fn test_command_mode_unknown_command() {
+        let mut app = App::new();
+        let initial_logs = app.logs.len();
+
+        app.handle_key(key(KeyCode::Char(':'))).unwrap();
+        app.handle_key(key(KeyCode::Char('x'))).unwrap();
+        app.handle_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(app.logs.len() > initial_logs);
+        assert!(app.logs.last().unwrap().contains("Unknown command"));
+    }
+
+    #[test]
+    fn test_command_theme_toggle() {
+        let mut app = App::new();
+        assert_eq!(app.theme_name, ThemeName::Dark);
+
+        // :theme toggles
+        app.handle_key(key(KeyCode::Char(':'))).unwrap();
+        for c in "theme".chars() {
+            app.handle_key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.handle_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(app.theme_name, ThemeName::Light);
+    }
+
+    #[test]
+    fn test_command_theme_set_specific() {
+        let mut app = App::new();
+
+        // :theme dark
+        app.handle_key(key(KeyCode::Char(':'))).unwrap();
+        for c in "theme dark".chars() {
+            app.handle_key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.handle_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(app.theme_name, ThemeName::Dark);
+    }
+
+    // --- Log search ---
+
+    #[test]
+    fn test_search_mode_enter_exit() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+
+        app.handle_key(key(KeyCode::Char('/'))).unwrap();
+        assert!(app.search_mode);
+
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.search_mode);
+    }
+
+    #[test]
+    fn test_search_finds_matches() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+        app.logs = vec![
+            "Application started".to_string(),
+            "Error: connection failed".to_string(),
+            "TUI initialized".to_string(),
+        ];
+
+        app.handle_key(key(KeyCode::Char('/'))).unwrap();
+        for c in "error".chars() {
+            app.handle_key(key(KeyCode::Char(c))).unwrap();
+        }
+
+        assert_eq!(app.search_matches.len(), 1);
+        assert_eq!(app.search_matches[0], 1);
+    }
+
+    #[test]
+    fn test_search_navigation_n() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+        app.logs = vec![
+            "error one".to_string(),
+            "ok".to_string(),
+            "error two".to_string(),
+        ];
+
+        // Enter search and type query
+        app.handle_key(key(KeyCode::Char('/'))).unwrap();
+        for c in "error".chars() {
+            app.handle_key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.handle_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(app.search_matches, vec![0, 2]);
+        assert_eq!(app.selected_log, 0);
+
+        // n goes to next match
+        app.handle_key(key(KeyCode::Char('n'))).unwrap();
+        assert_eq!(app.selected_log, 2);
+
+        // n wraps around
+        app.handle_key(key(KeyCode::Char('n'))).unwrap();
+        assert_eq!(app.selected_log, 0);
+    }
+
+    #[test]
+    fn test_search_navigation_shift_n() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+        app.logs = vec![
+            "error one".to_string(),
+            "ok".to_string(),
+            "error two".to_string(),
+        ];
+
+        app.handle_key(key(KeyCode::Char('/'))).unwrap();
+        for c in "error".chars() {
+            app.handle_key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.handle_key(key(KeyCode::Enter)).unwrap();
+
+        // N goes to previous (wraps to last)
+        app.handle_key(shift_key(KeyCode::Char('N'))).unwrap();
+        assert_eq!(app.selected_log, 2);
+    }
+
+    // --- Log filtering ---
+
+    #[test]
+    fn test_log_filter_cycle() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+        assert_eq!(app.log_filter, LogFilter::All);
+
+        app.handle_key(shift_key(KeyCode::Char('F'))).unwrap();
+        assert_eq!(app.log_filter, LogFilter::Errors);
+
+        app.handle_key(shift_key(KeyCode::Char('F'))).unwrap();
+        assert_eq!(app.log_filter, LogFilter::Warnings);
+
+        app.handle_key(shift_key(KeyCode::Char('F'))).unwrap();
+        assert_eq!(app.log_filter, LogFilter::All);
+    }
+
+    #[test]
+    fn test_log_filter_matches() {
+        assert!(LogFilter::All.matches("anything"));
+        assert!(LogFilter::Errors.matches("Connection failed"));
+        assert!(LogFilter::Errors.matches("Streaming error: timeout"));
+        assert!(!LogFilter::Errors.matches("Application started"));
+        assert!(LogFilter::Warnings.matches("server offline"));
+        assert!(!LogFilter::Warnings.matches("Configuration saved"));
+    }
+
+    // --- Scrolling ---
+
+    #[test]
+    fn test_scroll_in_logs_panel() {
+        let mut app = App::new();
+        app.current_panel = Panel::Logs;
+        app.logs = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        app.selected_log = 0;
+
+        app.handle_key(key(KeyCode::Char('j'))).unwrap();
+        assert_eq!(app.selected_log, 1);
+
+        app.handle_key(key(KeyCode::Char('j'))).unwrap();
+        assert_eq!(app.selected_log, 2);
+
+        // Can't scroll past end
+        app.handle_key(key(KeyCode::Char('j'))).unwrap();
+        assert_eq!(app.selected_log, 2);
+
+        app.handle_key(key(KeyCode::Char('k'))).unwrap();
+        assert_eq!(app.selected_log, 1);
+    }
+
+    // --- VAD toggle ---
+
+    #[test]
+    fn test_vad_toggle() {
+        let mut app = App::new();
+        assert!(!app.vad_active);
+
+        app.handle_key(key(KeyCode::Char('v'))).unwrap();
+        assert!(app.vad_active);
+
+        app.handle_key(key(KeyCode::Char('v'))).unwrap();
+        assert!(!app.vad_active);
+    }
+
+    // --- Space key ---
+
+    #[test]
+    fn test_space_toggles_vad() {
+        let mut app = App::new();
+        assert!(!app.vad_active);
+
+        app.handle_key(key(KeyCode::Char(' '))).unwrap();
+        assert!(app.vad_active);
+    }
+
+    // --- Config panel toggles ---
+
+    #[test]
+    fn test_toggle_lowercase_filter() {
+        let mut app = App::new();
+        app.current_panel = Panel::Configuration;
+        let initial = app.text_filters.lowercase;
+
+        app.handle_key(key(KeyCode::Char('f'))).unwrap();
+        assert_ne!(app.text_filters.lowercase, initial);
+    }
+
+    #[test]
+    fn test_toggle_punctuation_filter() {
+        let mut app = App::new();
+        app.current_panel = Panel::Configuration;
+        let initial = app.text_filters.remove_punctuation;
+
+        app.handle_key(key(KeyCode::Char('p'))).unwrap();
+        assert_ne!(app.text_filters.remove_punctuation, initial);
+    }
+
+    // --- Live panel toggles ---
+
+    #[test]
+    fn test_toggle_progressive_typing_in_live() {
+        let mut app = App::new();
+        app.current_panel = Panel::LiveTranscription;
+        let initial = app.progressive_typing;
+
+        app.handle_key(key(KeyCode::Char('t'))).unwrap();
+        assert_ne!(app.progressive_typing, initial);
+    }
+
+    #[test]
+    fn test_toggle_auto_correction_in_live() {
+        let mut app = App::new();
+        app.current_panel = Panel::LiveTranscription;
+        let initial = app.auto_correction;
+
+        app.handle_key(key(KeyCode::Char('a'))).unwrap();
+        assert_ne!(app.auto_correction, initial);
+    }
+
+    // --- Quit ---
+
+    #[test]
+    fn test_quit_with_q() {
+        let mut app = App::new();
+        let result = app.handle_key(key(KeyCode::Char('q'))).unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_quit_with_esc() {
+        let mut app = App::new();
+        let result = app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!result);
+    }
+
+    // --- Streaming events ---
+
+    #[test]
+    fn test_handle_segment_completed() {
+        let mut app = App::new();
+        app.handle_streaming_event(StreamingEvent::SegmentCompleted {
+            text: "hello world".to_string(),
+            duration_ms: 500,
+        });
+
+        assert_eq!(app.total_transcriptions, 1);
+        assert_eq!(app.successful_transcriptions, 1);
+        assert_eq!(app.total_words, 2);
+    }
+
+    #[test]
+    fn test_handle_streaming_error() {
+        let mut app = App::new();
+        app.handle_streaming_event(StreamingEvent::Error("timeout".to_string()));
+
+        assert_eq!(app.total_transcriptions, 1);
+        assert_eq!(app.failed_transcriptions, 1);
+    }
+
+    // --- Env var protection ---
+
+    #[test]
+    fn test_env_server_blocks_edit() {
+        let mut app = App::new();
+        app.env_server = true;
+        app.current_panel = Panel::Configuration;
+
+        app.handle_key(key(KeyCode::Char('e'))).unwrap();
+        assert!(app.editing_field.is_none());
+        assert!(app.logs.last().unwrap().contains("Cannot edit"));
+    }
+
+    // --- Tick ---
+
+    #[test]
+    fn test_tick_lazy_model_fetch() {
+        let mut app = App::new();
+        app.model = "(connecting...)".to_string();
+        // After first tick, model should change (either to fetched or offline)
+        app.handle_tick();
+        assert_ne!(app.model, "(connecting...)");
+    }
+
+    // --- Add log auto-scroll ---
+
+    #[test]
+    fn test_add_log_auto_scrolls() {
+        let mut app = App::new();
+        // Position at last log
+        app.selected_log = app.logs.len() - 1;
+
+        app.add_log("new message");
+        assert_eq!(app.selected_log, app.logs.len() - 1);
+    }
+
+    #[test]
+    fn test_add_log_no_scroll_if_not_at_end() {
+        let mut app = App::new();
+        app.logs = vec!["a".to_string(), "b".to_string()];
+        app.selected_log = 0;
+
+        app.add_log("c");
+        assert_eq!(app.selected_log, 0);
     }
 }
