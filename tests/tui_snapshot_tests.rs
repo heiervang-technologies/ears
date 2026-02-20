@@ -79,11 +79,10 @@ fn snapshot_initial_state() {
 
 #[test]
 #[serial_test::serial]
-fn snapshot_recording_state() {
+fn snapshot_vad_active_state() {
     let (_env, orig_home, orig_xdg) = setup_test_env();
     let mut app = App::new();
-    app.is_recording = true;
-    app.recording_duration = 42;
+    app.vad_active = true;
     let output = render_to_string(&mut app, 80, 24);
     restore_test_env(orig_home, orig_xdg);
     insta::assert_snapshot!(output);

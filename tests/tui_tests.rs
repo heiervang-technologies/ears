@@ -6,18 +6,16 @@ use ears::tui::{App, Panel};
 #[test]
 fn test_app_initialization() {
     let app = App::new();
-    assert_eq!(app.current_panel, Panel::Status);
-    assert!(!app.is_recording);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
     assert!(!app.command_mode);
-    assert_eq!(app.recording_duration, 0);
 }
 
 #[test]
 fn test_panel_navigation_next() {
     let mut app = App::new();
 
-    // Start at Status
-    assert_eq!(app.current_panel, Panel::Status);
+    // Start at LiveTranscription
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Press 'l' to go to next panel (Configuration)
     let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
@@ -32,34 +30,22 @@ fn test_panel_navigation_next() {
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Logs);
 
-    // Press 'l' again to go to LiveTranscription
+    // Press 'l' again to wrap back to LiveTranscription
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::LiveTranscription);
-
-    // Press 'l' again to wrap back to Status
-    let result = app.handle_key(key);
-    assert!(result.is_ok());
-    assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::Status);
 }
 
 #[test]
 fn test_panel_navigation_prev() {
     let mut app = App::new();
 
-    // Start at Status
-    assert_eq!(app.current_panel, Panel::Status);
-
-    // Press 'h' to go to previous panel (LiveTranscription - wraps around)
-    let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
-    let result = app.handle_key(key);
-    assert!(result.is_ok());
-    assert!(result.unwrap());
+    // Start at LiveTranscription
     assert_eq!(app.current_panel, Panel::LiveTranscription);
 
-    // Press 'h' again to go to Logs
+    // Press 'h' to go to previous panel (Logs - wraps around)
+    let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
@@ -71,11 +57,11 @@ fn test_panel_navigation_prev() {
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Configuration);
 
-    // Press 'h' again to wrap back to Status
+    // Press 'h' again to wrap back to LiveTranscription
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::Status);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 }
 
 #[test]
@@ -94,7 +80,7 @@ fn test_tab_navigation() {
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::Status);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 }
 
 #[test]
@@ -195,25 +181,25 @@ fn test_command_mode_escape() {
 }
 
 #[test]
-fn test_recording_toggle() {
+fn test_vad_toggle() {
     let mut app = App::new();
-    assert!(!app.is_recording);
+    assert!(!app.vad_active);
 
-    // Press Space to start recording
+    // Press Space to enable VAD
     let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
     app.handle_key(key).unwrap();
-    assert!(app.is_recording);
+    assert!(app.vad_active);
 
-    // Press Space again to stop recording
+    // Press Space again to disable VAD
     app.handle_key(key).unwrap();
-    assert!(!app.is_recording);
+    assert!(!app.vad_active);
 }
 
 #[test]
 fn test_panel_titles() {
-    assert_eq!(Panel::Status.title(), "Status");
     assert_eq!(Panel::Configuration.title(), "Configuration");
     assert_eq!(Panel::Logs.title(), "Logs");
+    assert_eq!(Panel::LiveTranscription.title(), "Live");
 }
 
 #[test]

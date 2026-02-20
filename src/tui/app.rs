@@ -94,11 +94,7 @@ pub struct App {
     pub editing_field: Option<EditableField>,
     /// Buffer for the field being edited
     pub edit_buffer: String,
-    /// Recording state (for display)
-    pub is_recording: bool,
-    /// Recording duration in seconds
-    pub recording_duration: u64,
-    /// Tick counter for tracking recording duration (4 ticks = 1 second at 250ms tick rate)
+    /// Tick counter for lazy model fetch
     tick_count: u64,
     /// Current model name
     pub model: String,
@@ -172,8 +168,6 @@ impl App {
             command_buffer: String::new(),
             editing_field: None,
             edit_buffer: String::new(),
-            is_recording: false,
-            recording_duration: 0,
             tick_count: 0,
             model,
             server: server_url,
@@ -634,11 +628,6 @@ impl App {
 
     /// Toggle VAD mode
     pub fn toggle_vad_mode(&mut self) {
-        if self.is_recording {
-            self.add_log("Cannot enable VAD while recording");
-            return;
-        }
-
         self.vad_active = !self.vad_active;
         if self.vad_active {
             self.add_log("VAD mode enabled");
@@ -861,7 +850,6 @@ impl App {
     }
 
     /// Handle a tick event
-    /// Updates recording duration if currently recording
     pub fn handle_tick(&mut self) {
         self.tick_count += 1;
 
@@ -871,12 +859,6 @@ impl App {
                 Self::fetch_model_name(&self.server, self.api_key.as_deref()).unwrap_or_else(|| "(offline)".to_string());
         }
 
-        if self.is_recording {
-            // With 250ms tick rate, 4 ticks = 1 second
-            if self.tick_count.is_multiple_of(4) {
-                self.recording_duration += 1;
-            }
-        }
     }
 }
 

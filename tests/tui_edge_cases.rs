@@ -80,7 +80,6 @@ fn edge_case_many_logs() {
     let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
-    assert!(output.contains("Logs") || output.contains("Status"));
 }
 
 #[test]
@@ -126,18 +125,16 @@ fn edge_case_very_long_command_buffer() {
 }
 
 #[test]
-fn edge_case_max_recording_duration() {
-    println!("\n🔍 EDGE CASE: Very long recording duration");
+fn edge_case_vad_active_rendering() {
+    println!("\n🔍 EDGE CASE: VAD active rendering");
 
     let mut app = App::new();
-    app.is_recording = true;
-    app.recording_duration = u64::MAX;
+    app.vad_active = true;
 
     let output = render_to_string(&mut app, 80, 24);
 
     assert!(!output.is_empty());
-    assert!(output.contains("●")); // Should show recording indicator
-    println!("Max duration value: {}", u64::MAX);
+    assert!(output.contains("◉")); // Should show VAD listening indicator
 }
 
 #[test]
@@ -247,8 +244,8 @@ fn edge_case_mixed_operations() {
     assert!(!output.is_empty());
 
     println!(
-        "Final state - Panel: {:?}, Recording: {}, Command: {}",
-        app.current_panel, app.is_recording, app.command_mode
+        "Final state - Panel: {:?}, VAD: {}, Command: {}",
+        app.current_panel, app.vad_active, app.command_mode
     );
 }
 

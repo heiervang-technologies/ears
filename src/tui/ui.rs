@@ -43,13 +43,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
 /// Render the header with title and status
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
-    let (status_char, status_color, status_text) = if app.is_recording {
-        (
-            '●',
-            Color::Red,
-            format!("Recording ({}s)", app.recording_duration),
-        )
-    } else if app.vad_active {
+    let (status_char, status_color, status_text) = if app.vad_active {
         let ch = if app.is_speaking { '●' } else { '◉' };
         let color = if app.is_speaking {
             Color::Yellow
@@ -577,7 +571,7 @@ fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
 
     // Stats in bottom-right corner (we'll create a custom block title for this)
     let stats_text = format!("Latency: {}ms  #{}", app.avg_latency_ms, app.segments_processed);
-    let title = if app.vad_active && app.segments_processed > 0 {
+    let title = if app.segments_processed > 0 {
         format!(" Live Transcription {} ", stats_text)
     } else {
         " Live Transcription ".to_string()

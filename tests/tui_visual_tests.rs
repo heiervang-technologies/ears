@@ -41,36 +41,21 @@ fn test_render_initial_state() {
 
     // Basic assertions about what should be visible
     assert!(output.contains("ears"));
-    assert!(output.contains("Status"));
     assert!(output.contains("Configuration"));
     assert!(output.contains("Logs"));
     assert!(output.contains("○")); // Not recording indicator
 }
 
 #[test]
-fn test_render_recording_state() {
+fn test_render_vad_active_state() {
     let mut app = App::new();
-    app.is_recording = true;
-    app.recording_duration = 5;
+    app.vad_active = true;
 
     let output = render_to_string(&mut app, 80, 24);
     println!("\n{}", output);
 
-    // Should show recording indicator
-    assert!(output.contains("●")); // Recording indicator
-    assert!(output.contains("5s")); // Duration
-}
-
-#[test]
-fn test_render_status_panel() {
-    let mut app = App::new();
-    assert_eq!(app.current_panel, Panel::Status);
-
-    let output = render_to_string(&mut app, 100, 30);
-    println!("\n{}", output);
-
-    // Status panel should be visible
-    assert!(output.contains("Status"));
+    // Should show VAD active indicator
+    assert!(output.contains("◉")); // VAD listening indicator
 }
 
 #[test]

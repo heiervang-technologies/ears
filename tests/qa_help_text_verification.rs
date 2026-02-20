@@ -11,8 +11,8 @@ fn test_tab_key_works_but_not_documented() {
     // This is a documentation issue - Tab keys work but aren't shown to users
     let mut app = App::new();
 
-    // Start on Status
-    assert_eq!(app.current_panel, Panel::Status);
+    // Start on LiveTranscription
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Press Tab - should move to next panel (Configuration)
     let key_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
@@ -23,12 +23,12 @@ fn test_tab_key_works_but_not_documented() {
         "Tab should move to next panel"
     );
 
-    // Press Shift+Tab - should move to previous panel (Status)
+    // Press Shift+Tab - should move to previous panel (LiveTranscription)
     let key_shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
     app.handle_key(key_shift_tab).unwrap();
     assert_eq!(
         app.current_panel,
-        Panel::Status,
+        Panel::LiveTranscription,
         "Shift+Tab should move to previous panel"
     );
 
@@ -44,8 +44,8 @@ fn test_c_key_shortcut_not_documented() {
     // but this is not documented in the footer
     let mut app = App::new();
 
-    // Start on Status
-    assert_eq!(app.current_panel, Panel::Status);
+    // Start on LiveTranscription
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Press 'c' - should jump to Configuration
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
@@ -66,13 +66,13 @@ fn test_all_documented_keys_work() {
     // Footer shows: "[Space] Start/Stop  [h/l] Tabs  [j/k] Scroll  [:] Command  [q] Quit"
     let mut app = App::new();
 
-    // [Space] Start/Stop
-    let was_recording = app.is_recording;
+    // [Space] Start/Stop (toggles VAD)
+    let was_vad_active = app.vad_active;
     let key_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
     app.handle_key(key_space).unwrap();
     assert_ne!(
-        app.is_recording, was_recording,
-        "Space should toggle recording"
+        app.vad_active, was_vad_active,
+        "Space should toggle VAD"
     );
 
     // [h/l] Tabs
