@@ -6,7 +6,7 @@ expression: output
 │ears vX.X.X │ Status: ○ Idle                                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ▸ Status │ ▸ Configuration │ ▸ Logs │ ▸ Live                                                     │
+│ ▸ Configuration │ ▸ Logs │ ▸ Live                                                                │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Configuration ───────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
@@ -20,15 +20,15 @@ expression: output
 │                                                                                                  │
 │Language: auto (Shift+L to cycle)                                                                 │
 │                                                                                                  │
-│                                                                                                  │
 │Text Filters:                                                                                     │
 │  [ ] Lowercase [f]                                                                               │
 │  [ ] Remove Punctuation [p]                                                                      │
 │                                                                                                  │
-│[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation   │
-│                                                                                                  │
+│Typing Settings:                                                                                  │
+│  [x] Progressive Typing [t]                                                                      │
+│  [x] Auto-correction [a]                                                                         │
 │                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [q] Quit                        │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [t] Typing  [a] Auto-corr  [q] Q│
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

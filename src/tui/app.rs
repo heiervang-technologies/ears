@@ -41,7 +41,6 @@ pub struct ClickableRegion {
 /// The current panel being displayed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
-    Status,
     Configuration,
     Logs,
     LiveTranscription,
@@ -57,18 +56,16 @@ impl Panel {
     /// Get the next panel (tab right)
     pub fn next(self) -> Self {
         match self {
-            Panel::Status => Panel::Configuration,
             Panel::Configuration => Panel::Logs,
             Panel::Logs => Panel::LiveTranscription,
-            Panel::LiveTranscription => Panel::Status,
+            Panel::LiveTranscription => Panel::Configuration,
         }
     }
 
     /// Get the previous panel (tab left)
     pub fn prev(self) -> Self {
         match self {
-            Panel::Status => Panel::LiveTranscription,
-            Panel::Configuration => Panel::Status,
+            Panel::Configuration => Panel::LiveTranscription,
             Panel::Logs => Panel::Configuration,
             Panel::LiveTranscription => Panel::Logs,
         }
@@ -77,7 +74,6 @@ impl Panel {
     /// Get the panel title
     pub fn title(self) -> &'static str {
         match self {
-            Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
             Panel::LiveTranscription => "Live",
@@ -98,11 +94,7 @@ pub struct App {
     pub editing_field: Option<EditableField>,
     /// Buffer for the field being edited
     pub edit_buffer: String,
-    /// Recording state (for display)
-    pub is_recording: bool,
-    /// Recording duration in seconds
-    pub recording_duration: u64,
-    /// Tick counter for tracking recording duration (4 ticks = 1 second at 250ms tick rate)
+    /// Tick counter for lazy model fetch
     tick_count: u64,
     /// Current model name
     pub model: String,
@@ -171,13 +163,11 @@ impl App {
         let model = config.model.clone().unwrap_or_else(|| "(connecting...)".to_string());
 
         Self {
-            current_panel: Panel::Status,
+            current_panel: Panel::LiveTranscription,
             command_mode: false,
             command_buffer: String::new(),
             editing_field: None,
             edit_buffer: String::new(),
-            is_recording: false,
-            recording_duration: 0,
             tick_count: 0,
             model,
             server: server_url,
@@ -290,13 +280,9 @@ impl App {
                 self.scroll_up();
             }
 
-            // Space to toggle recording (in Status panel) or VAD mode (in Live panel)
+            // Space to toggle VAD mode (consistent across all panels)
             (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
-                    self.toggle_vad_mode();
-                } else {
-                    self.toggle_recording();
-                }
+                self.toggle_vad_mode();
             }
 
             // 'v' to toggle VAD mode
@@ -304,16 +290,16 @@ impl App {
                 self.toggle_vad_mode();
             }
 
-            // 't' to toggle progressive typing (in Live panel)
+            // 't' to toggle progressive typing (in Configuration panel)
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::Configuration {
                     self.toggle_progressive_typing();
                 }
             }
 
-            // 'a' to toggle auto-correction (in Live panel)
+            // 'a' to toggle auto-correction (in Configuration panel)
             (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::Configuration {
                     self.toggle_auto_correction();
                 }
             }
@@ -578,31 +564,6 @@ impl App {
         }
     }
 
-    /// Toggle recording state
-    fn toggle_recording(&mut self) {
-        if self.vad_active {
-            self.add_log("Cannot record while VAD is active");
-            return;
-        }
-
-        // Check if user is viewing the last log before adding a new one
-        let was_viewing_last_log =
-            !self.logs.is_empty() && self.selected_log == self.logs.len() - 1;
-
-        self.is_recording = !self.is_recording;
-        if self.is_recording {
-            self.logs.push("Started recording".to_string());
-            self.recording_duration = 0;
-            self.tick_count = 0;
-        } else {
-            self.logs.push("Stopped recording".to_string());
-        }
-
-        // If user was viewing the last log, update selected_log to follow the new log
-        if was_viewing_last_log {
-            self.selected_log = self.logs.len() - 1;
-        }
-    }
 
     /// Cycle through languages: auto -> en -> no -> auto
     fn cycle_language(&mut self) {
@@ -667,11 +628,6 @@ impl App {
 
     /// Toggle VAD mode
     pub fn toggle_vad_mode(&mut self) {
-        if self.is_recording {
-            self.add_log("Cannot enable VAD while recording");
-            return;
-        }
-
         self.vad_active = !self.vad_active;
         if self.vad_active {
             self.add_log("VAD mode enabled");
@@ -894,7 +850,6 @@ impl App {
     }
 
     /// Handle a tick event
-    /// Updates recording duration if currently recording
     pub fn handle_tick(&mut self) {
         self.tick_count += 1;
 
@@ -904,12 +859,6 @@ impl App {
                 Self::fetch_model_name(&self.server, self.api_key.as_deref()).unwrap_or_else(|| "(offline)".to_string());
         }
 
-        if self.is_recording {
-            // With 250ms tick rate, 4 ticks = 1 second
-            if self.tick_count.is_multiple_of(4) {
-                self.recording_duration += 1;
-            }
-        }
     }
 }
 

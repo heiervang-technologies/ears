@@ -13,8 +13,8 @@ fn test_keybinding_conflict_c_key() {
     // This test verifies both behaviors work correctly
     let mut app = App::new();
 
-    // Start on Status panel
-    assert_eq!(app.current_panel, Panel::Status);
+    // Start on LiveTranscription panel
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Press 'c' alone - should jump to Configuration panel
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
@@ -186,8 +186,8 @@ fn test_scroll_on_non_logs_panel() {
     // What happens when pressing j/k on other panels?
     let mut app = App::new();
 
-    // Start on Status panel
-    assert_eq!(app.current_panel, Panel::Status);
+    // Start on LiveTranscription panel
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Press j and k - should do nothing
     let key_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -196,8 +196,8 @@ fn test_scroll_on_non_logs_panel() {
     app.handle_key(key_j).unwrap();
     app.handle_key(key_k).unwrap();
 
-    // Still on Status panel
-    assert_eq!(app.current_panel, Panel::Status);
+    // Still on LiveTranscription panel
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     // Switch to Configuration panel
     app.current_panel = Panel::Configuration;
@@ -221,10 +221,6 @@ fn test_rapid_panel_switching() {
         let key_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
         app.handle_key(key_h).unwrap();
     }
-
-    // After 100 left presses (wrapping around), should be back at original
-    // Wait, 100 % 3 = 1, so we should be 1 panel to the left
-    // Status -> Logs (1 left) -> ... -> depends on starting point
 
     // Let's just verify no crash and state is consistent
     assert!(!app.command_mode);

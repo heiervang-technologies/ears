@@ -13,8 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AppState {
     current_panel: Panel,
-    is_recording: bool,
-    recording_duration: u64,
+    vad_active: bool,
     command_mode: bool,
     command_buffer: String,
     selected_log: usize,
@@ -25,8 +24,7 @@ impl From<&App> for AppState {
     fn from(app: &App) -> Self {
         Self {
             current_panel: app.current_panel,
-            is_recording: app.is_recording,
-            recording_duration: app.recording_duration,
+            vad_active: app.vad_active,
             command_mode: app.command_mode,
             command_buffer: app.command_buffer.clone(),
             selected_log: app.selected_log,
@@ -207,26 +205,26 @@ fn test_explorer_finds_all_panels() {
     println!("\nPanels discovered: {:?}", panels);
 
     // Should find all three panels
-    assert!(panels.contains(&Panel::Status));
     assert!(panels.contains(&Panel::Configuration));
     assert!(panels.contains(&Panel::Logs));
+    assert!(panels.contains(&Panel::LiveTranscription));
 }
 
 #[test]
-fn test_explorer_finds_recording_states() {
+fn test_explorer_finds_vad_states() {
     let discovered_states = explore_state_space(50);
 
-    let recording_states: Vec<_> = discovered_states
+    let vad_states: Vec<_> = discovered_states
         .keys()
-        .filter(|s| s.is_recording)
+        .filter(|s| s.vad_active)
         .collect();
 
-    println!("\nRecording states found: {}", recording_states.len());
+    println!("\nVAD active states found: {}", vad_states.len());
 
-    // Should find at least one recording state
+    // Should find at least one VAD active state
     assert!(
-        !recording_states.is_empty(),
-        "Should discover recording state"
+        !vad_states.is_empty(),
+        "Should discover VAD active state"
     );
 }
 

@@ -39,7 +39,7 @@ fn test_interactive_session_scripted() {
     let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert!(output.contains("○ Idle"));
-    assert_eq!(app.current_panel, Panel::Status);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     println!("\n=== PRESS 'l' to go to Configuration panel ===");
     app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
@@ -55,13 +55,13 @@ fn test_interactive_session_scripted() {
     println!("{}", output);
     assert_eq!(app.current_panel, Panel::Logs);
 
-    println!("\n=== PRESS Space to start recording ===");
+    println!("\n=== PRESS Space to enable VAD ===");
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
         .unwrap();
     let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
-    assert!(app.is_recording);
-    assert!(output.contains("●")); // Recording indicator
+    assert!(app.vad_active);
+    assert!(output.contains("◉")); // VAD listening indicator
 
     println!("\n=== PRESS ':' to enter command mode ===");
     app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))
@@ -121,7 +121,7 @@ fn test_complex_interaction_flow() {
     let mut app = App::new();
 
     // User opens app
-    println!("1. App opens on Status panel");
+    println!("1. App opens on LiveTranscription panel");
     let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
 
@@ -153,8 +153,8 @@ fn test_complex_interaction_flow() {
         .unwrap();
     assert_eq!(app.selected_log, 1);
 
-    // Navigate back to Status
-    println!("6. User presses 'h' twice to go back to Status");
+    // Navigate back to LiveTranscription (Logs -> Configuration -> LiveTranscription)
+    println!("6. User presses 'h' twice to go back to LiveTranscription");
     app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
         .unwrap();
     app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
@@ -162,7 +162,7 @@ fn test_complex_interaction_flow() {
 
     let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
-    assert_eq!(app.current_panel, Panel::Status);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     println!("=== SESSION COMPLETE ===");
     println!("\nThis demonstrates SCRIPTED interaction, not FREE interaction.");

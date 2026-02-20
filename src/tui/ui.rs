@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs},
     Frame,
 };
 
@@ -32,7 +32,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     // Render current panel content
     match app.current_panel {
-        Panel::Status => render_status_panel(app, frame, chunks[2]),
         Panel::Configuration => render_config_panel(app, frame, chunks[2]),
         Panel::Logs => render_logs_panel(app, frame, chunks[2]),
         Panel::LiveTranscription => render_live_transcription_panel(app, frame, chunks[2]),
@@ -44,13 +43,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
 /// Render the header with title and status
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
-    let (status_char, status_color, status_text) = if app.is_recording {
-        (
-            '●',
-            Color::Red,
-            format!("Recording ({}s)", app.recording_duration),
-        )
-    } else if app.vad_active {
+    let (status_char, status_color, status_text) = if app.vad_active {
         let ch = if app.is_speaking { '●' } else { '◉' };
         let color = if app.is_speaking {
             Color::Yellow
@@ -92,18 +85,16 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the tab bar
 fn render_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
-    let titles = vec!["▸ Status", "▸ Configuration", "▸ Logs", "▸ Live"];
+    let titles = vec!["▸ Configuration", "▸ Logs", "▸ Live"];
     let panels = [
-        Panel::Status,
         Panel::Configuration,
         Panel::Logs,
         Panel::LiveTranscription,
     ];
     let index = match app.current_panel {
-        Panel::Status => 0,
-        Panel::Configuration => 1,
-        Panel::Logs => 2,
-        Panel::LiveTranscription => 3,
+        Panel::Configuration => 0,
+        Panel::Logs => 1,
+        Panel::LiveTranscription => 2,
     };
 
     let tabs = Tabs::new(titles.clone())
@@ -132,56 +123,6 @@ fn render_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// Render the status panel
-fn render_status_panel(app: &App, frame: &mut Frame, area: Rect) {
-    let profile_display = app.profile.as_deref().unwrap_or("default");
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Current State: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(if app.is_recording {
-                "Recording"
-            } else {
-                "Idle"
-            }),
-        ]),
-        Line::from(vec![
-            Span::styled("Profile: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(profile_display, Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::styled("Model: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(&app.model),
-        ]),
-        Line::from(vec![
-            Span::styled("Server: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(&app.server),
-        ]),
-        Line::from(vec![
-            Span::styled("Device: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(&app.device),
-        ]),
-        Line::from(vec![
-            Span::styled("Language: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(app.language.as_deref().unwrap_or("auto")),
-        ]),
-    ];
-
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Status ")
-                .border_style(Style::default().fg(Color::Green)),
-        )
-        .alignment(Alignment::Left);
-
-    frame.render_widget(paragraph, area);
-}
 
 /// Render the configuration panel
 fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -301,7 +242,6 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
     // Text Filters section
     text.push(Line::from(""));
-    text.push(Line::from(""));
     text.push(Line::from(vec![Span::styled(
         "Text Filters:",
         Style::default().add_modifier(Modifier::BOLD),
@@ -333,6 +273,31 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         Span::raw(" Remove Punctuation [p]"),
     ]));
 
+    // Typing Settings section
+    text.push(Line::from(""));
+    text.push(Line::from(vec![Span::styled(
+        "Typing Settings:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    let progressive_typing_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.progressive_typing { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Progressive Typing [t]"),
+    ]));
+    let auto_correction_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.auto_correction { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Auto-correction [a]"),
+    ]));
+
     text.push(Line::from(""));
 
     // Show appropriate help text
@@ -354,7 +319,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[Shift+P] Profile  [e] Edit URL  [d] Device  [Shift+L] Language  [f] Lowercase  [p] Punctuation",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [t] Typing  [a] Auto-corr",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -376,7 +341,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(paragraph, area);
 
-    // Register clickable regions for text filters
+    // Register clickable regions for text filters and typing settings
     let inner_y = area.y + 1;
     let inner_x = area.x + 1;
     let inner_width = area.width.saturating_sub(2);
@@ -391,6 +356,28 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
         ClickAction::TogglePunctuationFilter,
+    );
+
+    // Progressive Typing toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + progressive_typing_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleProgressiveTyping,
+    );
+
+    // Auto-correction toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + auto_correction_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleAutoCorrection,
     );
 
     // Device picker clickable regions
@@ -415,17 +402,7 @@ fn render_logs_panel(app: &App, frame: &mut Frame, area: Rect) {
     let items: Vec<ListItem> = app
         .logs
         .iter()
-        .enumerate()
-        .map(|(i, log)| {
-            let style = if i == app.selected_log {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(log.as_str()).style(style)
-        })
+        .map(|log| ListItem::new(log.as_str()))
         .collect();
 
     let list = List::new(items)
@@ -441,7 +418,10 @@ fn render_logs_panel(app: &App, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    frame.render_widget(list, area);
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.selected_log));
+
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 /// Render the footer with key bindings and command mode
@@ -487,10 +467,10 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("[Space/v] ", Style::default().fg(Color::Cyan)),
             Span::raw("VAD  "),
-            Span::styled("[t] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Typing  "),
-            Span::styled("[a] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Auto-corr  "),
+            Span::styled("[c] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Config  "),
+            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Panels  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
@@ -509,20 +489,20 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw("Lower  "),
             Span::styled("[p] ", Style::default().fg(Color::Cyan)),
             Span::raw("Punct  "),
+            Span::styled("[t] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Typing  "),
+            Span::styled("[a] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Auto-corr  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
     } else {
-        // Default shortcuts
+        // Logs panel shortcuts
         Line::from(vec![
-            Span::styled("[Space] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Start/Stop  "),
-            Span::styled("[v] ", Style::default().fg(Color::Cyan)),
-            Span::raw("VAD  "),
-            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Panels  "),
             Span::styled("[j/k] ", Style::default().fg(Color::Cyan)),
             Span::raw("Scroll  "),
+            Span::styled("[Tab] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Panels  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
@@ -536,178 +516,75 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Render the live transcription panel
-fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect) {
-    // VAD status indicator
-    let vad_status_char = if app.vad_active { '●' } else { '○' };
-    let vad_status_color = if app.vad_active {
-        Color::Green
-    } else {
-        Color::Gray
-    };
-    let vad_status_text = if app.vad_active { "Active" } else { "Inactive" };
-
-    let mut text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("VAD Mode: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                vad_status_char.to_string(),
-                Style::default().fg(vad_status_color),
-            ),
-            Span::raw(" "),
-            Span::styled(vad_status_text, Style::default().fg(vad_status_color)),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Transcription:",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-    ];
-    let vad_line = 1; // Line index for VAD Mode (after empty line)
+fn render_live_transcription_panel(app: &App, frame: &mut Frame, area: Rect) {
+    let mut text = vec![];
 
     // Show transcription text (committed + uncommitted)
     if app.vad_active {
-        // Combine committed and uncommitted text
-        let full_text = format!("{}{}", app.committed_text, app.uncommitted_text);
-
-        if full_text.is_empty() {
+        if app.committed_text.is_empty() && app.uncommitted_text.is_empty() {
             text.push(Line::from(vec![Span::styled(
-                "  Listening...",
+                "Listening...",
                 Style::default().fg(Color::DarkGray),
             )]));
         } else {
-            // Split into lines for display
-            for line in full_text.lines() {
-                if line.len() <= app.committed_text.len() {
-                    // This line is fully committed
+            // Show committed text (split by newlines to handle multi-line transcriptions)
+            if !app.committed_text.is_empty() {
+                for line in app.committed_text.lines() {
                     text.push(Line::from(vec![Span::styled(
-                        format!("  {}", line),
+                        line.to_string(),
                         Style::default().fg(Color::White),
                     )]));
-                } else {
-                    // This line contains uncommitted text
-                    let committed_part = if line.len() <= app.committed_text.len() {
-                        line.to_string()
-                    } else {
-                        app.committed_text[app.committed_text.len().saturating_sub(line.len())..]
-                            .to_string()
-                    };
-
-                    text.push(Line::from(vec![
-                        Span::styled(
-                            format!("  {}", committed_part),
-                            Style::default().fg(Color::White),
-                        ),
-                        Span::styled(&app.uncommitted_text, Style::default().fg(Color::DarkGray)),
-                    ]));
                 }
             }
-        }
 
-        text.push(Line::from(""));
-        text.push(Line::from(vec![
-            Span::styled("  (", Style::default().fg(Color::DarkGray)),
-            Span::styled("gray", Style::default().fg(Color::DarkGray)),
-            Span::styled(" = uncommitted)", Style::default().fg(Color::DarkGray)),
-        ]));
+            // Show uncommitted text on same or next line
+            if !app.uncommitted_text.is_empty() {
+                if app.committed_text.is_empty() {
+                    text.push(Line::from(vec![Span::styled(
+                        app.uncommitted_text.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    )]));
+                } else {
+                    // Append to last line if committed text exists
+                    if let Some(last_line) = text.last_mut() {
+                        last_line.spans.push(Span::styled(
+                            app.uncommitted_text.clone(),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+            }
+
+            text.push(Line::from(""));
+            text.push(Line::from(vec![
+                Span::styled("(", Style::default().fg(Color::DarkGray)),
+                Span::styled("gray", Style::default().fg(Color::DarkGray)),
+                Span::styled(" = uncommitted)", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
     } else {
         text.push(Line::from(vec![Span::styled(
-            "  VAD mode is inactive. Press [Space] or [v] to enable.",
+            "VAD mode is inactive. Press [Space] or [v] to enable.",
             Style::default().fg(Color::Yellow),
         )]));
     }
 
-    // Count lines added in transcription section - used for clickable region positioning
-    let _transcription_lines = text.len();
-
-    // Settings section
-    text.push(Line::from(""));
-    text.push(Line::from(""));
-    text.push(Line::from(vec![Span::styled(
-        "Settings:",
-        Style::default().add_modifier(Modifier::BOLD),
-    )]));
-    let progressive_typing_line = text.len();
-    text.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            if app.progressive_typing { "[x]" } else { "[ ]" },
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::raw(" Progressive Typing [t]"),
-    ]));
-    let auto_correction_line = text.len();
-    text.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            if app.auto_correction { "[x]" } else { "[ ]" },
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::raw(" Auto-correction [a]"),
-    ]));
-
-    // Stats section
-    text.push(Line::from(""));
-    text.push(Line::from(""));
-    text.push(Line::from(vec![Span::styled(
-        "Stats:",
-        Style::default().add_modifier(Modifier::BOLD),
-    )]));
-    text.push(Line::from(vec![
-        Span::styled("  Latency: ", Style::default().fg(Color::DarkGray)),
-        Span::raw(format!("{}ms", app.avg_latency_ms)),
-    ]));
-    text.push(Line::from(vec![
-        Span::styled(
-            "  Segments processed: ",
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw(format!("{}", app.segments_processed)),
-    ]));
+    // Stats in bottom-right corner (we'll create a custom block title for this)
+    let stats_text = format!("Latency: {}ms  #{}", app.avg_latency_ms, app.segments_processed);
+    let title = if app.segments_processed > 0 {
+        format!(" Live Transcription {} ", stats_text)
+    } else {
+        " Live Transcription ".to_string()
+    };
 
     let paragraph = Paragraph::new(text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Live Transcription ")
+                .title(title)
                 .border_style(Style::default().fg(Color::Green)),
         )
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, area);
-
-    // Register clickable regions
-    // Content starts at area.y + 1 (border) and area.x + 1
-    let inner_y = area.y + 1;
-    let inner_x = area.x + 1;
-    let inner_width = area.width.saturating_sub(2);
-
-    // VAD Mode line (line index 1, after empty line at 0)
-    app.add_clickable_region(
-        Rect::new(inner_x, inner_y + vad_line as u16, inner_width, 1),
-        ClickAction::ToggleVadMode,
-    );
-
-    // Progressive Typing toggle
-    app.add_clickable_region(
-        Rect::new(
-            inner_x,
-            inner_y + progressive_typing_line as u16,
-            inner_width,
-            1,
-        ),
-        ClickAction::ToggleProgressiveTyping,
-    );
-
-    // Auto-correction toggle
-    app.add_clickable_region(
-        Rect::new(
-            inner_x,
-            inner_y + auto_correction_line as u16,
-            inner_width,
-            1,
-        ),
-        ClickAction::ToggleAutoCorrection,
-    );
 }

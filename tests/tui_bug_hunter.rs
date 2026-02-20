@@ -14,26 +14,22 @@ use std::collections::{HashMap, HashSet, VecDeque};
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AppState {
     current_panel: Panel,
-    is_recording: bool,
-    recording_duration: u64,
+    vad_active: bool,
     command_mode: bool,
     command_buffer: String,
     selected_log: usize,
     log_count: usize,
-    vad_active: bool,
 }
 
 impl From<&App> for AppState {
     fn from(app: &App) -> Self {
         Self {
             current_panel: app.current_panel,
-            is_recording: app.is_recording,
-            recording_duration: app.recording_duration,
+            vad_active: app.vad_active,
             command_mode: app.command_mode,
             command_buffer: app.command_buffer.clone(),
             selected_log: app.selected_log,
             log_count: app.logs.len(),
-            vad_active: app.vad_active,
         }
     }
 }
@@ -171,22 +167,12 @@ fn bug_hunt_recording_indicator_consistency() {
     let mut bugs = Vec::new();
 
     for (state, _app, output) in &states {
-        let has_recording_symbol = output.contains("●");
         let has_idle_symbol = output.contains("○");
         let has_vad_symbol = output.contains("◉");
 
-        if state.is_recording {
-            // Should show recording indicator
-            if !has_recording_symbol {
-                bugs.push(Bug {
-                    description: "State says recording=true but no ● symbol shown".to_string(),
-                    state: state.clone(),
-                    visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
-                });
-            }
-        } else if state.vad_active {
+        if state.vad_active {
             // VAD active: should show ◉ (listening) or ● (speaking)
-            if !has_vad_symbol && !has_recording_symbol {
+            if !has_vad_symbol && !output.contains("●") {
                 bugs.push(Bug {
                     description: "State says vad_active=true but no ◉ or ● symbol shown"
                         .to_string(),
@@ -198,7 +184,7 @@ fn bug_hunt_recording_indicator_consistency() {
             // Should show idle indicator
             if !has_idle_symbol {
                 bugs.push(Bug {
-                    description: "State says recording=false but no ○ symbol shown".to_string(),
+                    description: "State says idle but no ○ symbol shown".to_string(),
                     state: state.clone(),
                     visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
                 });
@@ -282,7 +268,6 @@ fn bug_hunt_panel_name_visibility() {
 
     for (state, _app, output) in &states {
         let expected_panel = match state.current_panel {
-            Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
             Panel::LiveTranscription => "Live",
@@ -413,11 +398,11 @@ fn bug_hunt_summary_report() {
         }
     }
 
-    // Check 2: Recording indicator
+    // Check 2: VAD indicator
     for (state, _, output) in &states {
-        if state.is_recording && !output.contains("●") {
+        if state.vad_active && !output.contains("◉") && !output.contains("●") {
             all_bugs.push(Bug {
-                description: "[HIGH] Recording indicator missing when recording=true".to_string(),
+                description: "[HIGH] VAD indicator missing when vad_active=true".to_string(),
                 state: state.clone(),
                 visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
             });
@@ -427,7 +412,6 @@ fn bug_hunt_summary_report() {
     // Check 3: Panel visibility
     for (state, _, output) in &states {
         let panel_name = match state.current_panel {
-            Panel::Status => "Status",
             Panel::Configuration => "Configuration",
             Panel::Logs => "Logs",
             Panel::LiveTranscription => "Live",
