@@ -167,6 +167,7 @@ impl WhisperClient {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<(), WhisperError> {
+        let start = std::time::Instant::now();
         let base = self.server_url.trim_end_matches('/');
 
         // Try /health first (local whisper servers)
@@ -180,7 +181,10 @@ impl WhisperClient {
 
         match request.send().await {
             Ok(response) if response.status().is_success() => {
-                info!("Whisper server is healthy");
+                info!(
+                    "Whisper server is healthy (via /health) in {:?}",
+                    start.elapsed()
+                );
                 return Ok(());
             }
             _ => {}
@@ -201,7 +205,10 @@ impl WhisperClient {
             .map_err(|e| WhisperError::ConnectionError(e.to_string()))?;
 
         if response.status().is_success() {
-            info!("Whisper server is healthy (via /v1/models)");
+            info!(
+                "Whisper server is healthy (via /v1/models) in {:?}",
+                start.elapsed()
+            );
             Ok(())
         } else {
             Err(WhisperError::ConnectionError(format!(
@@ -288,6 +295,7 @@ impl WhisperClient {
 
     /// Internal transcription logic without retry
     async fn transcribe_internal(&self, path: &Path) -> Result<String, WhisperError> {
+        let start = std::time::Instant::now();
         let base = self.server_url.trim_end_matches('/');
         let url = format!("{}/v1/audio/transcriptions", base);
         debug!("Sending transcription request to {}", url);
@@ -337,7 +345,11 @@ impl WhisperClient {
 
         // Parse response
         let transcription: TranscriptionResponse = response.json().await?;
-        debug!("Received transcription: {}", transcription.text);
+        info!(
+            "Whisper API call completed in {:?}: \"{}\"",
+            start.elapsed(),
+            transcription.text
+        );
 
         Ok(transcription.text)
     }

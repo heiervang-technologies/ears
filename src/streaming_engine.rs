@@ -193,13 +193,16 @@ impl StreamingEngine {
         );
 
         // Save segment to temporary WAV file
+        let wav_start = Instant::now();
         let segment_file = self
             .temp_dir
             .join(format!("segment_{}.wav", self.stats.segments_processed));
         self.save_wav(&segment_file, &segment.samples)
             .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
+        debug!("WAV save took {:?}", wav_start.elapsed());
 
         // Transcribe with Whisper
+        let transcribe_start = Instant::now();
         let transcript = match self.whisper_client.transcribe(&segment_file).await {
             Ok(text) => text,
             Err(e) => {
@@ -208,6 +211,8 @@ impl StreamingEngine {
                 return Err(StreamingEngineError::TranscriptionError(e.to_string()));
             }
         };
+
+        info!("Transcription took {:?}", transcribe_start.elapsed());
 
         // Clean up temp file
         let _ = std::fs::remove_file(&segment_file);
@@ -236,13 +241,18 @@ impl StreamingEngine {
 
         // Update progressive typing with the full accumulated text
         if self.config.progressive_typing && !newly_committed.is_empty() {
+            let typing_start = Instant::now();
             match self.progressive_typing.update(&self.accumulated_text) {
                 Ok(chars) => {
-                    debug!("Typed {} characters", chars);
+                    info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
                     self.stats.chars_typed += chars;
                 }
                 Err(e) => {
-                    warn!("Progressive typing error: {}", e);
+                    warn!(
+                        "Progressive typing error after {:?}: {}",
+                        typing_start.elapsed(),
+                        e
+                    );
                     self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
                 }
             }
@@ -270,6 +280,13 @@ impl StreamingEngine {
             segments_processed: self.stats.segments_processed,
             avg_latency_ms: self.stats.avg_latency_ms,
         });
+
+        info!(
+            "Segment #{} total: {:?} (avg latency: {}ms)",
+            self.stats.segments_processed,
+            start_time.elapsed(),
+            self.stats.avg_latency_ms
+        );
 
         Ok(())
     }
