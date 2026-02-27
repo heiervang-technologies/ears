@@ -282,6 +282,7 @@ fn test_vad_settings_toml_roundtrip() {
         speech_threshold: 0.7,
         min_speech_duration_ms: 200,
         max_silence_duration_ms: 500,
+        pre_speech_buffer_ms: 300,
     };
 
     let toml_str = toml::to_string_pretty(&settings).unwrap();
@@ -290,6 +291,7 @@ fn test_vad_settings_toml_roundtrip() {
     assert!((loaded.speech_threshold - 0.7).abs() < f32::EPSILON);
     assert_eq!(loaded.min_speech_duration_ms, 200);
     assert_eq!(loaded.max_silence_duration_ms, 500);
+    assert_eq!(loaded.pre_speech_buffer_ms, 300);
 }
 
 #[test]

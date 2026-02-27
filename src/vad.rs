@@ -4,6 +4,7 @@
 //! model via ONNX Runtime. It replaces the previous energy-based approach which was
 //! unable to distinguish speech from background noise on real microphones.
 
+use std::collections::VecDeque;
 use thiserror::Error;
 use tracing::debug;
 use voice_activity_detector::VoiceActivityDetector;
@@ -48,6 +49,10 @@ pub struct VadConfig {
     pub min_speech_duration_ms: u64,
     /// Maximum silence duration before ending segment (default: 700ms)
     pub max_silence_duration_ms: u64,
+    /// Pre-speech replay buffer duration in milliseconds (default: 500ms)
+    /// Audio before VAD triggers is kept in a ring buffer and prepended to the
+    /// segment so the beginning of utterances is not clipped.
+    pub pre_speech_buffer_ms: u64,
 }
 
 impl Default for VadConfig {
@@ -57,6 +62,7 @@ impl Default for VadConfig {
             speech_threshold: 0.5,
             min_speech_duration_ms: 300,
             max_silence_duration_ms: 700,
+            pre_speech_buffer_ms: 500,
         }
     }
 }
@@ -191,6 +197,10 @@ pub struct SpeechSegment {
 /// Handles reframing: incoming audio chunks (e.g. 1600 samples / 100ms from
 /// ContinuousCapture) are buffered and processed in exact 512-sample frames
 /// as required by Silero VAD.
+///
+/// Includes a **pre-speech replay buffer** that keeps the last N ms of audio
+/// during silence. When speech is detected, the replay buffer is prepended to
+/// the segment so the beginning of the utterance is not clipped.
 pub struct VadSegmentDetector {
     vad: SileroVad,
     sample_rate: usize,
@@ -199,12 +209,17 @@ pub struct VadSegmentDetector {
     total_processed_ms: u64,
     /// Reframing buffer for non-aligned input chunks
     reframe_buffer: Vec<f32>,
+    /// Pre-speech replay buffer (ring buffer of recent silence frames)
+    pre_speech_buffer: VecDeque<f32>,
+    /// Maximum number of samples to keep in the pre-speech buffer
+    pre_speech_buffer_capacity: usize,
 }
 
 impl VadSegmentDetector {
     /// Create a new VadSegmentDetector
     pub fn new(config: VadConfig) -> Result<Self, VadError> {
         let sample_rate = config.sample_rate;
+        let pre_speech_samples = (config.pre_speech_buffer_ms as usize * sample_rate) / 1000;
         let vad = SileroVad::new(config)?;
         Ok(Self {
             vad,
@@ -213,13 +228,28 @@ impl VadSegmentDetector {
             segment_start_ms: 0,
             total_processed_ms: 0,
             reframe_buffer: Vec::with_capacity(SILERO_FRAME_SIZE * 2),
+            pre_speech_buffer: VecDeque::with_capacity(pre_speech_samples),
+            pre_speech_buffer_capacity: pre_speech_samples,
         })
+    }
+
+    /// Push a frame into the pre-speech ring buffer, evicting old samples if full
+    fn push_to_pre_speech_buffer(&mut self, frame: &[f32]) {
+        for &sample in frame {
+            if self.pre_speech_buffer.len() >= self.pre_speech_buffer_capacity {
+                self.pre_speech_buffer.pop_front();
+            }
+            self.pre_speech_buffer.push_back(sample);
+        }
     }
 
     /// Process audio and extract speech segments
     ///
     /// Incoming samples are buffered and processed in exact 512-sample frames.
     /// Any remainder is kept in the reframe buffer for the next call.
+    ///
+    /// When speech starts, the pre-speech replay buffer is prepended to the
+    /// segment to capture the onset of the utterance.
     ///
     /// # Arguments
     /// * `samples` - Audio samples to process (any length)
@@ -243,8 +273,23 @@ impl VadSegmentDetector {
             match result {
                 VadResult::Speech => {
                     if self.current_segment.is_none() {
-                        self.current_segment = Some(Vec::new());
-                        self.segment_start_ms = self.total_processed_ms;
+                        // Speech just started — prepend replay buffer
+                        let pre_speech_samples: Vec<f32> =
+                            self.pre_speech_buffer.drain(..).collect();
+                        let pre_speech_duration_ms =
+                            (pre_speech_samples.len() as u64 * 1000) / (self.sample_rate as u64);
+                        let mut segment =
+                            Vec::with_capacity(pre_speech_samples.len() + frame_size * 100);
+                        segment.extend_from_slice(&pre_speech_samples);
+                        self.current_segment = Some(segment);
+                        self.segment_start_ms = self
+                            .total_processed_ms
+                            .saturating_sub(pre_speech_duration_ms);
+                        debug!(
+                            "Speech segment started with {}ms replay buffer ({} samples)",
+                            pre_speech_duration_ms,
+                            pre_speech_samples.len()
+                        );
                     }
                     if let Some(ref mut segment) = self.current_segment {
                         segment.extend_from_slice(&frame);
@@ -258,6 +303,8 @@ impl VadSegmentDetector {
                             samples: segment_samples,
                         });
                     }
+                    // During silence, accumulate into the pre-speech ring buffer
+                    self.push_to_pre_speech_buffer(&frame);
                 }
             }
 
@@ -279,6 +326,7 @@ impl VadSegmentDetector {
         self.segment_start_ms = 0;
         self.total_processed_ms = 0;
         self.reframe_buffer.clear();
+        self.pre_speech_buffer.clear();
     }
 }
 
@@ -361,6 +409,7 @@ mod tests {
         assert!((config.speech_threshold - 0.5).abs() < f32::EPSILON);
         assert_eq!(config.min_speech_duration_ms, 300);
         assert_eq!(config.max_silence_duration_ms, 700);
+        assert_eq!(config.pre_speech_buffer_ms, 500);
     }
 
     #[test]
@@ -415,6 +464,66 @@ mod tests {
         assert!(!detector.is_speaking());
         assert_eq!(detector.total_processed_ms, 0);
         assert!(detector.reframe_buffer.is_empty());
+        assert!(detector.pre_speech_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_capacity() {
+        // 500ms at 16kHz = 8000 samples
+        let detector = VadSegmentDetector::new(VadConfig::default()).unwrap();
+        assert_eq!(detector.pre_speech_buffer_capacity, 8000);
+
+        // Custom: 1000ms = 16000 samples
+        let detector = VadSegmentDetector::new(VadConfig {
+            pre_speech_buffer_ms: 1000,
+            ..VadConfig::default()
+        })
+        .unwrap();
+        assert_eq!(detector.pre_speech_buffer_capacity, 16000);
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_fills_during_silence() {
+        let mut detector = VadSegmentDetector::new(VadConfig {
+            pre_speech_buffer_ms: 200, // 3200 samples at 16kHz
+            ..VadConfig::default()
+        })
+        .unwrap();
+
+        // Feed 100ms of silence (1600 samples) — processed as 3 frames (1536 samples)
+        let silence = generate_silence(100, SILERO_SAMPLE_RATE);
+        detector.process(&silence).unwrap();
+
+        // Pre-speech buffer should have 3 frames * 512 = 1536 samples
+        assert_eq!(detector.pre_speech_buffer.len(), 1536);
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_evicts_old_samples() {
+        let mut detector = VadSegmentDetector::new(VadConfig {
+            pre_speech_buffer_ms: 100, // 1600 samples at 16kHz
+            ..VadConfig::default()
+        })
+        .unwrap();
+
+        // Feed 500ms of silence — more than the 100ms buffer
+        let silence = generate_silence(500, SILERO_SAMPLE_RATE);
+        detector.process(&silence).unwrap();
+
+        // Buffer should be at capacity (1600 samples), not growing unbounded
+        assert!(detector.pre_speech_buffer.len() <= detector.pre_speech_buffer_capacity);
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_cleared_on_reset() {
+        let mut detector = VadSegmentDetector::new(VadConfig::default()).unwrap();
+
+        let silence = generate_silence(300, SILERO_SAMPLE_RATE);
+        detector.process(&silence).unwrap();
+        assert!(!detector.pre_speech_buffer.is_empty());
+
+        detector.reset();
+        assert!(detector.pre_speech_buffer.is_empty());
     }
 
     #[test]
