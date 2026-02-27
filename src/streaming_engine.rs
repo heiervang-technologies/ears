@@ -7,6 +7,7 @@
 //! - LocalAgreement policy
 //! - Progressive typing
 
+use crate::desktop::{TextInput, TypingMode};
 use crate::progressive_typing::{ProgressiveTypingConfig, ProgressiveTypingEngine};
 use crate::streaming::{AudioBuffer, LocalAgreementPolicy, StreamingConfig};
 use crate::vad::{SpeechSegment, VadConfig, VadSegmentDetector};
@@ -114,6 +115,12 @@ pub struct StreamingEngine {
 
     /// Track previous speaking state to emit SpeechStarted only on transition
     was_speaking: bool,
+
+    /// Whether to send Enter key after each segment
+    auto_enter: bool,
+
+    /// Current typing mode (needed for send_enter)
+    typing_mode: TypingMode,
 }
 
 impl StreamingEngine {
@@ -144,6 +151,8 @@ impl StreamingEngine {
             temp_dir,
             accumulated_text: String::new(),
             was_speaking: false,
+            auto_enter: false,
+            typing_mode: TypingMode::Auto,
         })
     }
 
@@ -263,6 +272,13 @@ impl StreamingEngine {
                     self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
                 }
             }
+
+            // Send Enter key after typing if auto_enter is enabled
+            if self.auto_enter {
+                if let Err(e) = TextInput::send_enter(self.typing_mode) {
+                    warn!("Failed to send Enter key: {}", e);
+                }
+            }
         }
 
         // Update stats
@@ -368,6 +384,7 @@ impl StreamingEngine {
         self.accumulated_text.clear();
         self.stats = StreamingStats::default();
         self.was_speaking = false;
+        self.auto_enter = false;
     }
 
     /// Update configuration
@@ -385,10 +402,13 @@ impl StreamingEngine {
         &mut self,
         progressive: bool,
         auto_correction: bool,
-        typing_mode: crate::desktop::TypingMode,
+        typing_mode: TypingMode,
+        auto_enter: bool,
     ) {
         self.config.progressive_typing = progressive;
         self.config.auto_correction = auto_correction;
+        self.auto_enter = auto_enter;
+        self.typing_mode = typing_mode;
         self.progressive_typing.set_config(ProgressiveTypingConfig {
             enabled: progressive,
             auto_correction,

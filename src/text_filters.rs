@@ -12,6 +12,9 @@ pub struct TextFilters {
     pub lowercase: bool,
     /// Remove punctuation marks
     pub remove_punctuation: bool,
+    /// Send Enter key after each transcription
+    #[serde(default)]
+    pub auto_enter: bool,
 }
 
 impl TextFilters {
@@ -37,7 +40,7 @@ impl TextFilters {
 
     /// Check if any filter is enabled
     pub fn any_enabled(&self) -> bool {
-        self.lowercase || self.remove_punctuation
+        self.lowercase || self.remove_punctuation || self.auto_enter
     }
 }
 
@@ -99,7 +102,7 @@ mod tests {
     fn test_lowercase() {
         let filters = TextFilters {
             lowercase: true,
-            remove_punctuation: false,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "hello, world!");
     }
@@ -107,8 +110,8 @@ mod tests {
     #[test]
     fn test_remove_punctuation() {
         let filters = TextFilters {
-            lowercase: false,
             remove_punctuation: true,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "Hello World");
     }
@@ -118,6 +121,7 @@ mod tests {
         let filters = TextFilters {
             lowercase: true,
             remove_punctuation: true,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "hello world");
     }
@@ -127,6 +131,7 @@ mod tests {
         let filters = TextFilters {
             lowercase: true,
             remove_punctuation: true,
+            ..Default::default()
         };
         // Typical ASR output that user wants to use in command line
         assert_eq!(
@@ -142,13 +147,19 @@ mod tests {
 
         let filters = TextFilters {
             lowercase: true,
-            remove_punctuation: false,
+            ..Default::default()
         };
         assert!(filters.any_enabled());
 
         let filters = TextFilters {
-            lowercase: false,
             remove_punctuation: true,
+            ..Default::default()
+        };
+        assert!(filters.any_enabled());
+
+        let filters = TextFilters {
+            auto_enter: true,
+            ..Default::default()
         };
         assert!(filters.any_enabled());
     }

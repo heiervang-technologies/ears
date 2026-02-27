@@ -383,6 +383,44 @@ impl TextInput {
         false
     }
 
+    /// Send an Enter/Return key press
+    pub fn send_enter(mode: TypingMode) -> Result<()> {
+        use std::process::Stdio;
+
+        let use_wtype = match mode {
+            TypingMode::Auto => Self::is_omarchy(),
+            TypingMode::Wtype => true,
+            TypingMode::Paste => false,
+        };
+
+        if use_wtype {
+            let status = Command::new("wtype")
+                .arg("-k")
+                .arg("Return")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("Failed to run wtype for Enter key")?;
+            if !status.success() {
+                anyhow::bail!("wtype Return failed with status: {}", status);
+            }
+        } else {
+            let status = Command::new("ydotool")
+                .args(["key", "28:1", "28:0"]) // Enter key press and release
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("Failed to run ydotool for Enter key")?;
+            if !status.success() {
+                anyhow::bail!("ydotool Enter failed with status: {}", status);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Type text using the specified mode
     ///
     /// - `Auto`: wtype on Omarchy/Hyprland, clipboard paste otherwise

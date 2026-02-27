@@ -23,6 +23,8 @@ pub enum ClickAction {
     ToggleLowercaseFilter,
     /// Toggle punctuation filter
     TogglePunctuationFilter,
+    /// Toggle auto-enter
+    ToggleAutoEnter,
     /// Toggle VAD mode
     ToggleVadMode,
     /// Select a log entry
@@ -504,12 +506,14 @@ impl App {
                 }
             }
 
-            // 'n' to jump to next search match
+            // 'n' to jump to next search match (Logs) or toggle auto-enter (Configuration)
             (KeyCode::Char('n'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
                     self.search_match_index =
                         (self.search_match_index + 1) % self.search_matches.len();
                     self.selected_log = self.search_matches[self.search_match_index];
+                } else if self.current_panel == Panel::Configuration {
+                    self.toggle_auto_enter();
                 }
             }
 
@@ -562,6 +566,9 @@ impl App {
                         }
                         ClickAction::TogglePunctuationFilter => {
                             self.toggle_punctuation_filter();
+                        }
+                        ClickAction::ToggleAutoEnter => {
+                            self.toggle_auto_enter();
                         }
                         ClickAction::ToggleVadMode => {
                             self.toggle_vad_mode();
@@ -1009,6 +1016,18 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Punctuation filter {}", status));
+        self.save_config();
+    }
+
+    /// Toggle auto-enter (send Enter key after each transcription)
+    pub fn toggle_auto_enter(&mut self) {
+        self.text_filters.auto_enter = !self.text_filters.auto_enter;
+        let status = if self.text_filters.auto_enter {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Auto-enter {}", status));
         self.save_config();
     }
 
