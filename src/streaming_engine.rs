@@ -111,6 +111,9 @@ pub struct StreamingEngine {
 
     /// Accumulated committed text across all segments (for progressive typing)
     accumulated_text: String,
+
+    /// Track previous speaking state to emit SpeechStarted only on transition
+    was_speaking: bool,
 }
 
 impl StreamingEngine {
@@ -121,14 +124,15 @@ impl StreamingEngine {
         vad_config: VadConfig,
         typing_config: ProgressiveTypingConfig,
         temp_dir: PathBuf,
-    ) -> Self {
+    ) -> Result<Self, StreamingEngineError> {
         let audio_buffer = AudioBuffer::new(config.buffer_size_seconds, vad_config.sample_rate);
 
-        let vad_detector = VadSegmentDetector::new(vad_config);
+        let vad_detector = VadSegmentDetector::new(vad_config)
+            .map_err(|e| StreamingEngineError::VadError(e.to_string()))?;
         let local_agreement = LocalAgreementPolicy::new(config.agreement_threshold);
         let progressive_typing = ProgressiveTypingEngine::new(typing_config);
 
-        Self {
+        Ok(Self {
             audio_buffer,
             vad_detector,
             local_agreement,
@@ -139,7 +143,8 @@ impl StreamingEngine {
             event_tx: None,
             temp_dir,
             accumulated_text: String::new(),
-        }
+            was_speaking: false,
+        })
     }
 
     /// Set event sender for receiving streaming events
@@ -159,15 +164,17 @@ impl StreamingEngine {
         match self.vad_detector.process(samples) {
             Ok(Some(segment)) => {
                 // Complete speech segment detected
+                self.was_speaking = false;
                 self.send_event(StreamingEvent::SpeechEnded);
                 self.process_segment(segment).await?;
             }
             Ok(None) => {
-                // Still collecting or in silence
-                if self.vad_detector.is_speaking() {
-                    // Just started speaking
+                // Fire SpeechStarted only on the false→true transition
+                let is_speaking = self.vad_detector.is_speaking();
+                if is_speaking && !self.was_speaking {
                     self.send_event(StreamingEvent::SpeechStarted);
                 }
+                self.was_speaking = is_speaking;
             }
             Err(e) => {
                 warn!("VAD error: {}", e);
@@ -360,6 +367,7 @@ impl StreamingEngine {
         self.progressive_typing.reset();
         self.accumulated_text.clear();
         self.stats = StreamingStats::default();
+        self.was_speaking = false;
     }
 
     /// Update configuration

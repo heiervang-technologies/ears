@@ -15,6 +15,52 @@ fn default_device() -> String {
     "default".to_string()
 }
 
+fn default_speech_threshold() -> f32 {
+    0.5
+}
+
+fn default_min_speech_duration_ms() -> u64 {
+    300
+}
+
+fn default_max_silence_duration_ms() -> u64 {
+    700
+}
+
+fn default_pre_speech_buffer_ms() -> u64 {
+    500
+}
+
+/// VAD (Voice Activity Detection) configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VadSettings {
+    /// Speech probability threshold (0.0-1.0, default: 0.5)
+    /// Higher = fewer false positives, lower = more sensitive
+    #[serde(default = "default_speech_threshold")]
+    pub speech_threshold: f32,
+    /// Minimum speech duration in ms before segment starts (default: 300)
+    #[serde(default = "default_min_speech_duration_ms")]
+    pub min_speech_duration_ms: u64,
+    /// Maximum silence duration in ms before segment ends (default: 700)
+    #[serde(default = "default_max_silence_duration_ms")]
+    pub max_silence_duration_ms: u64,
+    /// Pre-speech replay buffer in ms (default: 500)
+    /// Keeps recent audio so utterance onsets are not clipped
+    #[serde(default = "default_pre_speech_buffer_ms")]
+    pub pre_speech_buffer_ms: u64,
+}
+
+impl Default for VadSettings {
+    fn default() -> Self {
+        Self {
+            speech_threshold: default_speech_threshold(),
+            min_speech_duration_ms: default_min_speech_duration_ms(),
+            max_silence_duration_ms: default_max_silence_duration_ms(),
+            pre_speech_buffer_ms: default_pre_speech_buffer_ms(),
+        }
+    }
+}
+
 /// Configuration for the ears daemon
 ///
 /// Loaded from `~/.config/ears/config.toml` (or `config.{profile}.toml`).
@@ -39,6 +85,9 @@ pub struct Config {
     /// Text input method (auto/wtype/paste)
     #[serde(default)]
     pub typing_mode: TypingMode,
+    /// VAD settings
+    #[serde(default)]
+    pub vad: VadSettings,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -78,6 +127,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
+            vad: VadSettings::default(),
             config_dir,
             state_dir,
         })
@@ -181,6 +231,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
+            vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             state_dir: PathBuf::new(),
         };

@@ -51,7 +51,7 @@ pub use desktop::{AudioFeedback, KeyboardLayout, Notifications, TextInput, Typin
 pub use streaming::{
     AudioBuffer, LocalAgreementPolicy, StreamingConfig, StreamingError, TranscriptChunk,
 };
-pub use vad::{EnergyVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegmentDetector};
+pub use vad::{SileroVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegmentDetector};
 
 // Re-exports from Iteration 9
 pub use text_filters::TextFilters;
