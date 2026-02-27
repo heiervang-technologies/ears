@@ -12,21 +12,19 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: self-hosted
-    container:
-      image: node:20-bookworm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y build-essential pkg-config libssl-dev g++
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -60,19 +58,17 @@ jobs:
 
   build:
     name: Build Release
-    runs-on: self-hosted
-    container:
-      image: node:20-bookworm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y build-essential pkg-config libssl-dev g++
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
 
       - name: Build release
         run: cargo build --release --verbose
