@@ -29,6 +29,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 backoff = { version = "0.4", features = ["tokio"] }
 
+# VAD (Voice Activity Detection) via Silero ONNX model
+voice_activity_detector = "0.2"
+
 # TUI framework (Iteration 7)
 ratatui = "0.29"
 crossterm = "0.28"
