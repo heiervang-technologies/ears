@@ -85,7 +85,7 @@ impl Default for TypingSettings {
             progressive_typing: true,
             auto_correction: true,
             typing_mode: crate::desktop::TypingMode::Auto,
-            auto_enter: false,
+            auto_enter: true,
         }
     }
 }
