@@ -336,6 +336,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(" Auto-correction [a]"),
     ]));
+    let auto_enter_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.auto_enter { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Auto Enter [n]"),
+    ]));
     let typing_mode_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
@@ -366,7 +375,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [t] Typing  [a] Auto-corr  [m] Mode",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode",
             Style::default().fg(theme.dim),
         )));
     }
@@ -403,6 +412,12 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
         ClickAction::TogglePunctuationFilter,
+    );
+
+    // Auto-enter toggle
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + auto_enter_line as u16, inner_width, 1),
+        ClickAction::ToggleAutoEnter,
     );
 
     // Progressive typing toggle
@@ -617,6 +632,8 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw("Lower  "),
             Span::styled("[p] ", key_style),
             Span::raw("Punct  "),
+            Span::styled("[n] ", key_style),
+            Span::raw("Enter  "),
             Span::styled("[q] ", key_style),
             Span::raw("Quit"),
         ])
@@ -864,6 +881,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  Shift+L     Cycle language"),
         Line::from("  f           Toggle lowercase filter"),
         Line::from("  p           Toggle punctuation filter"),
+        Line::from("  n           Toggle auto-enter"),
         Line::from(""),
         Line::from(Span::styled(
             "Live Panel:",

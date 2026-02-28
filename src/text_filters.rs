@@ -99,7 +99,7 @@ mod tests {
     fn test_lowercase() {
         let filters = TextFilters {
             lowercase: true,
-            remove_punctuation: false,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "hello, world!");
     }
@@ -107,8 +107,8 @@ mod tests {
     #[test]
     fn test_remove_punctuation() {
         let filters = TextFilters {
-            lowercase: false,
             remove_punctuation: true,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "Hello World");
     }
@@ -118,6 +118,7 @@ mod tests {
         let filters = TextFilters {
             lowercase: true,
             remove_punctuation: true,
+            ..Default::default()
         };
         assert_eq!(filters.apply("Hello, World!"), "hello world");
     }
@@ -127,6 +128,7 @@ mod tests {
         let filters = TextFilters {
             lowercase: true,
             remove_punctuation: true,
+            ..Default::default()
         };
         // Typical ASR output that user wants to use in command line
         assert_eq!(
@@ -142,13 +144,13 @@ mod tests {
 
         let filters = TextFilters {
             lowercase: true,
-            remove_punctuation: false,
+            ..Default::default()
         };
         assert!(filters.any_enabled());
 
         let filters = TextFilters {
-            lowercase: false,
             remove_punctuation: true,
+            ..Default::default()
         };
         assert!(filters.any_enabled());
     }

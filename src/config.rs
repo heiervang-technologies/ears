@@ -85,6 +85,9 @@ pub struct Config {
     /// Text input method (auto/wtype/paste)
     #[serde(default)]
     pub typing_mode: TypingMode,
+    /// Send Enter key after each transcription
+    #[serde(default)]
+    pub auto_enter: bool,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
@@ -127,6 +130,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
+            auto_enter: false,
             vad: VadSettings::default(),
             config_dir,
             state_dir,
@@ -231,6 +235,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
+            auto_enter: false,
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             state_dir: PathBuf::new(),

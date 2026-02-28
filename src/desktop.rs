@@ -383,6 +383,31 @@ impl TextInput {
         false
     }
 
+    /// Send an Enter/Return key press
+    ///
+    /// Uses ydotool which creates a kernel-level evdev event indistinguishable
+    /// from a physical keyboard press. This works reliably in TUI apps and tmux
+    /// where wtype's virtual keyboard events may not be handled correctly.
+    pub fn send_enter() -> Result<()> {
+        use std::process::Stdio;
+
+        // Brief delay to ensure the target app has processed previously typed text
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let status = Command::new("ydotool")
+            .args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("Failed to run ydotool for Enter key")?;
+        if !status.success() {
+            anyhow::bail!("ydotool Enter failed with status: {}", status);
+        }
+
+        Ok(())
+    }
+
     /// Type text using the specified mode
     ///
     /// - `Auto`: wtype on Omarchy/Hyprland, clipboard paste otherwise

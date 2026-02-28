@@ -540,6 +540,11 @@ async fn stop_and_transcribe(
             let typing_start = std::time::Instant::now();
             match TextInput::type_text(&filtered_text, config.typing_mode) {
                 Ok(()) => {
+                    if config.auto_enter {
+                        if let Err(e) = TextInput::send_enter() {
+                            tracing::warn!("Failed to send Enter key: {}", e);
+                        }
+                    }
                     tracing::info!(
                         "Text typing completed in {:?} ({} chars)",
                         typing_start.elapsed(),

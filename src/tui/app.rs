@@ -23,6 +23,8 @@ pub enum ClickAction {
     ToggleLowercaseFilter,
     /// Toggle punctuation filter
     TogglePunctuationFilter,
+    /// Toggle auto-enter
+    ToggleAutoEnter,
     /// Toggle VAD mode
     ToggleVadMode,
     /// Select a log entry
@@ -176,6 +178,8 @@ pub struct App {
     pub progressive_typing: bool,
     /// Auto-correction enabled
     pub auto_correction: bool,
+    /// Send Enter key after each transcription
+    pub auto_enter: bool,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -247,6 +251,7 @@ impl App {
         let api_key = config.api_key.clone();
         let text_filters = config.text_filters.clone();
         let typing_mode = config.typing_mode;
+        let auto_enter = config.auto_enter;
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -277,6 +282,7 @@ impl App {
             uncommitted_text: String::new(),
             progressive_typing: true,
             auto_correction: true,
+            auto_enter,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -504,12 +510,14 @@ impl App {
                 }
             }
 
-            // 'n' to jump to next search match
+            // 'n' to jump to next search match (Logs) or toggle auto-enter (Configuration)
             (KeyCode::Char('n'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
                     self.search_match_index =
                         (self.search_match_index + 1) % self.search_matches.len();
                     self.selected_log = self.search_matches[self.search_match_index];
+                } else if self.current_panel == Panel::Configuration {
+                    self.toggle_auto_enter();
                 }
             }
 
@@ -562,6 +570,9 @@ impl App {
                         }
                         ClickAction::TogglePunctuationFilter => {
                             self.toggle_punctuation_filter();
+                        }
+                        ClickAction::ToggleAutoEnter => {
+                            self.toggle_auto_enter();
                         }
                         ClickAction::ToggleVadMode => {
                             self.toggle_vad_mode();
@@ -1012,6 +1023,14 @@ impl App {
         self.save_config();
     }
 
+    /// Toggle auto-enter (send Enter key after each transcription)
+    pub fn toggle_auto_enter(&mut self) {
+        self.auto_enter = !self.auto_enter;
+        let status = if self.auto_enter { "enabled" } else { "disabled" };
+        self.logs.push(format!("Auto-enter {}", status));
+        self.save_config();
+    }
+
     /// Save current settings to config.toml
     fn save_config(&self) {
         // Reconstruct Config from App fields and save as TOML
@@ -1023,6 +1042,7 @@ impl App {
         config.language = self.language.clone();
         config.text_filters = self.text_filters.clone();
         config.typing_mode = self.typing_mode;
+        config.auto_enter = self.auto_enter;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
