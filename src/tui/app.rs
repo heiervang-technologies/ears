@@ -178,6 +178,8 @@ pub struct App {
     pub progressive_typing: bool,
     /// Auto-correction enabled
     pub auto_correction: bool,
+    /// Send Enter key after each transcription
+    pub auto_enter: bool,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -249,6 +251,7 @@ impl App {
         let api_key = config.api_key.clone();
         let text_filters = config.text_filters.clone();
         let typing_mode = config.typing_mode;
+        let auto_enter = config.auto_enter;
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -279,6 +282,7 @@ impl App {
             uncommitted_text: String::new(),
             progressive_typing: true,
             auto_correction: true,
+            auto_enter,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -1021,12 +1025,8 @@ impl App {
 
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
-        self.text_filters.auto_enter = !self.text_filters.auto_enter;
-        let status = if self.text_filters.auto_enter {
-            "enabled"
-        } else {
-            "disabled"
-        };
+        self.auto_enter = !self.auto_enter;
+        let status = if self.auto_enter { "enabled" } else { "disabled" };
         self.logs.push(format!("Auto-enter {}", status));
         self.save_config();
     }
@@ -1042,6 +1042,7 @@ impl App {
         config.language = self.language.clone();
         config.text_filters = self.text_filters.clone();
         config.typing_mode = self.typing_mode;
+        config.auto_enter = self.auto_enter;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }

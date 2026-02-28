@@ -384,38 +384,25 @@ impl TextInput {
     }
 
     /// Send an Enter/Return key press
-    pub fn send_enter(mode: TypingMode) -> Result<()> {
+    ///
+    /// Uses ydotool which creates a kernel-level evdev event indistinguishable
+    /// from a physical keyboard press. This works reliably in TUI apps and tmux
+    /// where wtype's virtual keyboard events may not be handled correctly.
+    pub fn send_enter() -> Result<()> {
         use std::process::Stdio;
 
-        let use_wtype = match mode {
-            TypingMode::Auto => Self::is_omarchy(),
-            TypingMode::Wtype => true,
-            TypingMode::Paste => false,
-        };
+        // Brief delay to ensure the target app has processed previously typed text
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
-        if use_wtype {
-            let status = Command::new("wtype")
-                .arg("-k")
-                .arg("Return")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .context("Failed to run wtype for Enter key")?;
-            if !status.success() {
-                anyhow::bail!("wtype Return failed with status: {}", status);
-            }
-        } else {
-            let status = Command::new("ydotool")
-                .args(["key", "28:1", "28:0"]) // Enter key press and release
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .context("Failed to run ydotool for Enter key")?;
-            if !status.success() {
-                anyhow::bail!("ydotool Enter failed with status: {}", status);
-            }
+        let status = Command::new("ydotool")
+            .args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("Failed to run ydotool for Enter key")?;
+        if !status.success() {
+            anyhow::bail!("ydotool Enter failed with status: {}", status);
         }
 
         Ok(())

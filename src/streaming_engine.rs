@@ -275,7 +275,7 @@ impl StreamingEngine {
 
             // Send Enter key after typing if auto_enter is enabled
             if self.auto_enter {
-                if let Err(e) = TextInput::send_enter(self.typing_mode) {
+                if let Err(e) = TextInput::send_enter() {
                     warn!("Failed to send Enter key: {}", e);
                 }
             }

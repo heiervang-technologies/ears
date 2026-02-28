@@ -12,9 +12,6 @@ pub struct TextFilters {
     pub lowercase: bool,
     /// Remove punctuation marks
     pub remove_punctuation: bool,
-    /// Send Enter key after each transcription
-    #[serde(default)]
-    pub auto_enter: bool,
 }
 
 impl TextFilters {
@@ -40,7 +37,7 @@ impl TextFilters {
 
     /// Check if any filter is enabled
     pub fn any_enabled(&self) -> bool {
-        self.lowercase || self.remove_punctuation || self.auto_enter
+        self.lowercase || self.remove_punctuation
     }
 }
 
@@ -153,12 +150,6 @@ mod tests {
 
         let filters = TextFilters {
             remove_punctuation: true,
-            ..Default::default()
-        };
-        assert!(filters.any_enabled());
-
-        let filters = TextFilters {
-            auto_enter: true,
             ..Default::default()
         };
         assert!(filters.any_enabled());

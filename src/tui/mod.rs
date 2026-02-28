@@ -223,7 +223,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_progressive = app.progressive_typing;
             let prev_auto_correction = app.auto_correction;
             let prev_typing_mode = app.typing_mode;
-            let prev_auto_enter = app.text_filters.auto_enter;
+            let prev_auto_enter = app.auto_enter;
 
             match event_handler.next()? {
                 Event::Key(key) => {
@@ -249,14 +249,14 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             if app.progressive_typing != prev_progressive
                 || app.auto_correction != prev_auto_correction
                 || app.typing_mode != prev_typing_mode
-                || app.text_filters.auto_enter != prev_auto_enter
+                || app.auto_enter != prev_auto_enter
             {
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
                         progressive_typing: app.progressive_typing,
                         auto_correction: app.auto_correction,
                         typing_mode: app.typing_mode,
-                        auto_enter: app.text_filters.auto_enter,
+                        auto_enter: app.auto_enter,
                     });
                 }
             }
@@ -276,7 +276,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             progressive_typing: app.progressive_typing,
                             auto_correction: app.auto_correction,
                             typing_mode: app.typing_mode,
-                            auto_enter: app.text_filters.auto_enter,
+                            auto_enter: app.auto_enter,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

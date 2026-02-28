@@ -311,19 +311,6 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(" Remove Punctuation [p]"),
     ]));
-    let auto_enter_line = text.len();
-    text.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            if app.text_filters.auto_enter {
-                "[x]"
-            } else {
-                "[ ]"
-            },
-            Style::default().fg(theme.accent),
-        ),
-        Span::raw(" Auto Enter [n]"),
-    ]));
 
     // Typing Settings section
     text.push(Line::from(""));
@@ -348,6 +335,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Cyan),
         ),
         Span::raw(" Auto-correction [a]"),
+    ]));
+    let auto_enter_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.auto_enter { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Auto Enter [n]"),
     ]));
     let typing_mode_line = text.len();
     text.push(Line::from(vec![
