@@ -323,7 +323,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let (event_tx, mut event_rx) =
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
 
-    let (shutdown_tx, _settings_tx, pipeline_handle) =
+    let (shutdown_tx, settings_tx, pipeline_handle) =
         match ears::tui::start_vad_pipeline(config, event_tx).await {
             Ok(result) => result,
             Err(e) => {
@@ -332,6 +332,14 @@ async fn handle_vad(config: &Config) -> Result<()> {
                 anyhow::bail!("Failed to start VAD: {}", e);
             }
         };
+
+    // Send config-driven settings to the engine
+    let _ = settings_tx.send(ears::tui::TypingSettings {
+        progressive_typing: true,
+        auto_correction: true,
+        typing_mode: config.typing_mode,
+        auto_enter: config.auto_enter,
+    });
 
     eprintln!("VAD started - listening...");
 

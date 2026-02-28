@@ -31,6 +31,10 @@ fn default_pre_speech_buffer_ms() -> u64 {
     500
 }
 
+fn default_auto_enter() -> bool {
+    true
+}
+
 /// VAD (Voice Activity Detection) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadSettings {
@@ -85,8 +89,8 @@ pub struct Config {
     /// Text input method (auto/wtype/paste)
     #[serde(default)]
     pub typing_mode: TypingMode,
-    /// Send Enter key after each transcription
-    #[serde(default)]
+    /// Send Enter key after each transcription (default: true)
+    #[serde(default = "default_auto_enter")]
     pub auto_enter: bool,
     /// VAD settings
     #[serde(default)]
@@ -130,7 +134,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
-            auto_enter: false,
+            auto_enter: true,
             vad: VadSettings::default(),
             config_dir,
             state_dir,
@@ -235,7 +239,7 @@ impl Config {
             model: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
-            auto_enter: false,
+            auto_enter: true,
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             state_dir: PathBuf::new(),

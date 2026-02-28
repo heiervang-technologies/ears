@@ -20,7 +20,8 @@ mkdir -p "$SOUNDS_DIR"
 echo "Building Rust binary..."
 cargo build --release --all-features
 
-# Install the Rust binary
+# Install the Rust binary (remove existing file/symlink first)
+rm -f "$INSTALL_DIR/ears"
 cp target/release/ears "$INSTALL_DIR/ears"
 chmod +x "$INSTALL_DIR/ears"
 
