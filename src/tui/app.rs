@@ -236,6 +236,8 @@ pub struct App {
     pub theme_name: ThemeName,
     /// Current theme colors
     pub theme: Theme,
+    /// Event sender to queue UI events from background tasks
+    pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::tui::Event>>,
 }
 
 impl App {
@@ -312,34 +314,51 @@ impl App {
             total_words: 0,
             theme_name: ThemeName::Dark,
             theme: Theme::dark(),
+            event_tx: None,
         }
     }
 
-    /// Fetch the model name from the whisper server
-    fn fetch_model_name(server_url: &str, api_key: Option<&str>) -> Option<String> {
-        let base = server_url.trim_end_matches('/');
-        let url = format!("{}/v1/models", base);
+    /// Spawn a task to fetch the model name asynchronously
+    pub fn trigger_model_fetch(&self) {
+        if let Some(tx) = &self.event_tx {
+            let tx = tx.clone();
+            let server_url = self.server.clone();
+            let api_key = self.api_key.clone();
+            
+            tokio::spawn(async move {
+                let base = server_url.trim_end_matches('/');
+                let url = format!("{}/v1/models", base);
 
-        // Synchronous blocking request with short timeout
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(2))
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .ok()?;
-        let mut request = client.get(&url);
-        if let Some(key) = api_key {
-            request = request.bearer_auth(key);
+                let client = match reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(2))
+                    .timeout(std::time::Duration::from_secs(3))
+                    .build() {
+                    Ok(c) => c,
+                    Err(_) => {
+                        let _ = tx.send(crate::tui::Event::ModelFetched(None));
+                        return;
+                    }
+                };
+
+                let mut request = client.get(&url);
+                if let Some(key) = api_key {
+                    request = request.bearer_auth(key);
+                }
+
+                let model_name = async {
+                    let response = request.send().await.ok()?;
+                    let json: serde_json::Value = response.json().await.ok()?;
+                    json.get("data")?
+                        .as_array()?
+                        .first()?
+                        .get("id")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                }.await;
+
+                let _ = tx.send(crate::tui::Event::ModelFetched(model_name));
+            });
         }
-        let response = request.send().ok()?;
-        let json: serde_json::Value = response.json().ok()?;
-
-        // OpenAI-compatible response: {"data": [{"id": "model-name", ...}]}
-        json.get("data")?
-            .as_array()?
-            .first()?
-            .get("id")?
-            .as_str()
-            .map(|s| s.to_string())
     }
 
     /// Handle a key press event
@@ -676,19 +695,8 @@ impl App {
                             self.save_config();
                             self.logs
                                 .push(format!("Server URL set to: {}", self.server));
-                            // Test connection and update model
-                            match Self::fetch_model_name(&self.server, self.api_key.as_deref()) {
-                                Some(model) => {
-                                    self.model = model.clone();
-                                    self.logs.push(format!("Connection OK — model: {}", model));
-                                }
-                                None => {
-                                    self.model = "(offline)".to_string();
-                                    self.logs.push(
-                                        "Connection failed: server not responding".to_string(),
-                                    );
-                                }
-                            }
+                            self.model = "(connecting...)".to_string();
+                            self.trigger_model_fetch();
                         }
                         Err(e) => {
                             self.logs.push(format!("Invalid URL: {}", e));
@@ -1233,8 +1241,7 @@ impl App {
 
         // Lazy fetch model on first tick, only if not already configured
         if self.tick_count == 1 && self.model == "(connecting...)" {
-            self.model = Self::fetch_model_name(&self.server, self.api_key.as_deref())
-                .unwrap_or_else(|| "(offline)".to_string());
+            self.trigger_model_fetch();
         }
     }
 }
@@ -1637,17 +1644,6 @@ mod tests {
         app.handle_key(key(KeyCode::Char('e'))).unwrap();
         assert!(app.editing_field.is_none());
         assert!(app.logs.last().unwrap().contains("Cannot edit"));
-    }
-
-    // --- Tick ---
-
-    #[test]
-    fn test_tick_lazy_model_fetch() {
-        let mut app = App::new();
-        app.model = "(connecting...)".to_string();
-        // After first tick, model should change (either to fetched or offline)
-        app.handle_tick();
-        assert_ne!(app.model, "(connecting...)");
     }
 
     // --- Add log auto-scroll ---

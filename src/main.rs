@@ -273,16 +273,18 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
     let text_owned = text.to_string();
 
     std::thread::spawn(move || {
-        let result = std::process::Command::new(&hook_path)
-            .arg(&hook_audio)
+        let mut command = std::process::Command::new(&hook_path);
+        command.arg(&hook_audio)
             .arg(&text_owned)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
 
-        match result {
-            Ok(_) => tracing::info!("Post-transcribe hook started"),
+        match command.spawn() {
+            Ok(mut child) => {
+                tracing::info!("Post-transcribe hook started");
+                let _ = child.wait();
+            }
             Err(e) => tracing::warn!("Failed to run post-transcribe hook: {}", e),
         }
     });

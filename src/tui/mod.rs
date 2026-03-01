@@ -192,8 +192,9 @@ pub async fn start_vad_pipeline(
 /// Run the TUI application
 pub async fn run(profile: Option<&str>) -> Result<()> {
     let mut terminal = init_terminal()?;
+    let mut event_handler = EventHandler::new(250);
     let mut app = App::with_profile(profile);
-    let event_handler = EventHandler::new(250);
+    app.event_tx = Some(event_handler.sender());
 
     // Load config and create state manager for waybar integration
     let config = Config::load_profile(profile).unwrap_or_default();
@@ -225,7 +226,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_typing_mode = app.typing_mode;
             let prev_auto_enter = app.auto_enter;
 
-            match event_handler.next()? {
+            match event_handler.next().await? {
                 Event::Key(key) => {
                     if !app.handle_key(key)? {
                         break;
@@ -242,6 +243,18 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 Event::Resize(_, _) => {
                     // Terminal resize is handled automatically by ratatui
                     // on the next draw() call, no action needed
+                }
+                Event::ModelFetched(model) => {
+                    match model {
+                        Some(m) => {
+                            app.model = m.clone();
+                            app.add_log(&format!("Connection OK — model: {}", m));
+                        }
+                        None => {
+                            app.model = "(offline)".to_string();
+                            app.add_log("Connection failed: server not responding");
+                        }
+                    }
                 }
             }
 
