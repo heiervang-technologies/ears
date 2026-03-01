@@ -24,10 +24,10 @@ expression: output
 │Text Filters:                                                                                     │
 │  [ ] Lowercase [f]                                                                               │
 │  [ ] Remove Punctuation [p]                                                                      │
+│  [x] Strict Alphabet [s]                                                                         │
 │                                                                                                  │
 │Typing Settings:                                                                                  │
 │  [x] Progressive Typing [t]                                                                      │
-│  [x] Auto-correction [a]                                                                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [q] Quit             │

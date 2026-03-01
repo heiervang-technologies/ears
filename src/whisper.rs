@@ -400,10 +400,27 @@ impl WhisperClient {
             }
         }
 
-        // Check if all non-whitespace characters are CJK
-        text.chars()
-            .filter(|c| !c.is_whitespace())
-            .all(|c| is_cjk_char(c))
+        // Common hallucination filler characters from ASR models
+        let filler_chars = ['啊', '嗯', '呃', '哦', '噢', '哎', '哇', '呀', '吧', '呢'];
+
+        // It's considered a Chinese artifact if all characters are whitespace, 
+        // non-alphanumeric symbols/punctuation, or specific CJK filler characters,
+        // AND it contains at least one CJK filler character.
+        let mut has_filler = false;
+        let all_allowed = text.chars().all(|c| {
+            if filler_chars.contains(&c) {
+                has_filler = true;
+                true
+            } else if c.is_alphanumeric() {
+                // If it's a letter/number (including non-filler Chinese characters like '下'), reject
+                false
+            } else {
+                // Allow all punctuation/whitespace (including CJK punctuation like 。)
+                true
+            }
+        });
+
+        has_filler && all_allowed
     }
 
     /// Creates an exponential backoff configuration
@@ -426,22 +443,10 @@ impl WhisperClient {
             ..Default::default()
         }
     }
-}
+    }
 
-/// Returns true if a character is CJK (Chinese/Japanese/Korean) including
-/// CJK punctuation. Used to detect Chinese silence artifacts from ASR models.
-fn is_cjk_char(c: char) -> bool {
-    matches!(c,
-        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
-        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
-        | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
-        | '\u{3000}'..='\u{303F}' // CJK Symbols and Punctuation (。、！）
-        | '\u{FF00}'..='\u{FFEF}' // Fullwidth Forms (！？）
-    )
-}
-
-#[cfg(test)]
-mod tests {
+    #[cfg(test)]
+    mod tests {
     use super::*;
 
     #[test]
@@ -471,10 +476,12 @@ mod tests {
         // Should filter Qwen3-ASR Chinese artifacts
         assert_eq!(client.filter_silence_artifacts("啊！"), "");
         assert_eq!(client.filter_silence_artifacts("嗯。"), "");
-
-        // Should filter any Chinese-only text when language is not Chinese
-        assert_eq!(client.filter_silence_artifacts("你好世界"), "");
-        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "");
+        
+        // Should filter Qwen3-ASR Chinese artifacts with standard punctuation
+        assert_eq!(client.filter_silence_artifacts("啊!"), "");
+        assert_eq!(client.filter_silence_artifacts("嗯."), "");
+        assert_eq!(client.filter_silence_artifacts("嗯..."), "");
+        assert_eq!(client.filter_silence_artifacts("  啊 !  "), "");
 
         // Should keep real transcriptions
         assert_eq!(
@@ -485,6 +492,11 @@ mod tests {
             client.filter_silence_artifacts("  Test message  "),
             "Test message"
         );
+        
+        // Should keep valid Chinese dictations even if short
+        assert_eq!(client.filter_silence_artifacts("你好世界"), "你好世界");
+        assert_eq!(client.filter_silence_artifacts("下车搵架。"), "下车搵架。");
+        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "这是一个测试");
 
         // Should not filter partial matches
         assert_eq!(

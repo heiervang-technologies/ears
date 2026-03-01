@@ -23,6 +23,8 @@ pub enum ClickAction {
     ToggleLowercaseFilter,
     /// Toggle punctuation filter
     TogglePunctuationFilter,
+    /// Toggle strict alphabet filter
+    ToggleStrictAlphabetFilter,
     /// Toggle auto-enter
     ToggleAutoEnter,
     /// Toggle VAD mode
@@ -454,6 +456,13 @@ impl App {
                 }
             }
 
+            // 's' to toggle strict alphabet filter (in Configuration panel)
+            (KeyCode::Char('s'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_strict_alphabet_filter();
+                }
+            }
+
             // 'm' to cycle typing mode (in Configuration panel)
             (KeyCode::Char('m'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Configuration {
@@ -570,6 +579,9 @@ impl App {
                         }
                         ClickAction::TogglePunctuationFilter => {
                             self.toggle_punctuation_filter();
+                        }
+                        ClickAction::ToggleStrictAlphabetFilter => {
+                            self.toggle_strict_alphabet_filter();
                         }
                         ClickAction::ToggleAutoEnter => {
                             self.toggle_auto_enter();
@@ -1020,6 +1032,18 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Punctuation filter {}", status));
+        self.save_config();
+    }
+
+    /// Toggle strict alphabet filter
+    pub fn toggle_strict_alphabet_filter(&mut self) {
+        self.text_filters.strict_alphabet = !self.text_filters.strict_alphabet;
+        let status = if self.text_filters.strict_alphabet {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Strict alphabet filter {}", status));
         self.save_config();
     }
 
