@@ -1,6 +1,6 @@
 [package]
 name = "ears"
-version = "1.1.91"
+version = "1.1.93"
 edition = "2021"
 authors = ["Mark Sverdhei <mark.sverdhei@heiervang.com>"]
 description = "A production-grade speech recognition daemon for Linux"
