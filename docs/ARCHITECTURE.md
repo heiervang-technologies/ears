@@ -4,40 +4,25 @@ Technical architecture of the ears speech recognition daemon.
 
 ## High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Interaction                        │
-│              (Keyboard Shortcut / CLI / TUI)                    │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      ears Main Process                          │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │   Config     │  │    State     │  │    Lock      │         │
-│  │  Management  │  │  Management  │  │  Management  │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │   Process    │  │   Desktop    │  │   Whisper    │         │
-│  │   Control    │  │ Integration  │  │    Client    │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │     VAD      │  │  Streaming   │  │    Text      │         │
-│  │   Detector   │  │   Engine     │  │   Filters    │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-└────────┬───────────────────┬──────────────────┬────────────────┘
-         │                   │                  │
-         ▼                   ▼                  ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│   PipeWire      │ │   Desktop       │ │  Whisper/ASR    │
-│   (pw-record)   │ │   Services      │ │    Server       │
-│                 │ │ - wtype/ydotool │ │                 │
-│                 │ │ - notify-send   │ │  (HTTP API)     │
-│                 │ │ - paplay        │ │                 │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
+```mermaid
+graph TD
+    User["User Interaction<br/>(Keyboard Shortcut / CLI / TUI)"] --> MainProcess
+
+    subgraph MainProcess["ears Main Process"]
+        Config["Config Management"]
+        State["State Management"]
+        Lock["Lock Management"]
+        Process["Process Control"]
+        Desktop["Desktop Integration"]
+        Whisper["Whisper Client"]
+        VAD["VAD Detector"]
+        Streaming["Streaming Engine"]
+        Text["Text Filters"]
+    end
+
+    MainProcess --> PW["PipeWire<br/>(pw-record)"]
+    MainProcess --> DS["Desktop Services<br/>- wtype/ydotool<br/>- notify-send<br/>- paplay"]
+    MainProcess --> ASR["Whisper/ASR Server<br/>(HTTP API)"]
 ```
 
 ## Core Components
@@ -59,19 +44,14 @@ Environment variables (`EARS_SERVER`, `EARS_DEVICE`, `EARS_LANGUAGE`) override f
 
 Four states: `Idle`, `Recording`, `Transcribing`, `VadActive`.
 
-```
-         ┌──────┐
-    ┌───▶│ Idle │◀──────────────────┐
-    │    └───┬──┘                   │
-    │        │ toggle          completed / emergency
-    │        ▼                      │
-    │  ┌───────────┐          ┌──────────────┐
-    │  │ Recording │─────────▶│ Transcribing │
-    │  └───────────┘  stop    └──────────────┘
-    │
-    │    ┌──────────┐
-    └────│VadActive │  (toggle vad)
-         └──────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Recording : toggle
+    Recording --> Transcribing : stop
+    Transcribing --> Idle : completed / emergency
+    Idle --> VadActive : toggle vad
+    VadActive --> Idle : toggle vad
 ```
 
 State is persisted to `$XDG_RUNTIME_DIR/ears/state` as plain text. On startup, stale states (e.g., `Recording` with no live process) are automatically reconciled to `Idle`.
