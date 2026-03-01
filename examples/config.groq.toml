@@ -1,0 +1,7 @@
+# Groq Cloud API (whisper-large-v3-turbo)
+# Copy to ~/.config/ears/config.groq.toml
+# Usage: ears -p groq
+# Get your API key at https://console.groq.com
+server = "https://api.groq.com/openai"
+api_key = "gsk_your_api_key_here"
+model = "whisper-large-v3-turbo"
