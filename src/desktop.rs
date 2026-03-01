@@ -324,12 +324,23 @@ impl AudioFeedback {
 
     /// Play embedded sound data (non-blocking)
     fn play_embedded(data: &'static [u8]) -> Result<()> {
-        // Write to temp file and play
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-        let temp_path = PathBuf::from(runtime_dir).join("ears-sound.wav");
+        use std::process::{Command, Stdio};
+        
+        let mut child = Command::new("paplay")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to spawn paplay")?;
 
-        std::fs::write(&temp_path, data).context("Failed to write temp sound file")?;
-        Self::play_sound(&temp_path)
+        if let Some(mut stdin) = child.stdin.take() {
+            let data = data.to_vec();
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let _ = stdin.write_all(&data);
+            });
+        }
+        Ok(())
     }
 
     /// Play a named sound (custom override or embedded)

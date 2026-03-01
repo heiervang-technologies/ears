@@ -111,7 +111,7 @@ impl Config {
         let config_dir = project_dirs.config_dir().to_path_buf();
         let state_dir = std::env::var("XDG_RUNTIME_DIR")
             .map(|p| PathBuf::from(p).join("ears"))
-            .unwrap_or_else(|_| PathBuf::from("/tmp").join(format!("ears-{}", std::process::id())));
+            .unwrap_or_else(|_| project_dirs.cache_dir().join("run"));
         Ok((config_dir, state_dir))
     }
 
