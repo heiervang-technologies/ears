@@ -311,6 +311,19 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(" Remove Punctuation [p]"),
     ]));
+    let strict_alphabet_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.text_filters.strict_alphabet {
+                "[x]"
+            } else {
+                "[ ]"
+            },
+            Style::default().fg(theme.accent),
+        ),
+        Span::raw(" Strict Alphabet [s]"),
+    ]));
 
     // Typing Settings section
     text.push(Line::from(""));
@@ -412,6 +425,12 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + punctuation_line as u16, inner_width, 1),
         ClickAction::TogglePunctuationFilter,
+    );
+
+    // Strict alphabet filter toggle
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + strict_alphabet_line as u16, inner_width, 1),
+        ClickAction::ToggleStrictAlphabetFilter,
     );
 
     // Auto-enter toggle
@@ -881,6 +900,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  Shift+L     Cycle language"),
         Line::from("  f           Toggle lowercase filter"),
         Line::from("  p           Toggle punctuation filter"),
+        Line::from("  s           Toggle strict alphabet filter"),
         Line::from("  n           Toggle auto-enter"),
         Line::from(""),
         Line::from(Span::styled(

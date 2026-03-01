@@ -354,16 +354,18 @@ impl WhisperClient {
         Ok(transcription.text)
     }
 
-    /// Filters out common silence artifacts from whisper.cpp
+    /// Filters out common silence artifacts from whisper.cpp and Qwen3-ASR
     fn filter_silence_artifacts(&self, text: &str) -> String {
         let trimmed = text.trim();
 
-        // Common silence artifacts from whisper.cpp
+        // Common silence artifacts from whisper.cpp and Qwen3-ASR
         let silence_patterns = [
             "Thank you.",
             "Thank you",
             "Thanks for watching.",
             "Thanks for watching",
+            "啊！",
+            "嗯。",
         ];
 
         // Check if the entire text is just a silence artifact
@@ -372,7 +374,53 @@ impl WhisperClient {
             return String::new();
         }
 
+        // Filter Chinese-only text when language is not Chinese.
+        // Qwen3-ASR hallucinates Chinese characters on silence when the
+        // configured language is non-Chinese.
+        if self.is_chinese_artifact(trimmed) {
+            debug!("Filtered Chinese silence artifact: {}", trimmed);
+            return String::new();
+        }
+
         trimmed.to_string()
+    }
+
+    /// Returns true if the text is entirely CJK characters/punctuation and the
+    /// configured language is not Chinese.
+    fn is_chinese_artifact(&self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+
+        // If language is explicitly Chinese, don't filter
+        if let Some(ref lang) = self.language {
+            let lang_lower = lang.to_lowercase();
+            if lang_lower == "zh" || lang_lower.starts_with("zh-") || lang_lower == "chinese" {
+                return false;
+            }
+        }
+
+        // Common hallucination filler characters from ASR models
+        let filler_chars = ['啊', '嗯', '呃', '哦', '噢', '哎', '哇', '呀', '吧', '呢'];
+
+        // It's considered a Chinese artifact if all characters are whitespace, 
+        // non-alphanumeric symbols/punctuation, or specific CJK filler characters,
+        // AND it contains at least one CJK filler character.
+        let mut has_filler = false;
+        let all_allowed = text.chars().all(|c| {
+            if filler_chars.contains(&c) {
+                has_filler = true;
+                true
+            } else if c.is_alphanumeric() {
+                // If it's a letter/number (including non-filler Chinese characters like '下'), reject
+                false
+            } else {
+                // Allow all punctuation/whitespace (including CJK punctuation like 。)
+                true
+            }
+        });
+
+        has_filler && all_allowed
     }
 
     /// Creates an exponential backoff configuration
@@ -395,10 +443,10 @@ impl WhisperClient {
             ..Default::default()
         }
     }
-}
+    }
 
-#[cfg(test)]
-mod tests {
+    #[cfg(test)]
+    mod tests {
     use super::*;
 
     #[test]
@@ -425,6 +473,16 @@ mod tests {
         assert_eq!(client.filter_silence_artifacts("Thank you"), "");
         assert_eq!(client.filter_silence_artifacts("Thanks for watching."), "");
 
+        // Should filter Qwen3-ASR Chinese artifacts
+        assert_eq!(client.filter_silence_artifacts("啊！"), "");
+        assert_eq!(client.filter_silence_artifacts("嗯。"), "");
+        
+        // Should filter Qwen3-ASR Chinese artifacts with standard punctuation
+        assert_eq!(client.filter_silence_artifacts("啊!"), "");
+        assert_eq!(client.filter_silence_artifacts("嗯."), "");
+        assert_eq!(client.filter_silence_artifacts("嗯..."), "");
+        assert_eq!(client.filter_silence_artifacts("  啊 !  "), "");
+
         // Should keep real transcriptions
         assert_eq!(
             client.filter_silence_artifacts("Hello world"),
@@ -434,12 +492,39 @@ mod tests {
             client.filter_silence_artifacts("  Test message  "),
             "Test message"
         );
+        
+        // Should keep valid Chinese dictations even if short
+        assert_eq!(client.filter_silence_artifacts("你好世界"), "你好世界");
+        assert_eq!(client.filter_silence_artifacts("下车搵架。"), "下车搵架。");
+        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "这是一个测试");
 
         // Should not filter partial matches
         assert_eq!(
             client.filter_silence_artifacts("Thank you for your help"),
             "Thank you for your help"
         );
+
+        // Should not filter mixed Chinese+Latin text (likely real transcription)
+        assert_eq!(
+            client.filter_silence_artifacts("Hello 你好"),
+            "Hello 你好"
+        );
+    }
+
+    #[test]
+    fn test_filter_silence_artifacts_chinese_language() {
+        // When language is Chinese, Chinese text should NOT be filtered
+        let client = WhisperClient::new("http://localhost:8178")
+            .with_language(Some("zh".to_string()));
+
+        assert_eq!(client.filter_silence_artifacts("你好世界"), "你好世界");
+        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "这是一个测试");
+
+        // But exact silence patterns are still filtered
+        assert_eq!(client.filter_silence_artifacts("Thank you."), "");
+        // Qwen3 artifacts are exact-match filtered regardless of language
+        assert_eq!(client.filter_silence_artifacts("啊！"), "");
+        assert_eq!(client.filter_silence_artifacts("嗯。"), "");
     }
 
     #[tokio::test]

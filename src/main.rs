@@ -531,7 +531,7 @@ async fn stop_and_transcribe(
 
     let transcribe_start = std::time::Instant::now();
     let client = WhisperClient::new(config.whisper_server.clone())
-        .with_language(language)
+        .with_language(language.clone())
         .with_api_key(config.api_key.clone())
         .with_model(config.model.clone());
     match client.transcribe(&audio_file).await {
@@ -542,7 +542,7 @@ async fn stop_and_transcribe(
                 text
             );
 
-            let filtered_text = config.text_filters.apply(&text);
+            let filtered_text = config.text_filters.apply(&text, language.as_deref());
             tracing::debug!("Filtered text: {}", filtered_text);
 
             let typing_start = std::time::Instant::now();
