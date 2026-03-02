@@ -11,6 +11,8 @@ use std::process::Command;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TypingMode {
+    /// Disable typing output entirely (useful for IPC-only mode)
+    None,
     /// Auto-detect: wtype on Omarchy/Hyprland, clipboard paste otherwise
     #[default]
     Auto,
@@ -27,6 +29,7 @@ impl TypingMode {
             TypingMode::Auto => "Auto",
             TypingMode::Wtype => "Wtype",
             TypingMode::Paste => "Paste",
+            TypingMode::None => "None",
         }
     }
 
@@ -35,7 +38,8 @@ impl TypingMode {
         match self {
             TypingMode::Auto => TypingMode::Wtype,
             TypingMode::Wtype => TypingMode::Paste,
-            TypingMode::Paste => TypingMode::Auto,
+            TypingMode::Paste => TypingMode::None,
+            TypingMode::None => TypingMode::Auto,
         }
     }
 }
@@ -435,6 +439,7 @@ impl TextInput {
             }
             TypingMode::Wtype => Self::type_with_wtype(text),
             TypingMode::Paste => Self::paste_text(text),
+            TypingMode::None => Ok(()),
         }
     }
 
