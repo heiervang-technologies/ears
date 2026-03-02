@@ -80,7 +80,14 @@ impl TextFilters {
         // Only enforce for known Latin-based languages right now (can be expanded)
         let is_latin_lang = matches!(
             language.unwrap_or("en").to_lowercase().as_str(),
-            "en" | "english" | "no" | "norwegian" | "nn" | "nb" | "es" | "spanish" | "fr"
+            "en" | "english"
+                | "no"
+                | "norwegian"
+                | "nn"
+                | "nb"
+                | "es"
+                | "spanish"
+                | "fr"
                 | "french"
                 | "de"
                 | "german"
