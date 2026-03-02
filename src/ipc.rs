@@ -34,7 +34,11 @@ pub fn start_ipc_server(rx: broadcast::Receiver<StreamingEvent>) {
         let listener = match UnixListener::bind(&sock_path) {
             Ok(l) => l,
             Err(e) => {
-                error!("Failed to bind IPC socket at {}: {}", sock_path.display(), e);
+                error!(
+                    "Failed to bind IPC socket at {}: {}",
+                    sock_path.display(),
+                    e
+                );
                 return;
             }
         };

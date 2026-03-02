@@ -408,7 +408,7 @@ impl WhisperClient {
         // Common hallucination filler characters from ASR models
         let filler_chars = ['啊', '嗯', '呃', '哦', '噢', '哎', '哇', '呀', '吧', '呢'];
 
-        // It's considered a Chinese artifact if all characters are whitespace, 
+        // It's considered a Chinese artifact if all characters are whitespace,
         // non-alphanumeric symbols/punctuation, or specific CJK filler characters,
         // AND it contains at least one CJK filler character.
         let mut has_filler = false;
@@ -448,10 +448,10 @@ impl WhisperClient {
             ..Default::default()
         }
     }
-    }
+}
 
-    #[cfg(test)]
-    mod tests {
+#[cfg(test)]
+mod tests {
     use super::*;
 
     #[test]
@@ -481,7 +481,7 @@ impl WhisperClient {
         // Should filter Qwen3-ASR Chinese artifacts
         assert_eq!(client.filter_silence_artifacts("啊！"), "");
         assert_eq!(client.filter_silence_artifacts("嗯。"), "");
-        
+
         // Should filter Qwen3-ASR Chinese artifacts with standard punctuation
         assert_eq!(client.filter_silence_artifacts("啊!"), "");
         assert_eq!(client.filter_silence_artifacts("嗯."), "");
@@ -497,11 +497,14 @@ impl WhisperClient {
             client.filter_silence_artifacts("  Test message  "),
             "Test message"
         );
-        
+
         // Should keep valid Chinese dictations even if short
         assert_eq!(client.filter_silence_artifacts("你好世界"), "你好世界");
         assert_eq!(client.filter_silence_artifacts("下车搵架。"), "下车搵架。");
-        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "这是一个测试");
+        assert_eq!(
+            client.filter_silence_artifacts("这是一个测试"),
+            "这是一个测试"
+        );
 
         // Should not filter partial matches
         assert_eq!(
@@ -510,20 +513,20 @@ impl WhisperClient {
         );
 
         // Should not filter mixed Chinese+Latin text (likely real transcription)
-        assert_eq!(
-            client.filter_silence_artifacts("Hello 你好"),
-            "Hello 你好"
-        );
+        assert_eq!(client.filter_silence_artifacts("Hello 你好"), "Hello 你好");
     }
 
     #[test]
     fn test_filter_silence_artifacts_chinese_language() {
         // When language is Chinese, Chinese text should NOT be filtered
-        let client = WhisperClient::new("http://localhost:8178")
-            .with_language(Some("zh".to_string()));
+        let client =
+            WhisperClient::new("http://localhost:8178").with_language(Some("zh".to_string()));
 
         assert_eq!(client.filter_silence_artifacts("你好世界"), "你好世界");
-        assert_eq!(client.filter_silence_artifacts("这是一个测试"), "这是一个测试");
+        assert_eq!(
+            client.filter_silence_artifacts("这是一个测试"),
+            "这是一个测试"
+        );
 
         // But exact silence patterns are still filtered
         assert_eq!(client.filter_silence_artifacts("Thank you."), "");

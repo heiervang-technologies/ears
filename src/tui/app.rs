@@ -324,7 +324,7 @@ impl App {
             let tx = tx.clone();
             let server_url = self.server.clone();
             let api_key = self.api_key.clone();
-            
+
             tokio::spawn(async move {
                 let base = server_url.trim_end_matches('/');
                 let url = format!("{}/v1/models", base);
@@ -332,7 +332,8 @@ impl App {
                 let client = match reqwest::Client::builder()
                     .connect_timeout(std::time::Duration::from_secs(2))
                     .timeout(std::time::Duration::from_secs(3))
-                    .build() {
+                    .build()
+                {
                     Ok(c) => c,
                     Err(_) => {
                         let _ = tx.send(crate::tui::Event::ModelFetched(None));
@@ -354,7 +355,8 @@ impl App {
                         .get("id")?
                         .as_str()
                         .map(|s| s.to_string())
-                }.await;
+                }
+                .await;
 
                 let _ = tx.send(crate::tui::Event::ModelFetched(model_name));
             });
@@ -1058,7 +1060,11 @@ impl App {
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
         self.auto_enter = !self.auto_enter;
-        let status = if self.auto_enter { "enabled" } else { "disabled" };
+        let status = if self.auto_enter {
+            "enabled"
+        } else {
+            "disabled"
+        };
         self.logs.push(format!("Auto-enter {}", status));
         self.save_config();
     }

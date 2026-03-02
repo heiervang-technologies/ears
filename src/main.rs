@@ -290,7 +290,8 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
 
     std::thread::spawn(move || {
         let mut command = std::process::Command::new(&hook_path);
-        command.arg(&hook_audio)
+        command
+            .arg(&hook_audio)
             .arg(&text_owned)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

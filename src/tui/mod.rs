@@ -248,18 +248,16 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                     // Terminal resize is handled automatically by ratatui
                     // on the next draw() call, no action needed
                 }
-                Event::ModelFetched(model) => {
-                    match model {
-                        Some(m) => {
-                            app.model = m.clone();
-                            app.add_log(&format!("Connection OK — model: {}", m));
-                        }
-                        None => {
-                            app.model = "(offline)".to_string();
-                            app.add_log("Connection failed: server not responding");
-                        }
+                Event::ModelFetched(model) => match model {
+                    Some(m) => {
+                        app.model = m.clone();
+                        app.add_log(&format!("Connection OK — model: {}", m));
                     }
-                }
+                    None => {
+                        app.model = "(offline)".to_string();
+                        app.add_log("Connection failed: server not responding");
+                    }
+                },
             }
 
             // Push typing settings to engine if they changed
