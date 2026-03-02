@@ -361,8 +361,12 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
     eprintln!("VAD started - listening...");
 
+    let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
+    ears::ipc::start_ipc_server(ipc_rx);
+
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
+            let _ = ipc_tx.send(event.clone());
             match event {
                 ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
@@ -386,6 +390,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
     let _ = shutdown_tx.send(true);
     let _ = pipeline_handle.await;
+    ears::ipc::cleanup_socket();
     std::fs::remove_file(&vad_pid_file).ok();
     state_mgr.transition(StateEnum::Idle).ok();
 
