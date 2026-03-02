@@ -7,8 +7,8 @@ use cli::{Cli, Commands, DeviceAction};
 use ears::audio;
 use ears::Config;
 use ears::{
-    AudioFeedback, KeyboardLayout, Notifications, ProcessManager, State as StateEnum, StateManager,
-    TextInput, WhisperClient,
+    AudioFeedback, FileLock, KeyboardLayout, Notifications, ProcessManager, State as StateEnum,
+    StateManager, TextInput, WhisperClient,
 };
 use std::time::Duration;
 use url::Url;
@@ -238,6 +238,22 @@ fn show_server(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Guard that resets state to Idle on drop.
+/// Prevents getting stuck in Transcribing after crashes or early returns.
+struct TranscribingGuard {
+    state_dir: std::path::PathBuf,
+}
+
+impl Drop for TranscribingGuard {
+    fn drop(&mut self) {
+        let state_file = self.state_dir.join("state");
+        let _ = std::fs::write(&state_file, "idle");
+        let _ = std::process::Command::new("pkill")
+            .args(["-RTMIN+9", "waybar"])
+            .spawn();
+    }
+}
+
 /// Run post-transcribe hook if it exists (fire-and-forget)
 fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
     use directories::ProjectDirs;
@@ -378,6 +394,15 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
 /// Main toggle logic: start recording or stop and transcribe
 async fn handle_toggle(config: &Config) -> Result<()> {
+    // Serialize toggle operations across processes to prevent races on the
+    // state file and audio file when the keybind is pressed rapidly.
+    let lock_path = config.state_dir.join("toggle.lock");
+    let mut lock = FileLock::new(&lock_path).context("Failed to create toggle lock")?;
+    if !lock.try_lock().context("Failed to check toggle lock")? {
+        tracing::info!("Toggle already in progress, ignoring");
+        return Ok(());
+    }
+
     let mut state_mgr =
         StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
 
@@ -524,6 +549,12 @@ async fn stop_and_transcribe(
         .transition(StateEnum::Transcribing)
         .context("Failed to transition to Transcribing state")?;
 
+    // Guard ensures state resets to Idle even if we return early via `?` or panic.
+    // This prevents getting stuck in Transcribing after crashes or unexpected errors.
+    let _state_guard = TranscribingGuard {
+        state_dir: config.state_dir.clone(),
+    };
+
     let lang_start = std::time::Instant::now();
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     tracing::info!("Language detection took {:?}", lang_start.elapsed());
@@ -575,8 +606,6 @@ async fn stop_and_transcribe(
             AudioFeedback::beep_error().ok();
             Notifications::info("No speech detected").ok();
             tracing::info!("No speech detected");
-
-            state_mgr.transition(StateEnum::Idle).ok();
         }
         Err(e) => {
             AudioFeedback::beep_error().ok();
@@ -585,14 +614,14 @@ async fn stop_and_transcribe(
 
             std::fs::remove_file(&audio_file).ok();
 
-            state_mgr.transition(StateEnum::Idle).ok();
-
+            // Guard will reset state to Idle on drop
             return Err(e.into());
         }
     }
 
     std::fs::remove_file(&audio_file).ok();
 
+    // Explicit transition (guard also resets on drop, but this is the clean path)
     state_mgr
         .transition(StateEnum::Idle)
         .context("Failed to transition to Idle state")?;
