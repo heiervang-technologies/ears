@@ -82,8 +82,8 @@ pub struct TypingSettings {
 impl Default for TypingSettings {
     fn default() -> Self {
         Self {
-            progressive_typing: true,
-            auto_correction: true,
+            progressive_typing: false,
+            auto_correction: false,
             typing_mode: crate::desktop::TypingMode::Auto,
             auto_enter: true,
         }

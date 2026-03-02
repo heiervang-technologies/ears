@@ -27,7 +27,7 @@ expression: output
 │  [x] Strict Alphabet [s]                                                                         │
 │                                                                                                  │
 │Typing Settings:                                                                                  │
-│  [x] Progressive Typing [t]                                                                      │
+│  [ ] Progressive Typing [t]                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [q] Quit             │

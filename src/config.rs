@@ -35,6 +35,10 @@ fn default_auto_enter() -> bool {
     true
 }
 
+fn default_progressive_typing() -> bool {
+    false
+}
+
 /// VAD (Voice Activity Detection) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadSettings {
@@ -92,6 +96,9 @@ pub struct Config {
     /// Send Enter key after each transcription (default: true)
     #[serde(default = "default_auto_enter")]
     pub auto_enter: bool,
+    /// Enable progressive typing in streaming mode (default: false)
+    #[serde(default = "default_progressive_typing")]
+    pub progressive_typing: bool,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
@@ -135,6 +142,7 @@ impl Config {
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
+            progressive_typing: false,
             vad: VadSettings::default(),
             config_dir,
             state_dir,
@@ -240,6 +248,7 @@ impl Config {
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
+            progressive_typing: false,
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             state_dir: PathBuf::new(),

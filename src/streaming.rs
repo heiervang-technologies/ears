@@ -245,8 +245,8 @@ impl Default for StreamingConfig {
             chunk_size_ms: 500,
             buffer_size_seconds: 10,
             agreement_threshold: 2,
-            progressive_typing: true,
-            auto_correction: true,
+            progressive_typing: false,
+            auto_correction: false,
         }
     }
 }
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(config.chunk_size_ms, 500);
         assert_eq!(config.buffer_size_seconds, 10);
         assert_eq!(config.agreement_threshold, 2);
-        assert!(config.progressive_typing);
-        assert!(config.auto_correction);
+        assert!(!config.progressive_typing);
+        assert!(!config.auto_correction);
     }
 }

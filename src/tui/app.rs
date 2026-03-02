@@ -256,6 +256,7 @@ impl App {
         let text_filters = config.text_filters.clone();
         let typing_mode = config.typing_mode;
         let auto_enter = config.auto_enter;
+        let progressive_typing = config.progressive_typing;
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -284,8 +285,8 @@ impl App {
             is_speaking: false,
             committed_text: String::new(),
             uncommitted_text: String::new(),
-            progressive_typing: true,
-            auto_correction: true,
+            progressive_typing,
+            auto_correction: progressive_typing,
             auto_enter,
             segments_processed: 0,
             avg_latency_ms: 0,
