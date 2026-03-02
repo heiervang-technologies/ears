@@ -30,8 +30,8 @@ pub struct ProgressiveTypingConfig {
 impl Default for ProgressiveTypingConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            auto_correction: true,
+            enabled: false,
+            auto_correction: false,
             typing_mode: TypingMode::Auto,
         }
     }
@@ -206,17 +206,17 @@ mod tests {
     fn test_config_update() {
         let mut engine = ProgressiveTypingEngine::new(ProgressiveTypingConfig::default());
 
-        assert!(engine.config().enabled);
-        assert!(engine.config().auto_correction);
+        assert!(!engine.config().enabled);
+        assert!(!engine.config().auto_correction);
 
         engine.set_config(ProgressiveTypingConfig {
-            enabled: false,
-            auto_correction: false,
+            enabled: true,
+            auto_correction: true,
             typing_mode: TypingMode::Auto,
         });
 
-        assert!(!engine.config().enabled);
-        assert!(!engine.config().auto_correction);
+        assert!(engine.config().enabled);
+        assert!(engine.config().auto_correction);
     }
 
     #[test]

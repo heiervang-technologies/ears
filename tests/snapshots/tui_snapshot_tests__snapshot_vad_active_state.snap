@@ -20,8 +20,8 @@ expression: output
 │                                                                              │
 │                                                                              │
 │Settings:                                                                     │
-│  [x] Progressive Typing [t]                                                  │
-│  [x] Auto-correction [a]                                                     │
+│  [ ] Progressive Typing [t]                                                  │
+│  [ ] Auto-correction [a]                                                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                            │
