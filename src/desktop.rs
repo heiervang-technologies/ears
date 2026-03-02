@@ -325,7 +325,7 @@ impl AudioFeedback {
     /// Play embedded sound data (non-blocking)
     fn play_embedded(data: &'static [u8]) -> Result<()> {
         use std::process::{Command, Stdio};
-        
+
         let mut child = Command::new("paplay")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())

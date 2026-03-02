@@ -208,6 +208,10 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     // Streaming event channel
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamingEvent>();
 
+    // IPC broadcast channel — events are forwarded to connected clients
+    let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel::<StreamingEvent>(256);
+    crate::ipc::start_ipc_server(ipc_rx);
+
     // VAD pipeline state
     let mut vad_running = false;
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
@@ -244,18 +248,16 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                     // Terminal resize is handled automatically by ratatui
                     // on the next draw() call, no action needed
                 }
-                Event::ModelFetched(model) => {
-                    match model {
-                        Some(m) => {
-                            app.model = m.clone();
-                            app.add_log(&format!("Connection OK — model: {}", m));
-                        }
-                        None => {
-                            app.model = "(offline)".to_string();
-                            app.add_log("Connection failed: server not responding");
-                        }
+                Event::ModelFetched(model) => match model {
+                    Some(m) => {
+                        app.model = m.clone();
+                        app.add_log(&format!("Connection OK — model: {}", m));
                     }
-                }
+                    None => {
+                        app.model = "(offline)".to_string();
+                        app.add_log("Connection failed: server not responding");
+                    }
+                },
             }
 
             // Push typing settings to engine if they changed
@@ -274,8 +276,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 }
             }
 
-            // Drain streaming events
+            // Drain streaming events and broadcast to IPC clients
             while let Ok(event) = event_rx.try_recv() {
+                let _ = ipc_tx.send(event.clone());
                 app.handle_streaming_event(event);
             }
 
@@ -338,6 +341,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     }
 
     restore_terminal(&mut terminal)?;
+
+    // Clean up IPC socket
+    crate::ipc::cleanup_socket();
 
     // Drop guard is redundant on clean exit, but handles panics above
     drop(_state_guard);

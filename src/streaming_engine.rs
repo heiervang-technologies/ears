@@ -39,7 +39,7 @@ pub enum StreamingEngineError {
 }
 
 /// Events emitted by the streaming engine
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum StreamingEvent {
     /// VAD detected start of speech
     SpeechStarted,

@@ -32,23 +32,21 @@ impl EventHandler {
         let (sender, receiver) = mpsc::unbounded_channel();
         let tick_rate = Duration::from_millis(tick_rate_ms);
         let thread_sender = sender.clone();
-        
-        std::thread::spawn(move || {
-            loop {
-                let event = if event::poll(tick_rate).unwrap_or(false) {
-                    match event::read().unwrap_or(CrosstermEvent::FocusGained) {
-                        CrosstermEvent::Key(key) => Event::Key(key),
-                        CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
-                        CrosstermEvent::Resize(w, h) => Event::Resize(w, h),
-                        _ => Event::Tick,
-                    }
-                } else {
-                    Event::Tick
-                };
-                
-                if thread_sender.send(event).is_err() {
-                    break;
+
+        std::thread::spawn(move || loop {
+            let event = if event::poll(tick_rate).unwrap_or(false) {
+                match event::read().unwrap_or(CrosstermEvent::FocusGained) {
+                    CrosstermEvent::Key(key) => Event::Key(key),
+                    CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
+                    CrosstermEvent::Resize(w, h) => Event::Resize(w, h),
+                    _ => Event::Tick,
                 }
+            } else {
+                Event::Tick
+            };
+
+            if thread_sender.send(event).is_err() {
+                break;
             }
         });
 

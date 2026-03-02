@@ -429,7 +429,12 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
     // Strict alphabet filter toggle
     app.add_clickable_region(
-        Rect::new(inner_x, inner_y + strict_alphabet_line as u16, inner_width, 1),
+        Rect::new(
+            inner_x,
+            inner_y + strict_alphabet_line as u16,
+            inner_width,
+            1,
+        ),
         ClickAction::ToggleStrictAlphabetFilter,
     );
 
