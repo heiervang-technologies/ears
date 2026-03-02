@@ -520,12 +520,22 @@ async fn stop_and_transcribe(
     }
 
     let metadata = tokio::fs::metadata(&audio_file).await?;
-    if metadata.len() == 0 {
+
+    // A standard PCM WAV header is 44 bytes. A file with only a header
+    // (or less) contains zero audio samples. This happens when pw-record
+    // is killed before capturing any audio (e.g., very fast double-tap).
+    // Sending such a file crashes some ASR servers (Qwen3-ASR ValueError).
+    const WAV_HEADER_SIZE: u64 = 44;
+    if metadata.len() <= WAV_HEADER_SIZE {
         AudioFeedback::beep_error().ok();
-        Notifications::error("Recording file is empty").ok();
+        Notifications::error("Recording too short").ok();
         std::fs::remove_file(&audio_file).ok();
-        tracing::error!("Audio file is empty");
-        anyhow::bail!("Audio file is empty");
+        tracing::error!(
+            "Audio file has no audio data ({} bytes, header is {})",
+            metadata.len(),
+            WAV_HEADER_SIZE
+        );
+        anyhow::bail!("Recording file contains no audio data");
     }
 
     tracing::info!("Audio file size: {} bytes", metadata.len());
