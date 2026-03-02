@@ -199,6 +199,13 @@ impl StreamingEngine {
         &mut self,
         segment: SpeechSegment,
     ) -> Result<(), StreamingEngineError> {
+        // Skip segments with no audio data — sending an empty WAV crashes
+        // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
+        if segment.samples.is_empty() {
+            debug!("Skipping empty speech segment");
+            return Ok(());
+        }
+
         let start_time = Instant::now();
 
         debug!(

@@ -268,7 +268,7 @@ impl WhisperClient {
         Ok(filtered)
     }
 
-    /// Validates that an audio file exists and has content
+    /// Validates that an audio file exists and contains audio data
     async fn validate_audio_file(&self, path: &Path) -> Result<(), WhisperError> {
         if !path.exists() {
             return Err(WhisperError::InvalidAudioFile(format!(
@@ -278,9 +278,14 @@ impl WhisperClient {
         }
 
         let metadata = tokio::fs::metadata(path).await?;
-        if metadata.len() == 0 {
+
+        // A standard PCM WAV header is 44 bytes. Files at or below this size
+        // contain zero audio samples and will crash some ASR backends.
+        const WAV_HEADER_SIZE: u64 = 44;
+        if metadata.len() <= WAV_HEADER_SIZE {
             return Err(WhisperError::InvalidAudioFile(format!(
-                "File is empty: {}",
+                "File contains no audio data ({} bytes): {}",
+                metadata.len(),
                 path.display()
             )));
         }

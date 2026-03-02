@@ -16,7 +16,7 @@ async fn test_whisper_server_dies_during_transcription() {
 
     // Create a temporary audio file
     let mut temp_file = NamedTempFile::new().unwrap();
-    temp_file.write_all(b"fake audio data").unwrap();
+    temp_file.write_all(b"RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00").unwrap();
     temp_file.flush().unwrap();
     let audio_path = temp_file.path();
 
@@ -60,7 +60,7 @@ async fn test_whisper_server_timeout() {
 
     // Create a temporary audio file
     let mut temp_file = NamedTempFile::new().unwrap();
-    temp_file.write_all(b"fake audio data").unwrap();
+    temp_file.write_all(b"RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00").unwrap();
     temp_file.flush().unwrap();
     let audio_path = temp_file.path();
 
@@ -90,7 +90,7 @@ async fn test_whisper_server_malformed_response() {
 
     // Create a temporary audio file
     let mut temp_file = NamedTempFile::new().unwrap();
-    temp_file.write_all(b"fake audio data").unwrap();
+    temp_file.write_all(b"RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00").unwrap();
     temp_file.flush().unwrap();
     let audio_path = temp_file.path();
 
@@ -125,7 +125,7 @@ async fn test_whisper_server_returns_invalid_text_field() {
 
     // Create a temporary audio file
     let mut temp_file = NamedTempFile::new().unwrap();
-    temp_file.write_all(b"fake audio data").unwrap();
+    temp_file.write_all(b"RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00").unwrap();
     temp_file.flush().unwrap();
     let audio_path = temp_file.path();
 

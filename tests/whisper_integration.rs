@@ -208,7 +208,11 @@ async fn test_transcribe_empty_file() {
     assert!(result.is_err());
     match result {
         Err(WhisperError::InvalidAudioFile(msg)) => {
-            assert!(msg.contains("empty"));
+            assert!(
+                msg.contains("no audio data"),
+                "Expected 'no audio data' in error, got: {}",
+                msg
+            );
         }
         _ => panic!("Expected InvalidAudioFile error for empty file"),
     }
