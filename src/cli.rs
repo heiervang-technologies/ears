@@ -23,6 +23,18 @@ pub enum Commands {
     #[command(alias = "v")]
     Vad,
 
+    /// Start WebSocket server for remote audio input (VAD pipeline)
+    #[command(alias = "ws")]
+    WsListen {
+        /// Host to bind to
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+    },
+
     /// Audio device management
     #[command(alias = "d")]
     Device {

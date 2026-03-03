@@ -51,6 +51,9 @@ async fn main() -> Result<()> {
         Some(Commands::Vad) => {
             handle_vad(&config).await?;
         }
+        Some(Commands::WsListen { host, port }) => {
+            handle_ws_listen(&config, &host, port).await?;
+        }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
             Some(DeviceAction::Select) => select_device(&config)?,
@@ -391,6 +394,177 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
     let _ = shutdown_tx.send(true);
     let _ = pipeline_handle.await;
+    ears::ipc::cleanup_socket();
+    std::fs::remove_file(&vad_pid_file).ok();
+    state_mgr.transition(StateEnum::Idle).ok();
+
+    Ok(())
+}
+
+/// Run WebSocket audio input mode: starts a WS server that feeds audio into the VAD pipeline
+async fn handle_ws_listen(config: &Config, host: &str, port: u16) -> Result<()> {
+    let vad_pid_file = config.state_dir.join("vad.pid");
+
+    // Stop existing VAD if running (same as handle_vad)
+    if let Ok(pid_str) = std::fs::read_to_string(&vad_pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            if kill(Pid::from_raw(pid), None).is_ok() {
+                kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
+                eprintln!("Existing VAD stopped");
+            }
+        }
+        std::fs::remove_file(&vad_pid_file).ok();
+    }
+
+    let mut state_mgr =
+        StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
+    state_mgr.load_state().ok();
+
+    std::fs::write(&vad_pid_file, std::process::id().to_string())
+        .context("Failed to write VAD PID file")?;
+
+    if state_mgr.current_state() != StateEnum::Idle {
+        state_mgr.transition(StateEnum::Idle).ok();
+    }
+    state_mgr
+        .transition(StateEnum::VadActive)
+        .context("Failed to transition to VadActive")?;
+
+    // Build the VAD pipeline components manually (like start_vad_pipeline but without pw-record)
+    let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    let whisper_client = std::sync::Arc::new(
+        ears::WhisperClient::new(config.whisper_server.to_string())
+            .with_language(language)
+            .with_api_key(config.api_key.clone())
+            .with_model(config.model.clone()),
+    );
+
+    whisper_client
+        .health_check()
+        .await
+        .map_err(|e| anyhow::anyhow!("Whisper server health check failed: {}", e))?;
+
+    // Audio channel — WebSocket server writes here, engine reads
+    let (audio_tx, mut audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+
+    // Start WebSocket server
+    let ws_handle = ears::ws_input::start_ws_server(host, port, audio_tx).await?;
+
+    // Create streaming engine
+    let streaming_config = ears::streaming::StreamingConfig::default();
+    let vad_config = ears::vad::VadConfig {
+        sample_rate: 16000,
+        speech_threshold: config.vad.speech_threshold,
+        min_speech_duration_ms: config.vad.min_speech_duration_ms,
+        max_silence_duration_ms: config.vad.max_silence_duration_ms,
+        pre_speech_buffer_ms: config.vad.pre_speech_buffer_ms,
+    };
+    let typing_config = ears::progressive_typing::ProgressiveTypingConfig::default();
+    let temp_dir = config.state_dir.clone();
+    let mut engine = ears::streaming_engine::StreamingEngine::new(
+        whisper_client,
+        streaming_config,
+        vad_config,
+        typing_config,
+        temp_dir,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create streaming engine: {}", e))?;
+
+    let (event_tx, mut event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
+    engine.set_event_sender(event_tx.clone());
+
+    // Typing settings (progressive + auto_enter from config)
+    {
+        let (_settings_tx, mut settings_rx) =
+            tokio::sync::watch::channel(ears::tui::TypingSettings {
+                progressive_typing: true,
+                auto_correction: true,
+                typing_mode: config.typing_mode,
+                auto_enter: config.auto_enter,
+            });
+        // Apply initial settings
+        let s = *settings_rx.borrow_and_update();
+        engine.set_typing_enabled(
+            s.progressive_typing,
+            s.auto_correction,
+            s.typing_mode,
+            s.auto_enter,
+        );
+
+        // Shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+        // Audio processing task
+        let pipeline_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    audio = audio_rx.recv() => {
+                        match audio {
+                            Some(samples) => {
+                                if let Err(e) = engine.process_audio(&samples).await {
+                                    tracing::warn!("Audio processing error: {}", e);
+                                }
+                            }
+                            None => {
+                                tracing::debug!("Audio channel closed");
+                                break;
+                            }
+                        }
+                    }
+                    _ = settings_rx.changed() => {
+                        let s = *settings_rx.borrow_and_update();
+                        engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                    }
+                    _ = shutdown_rx.changed() => {
+                        tracing::debug!("WS VAD pipeline shutdown requested");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // IPC server
+        let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
+        ears::ipc::start_ipc_server(ipc_rx);
+
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                let _ = ipc_tx.send(event.clone());
+                match event {
+                    ears::streaming_engine::StreamingEvent::SegmentCompleted {
+                        text,
+                        duration_ms,
+                    } => {
+                        tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
+                    }
+                    ears::streaming_engine::StreamingEvent::Error(msg) => {
+                        tracing::warn!("Streaming error: {}", msg);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        eprintln!("WebSocket VAD listening on ws://{}:{}", host, port);
+
+        // Wait for signal
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = sigint.recv() => {}
+        }
+
+        let _ = shutdown_tx.send(true);
+        let _ = pipeline_handle.await;
+        ws_handle.abort();
+    }
+
     ears::ipc::cleanup_socket();
     std::fs::remove_file(&vad_pid_file).ok();
     state_mgr.transition(StateEnum::Idle).ok();

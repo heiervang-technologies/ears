@@ -33,6 +33,9 @@ pub mod vad;
 // Iteration 9: Text filters
 pub mod text_filters;
 
+// WebSocket audio input
+pub mod ws_input;
+
 // Re-exports from Iteration 1
 pub use config::Config;
 
