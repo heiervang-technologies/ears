@@ -33,6 +33,10 @@ pub enum Commands {
         /// Port to listen on
         #[arg(long, default_value_t = 8765)]
         port: u16,
+
+        /// Custom IPC socket path (avoids conflicting with desktop ears instance)
+        #[arg(long)]
+        socket: Option<String>,
     },
 
     /// Audio device management

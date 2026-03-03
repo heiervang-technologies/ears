@@ -51,8 +51,8 @@ async fn main() -> Result<()> {
         Some(Commands::Vad) => {
             handle_vad(&config).await?;
         }
-        Some(Commands::WsListen { host, port }) => {
-            handle_ws_listen(&config, &host, port).await?;
+        Some(Commands::WsListen { host, port, socket }) => {
+            handle_ws_listen(&config, &host, port, socket).await?;
         }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
@@ -402,35 +402,17 @@ async fn handle_vad(config: &Config) -> Result<()> {
 }
 
 /// Run WebSocket audio input mode: starts a WS server that feeds audio into the VAD pipeline
-async fn handle_ws_listen(config: &Config, host: &str, port: u16) -> Result<()> {
-    let vad_pid_file = config.state_dir.join("vad.pid");
+async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option<String>) -> Result<()> {
+    // Use a custom socket path to avoid conflicting with the desktop ears instance
+    let socket_path = socket
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("XDG_RUNTIME_DIR")
+                .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
+        });
 
-    // Stop existing VAD if running (same as handle_vad)
-    if let Ok(pid_str) = std::fs::read_to_string(&vad_pid_file) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            use nix::sys::signal::{kill, Signal};
-            use nix::unistd::Pid;
-            if kill(Pid::from_raw(pid), None).is_ok() {
-                kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
-                eprintln!("Existing VAD stopped");
-            }
-        }
-        std::fs::remove_file(&vad_pid_file).ok();
-    }
-
-    let mut state_mgr =
-        StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
-    state_mgr.load_state().ok();
-
-    std::fs::write(&vad_pid_file, std::process::id().to_string())
-        .context("Failed to write VAD PID file")?;
-
-    if state_mgr.current_state() != StateEnum::Idle {
-        state_mgr.transition(StateEnum::Idle).ok();
-    }
-    state_mgr
-        .transition(StateEnum::VadActive)
-        .context("Failed to transition to VadActive")?;
+    // Do NOT kill existing VAD — ws-listen runs alongside the desktop ears instance
 
     // Build the VAD pipeline components manually (like start_vad_pipeline but without pw-record)
     let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
@@ -526,9 +508,9 @@ async fn handle_ws_listen(config: &Config, host: &str, port: u16) -> Result<()> 
             }
         });
 
-        // IPC server
+        // IPC server on custom socket path (avoids conflict with desktop ears)
         let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
-        ears::ipc::start_ipc_server(ipc_rx);
+        ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
@@ -565,9 +547,7 @@ async fn handle_ws_listen(config: &Config, host: &str, port: u16) -> Result<()> 
         ws_handle.abort();
     }
 
-    ears::ipc::cleanup_socket();
-    std::fs::remove_file(&vad_pid_file).ok();
-    state_mgr.transition(StateEnum::Idle).ok();
+    ears::ipc::cleanup_socket_at(&socket_path);
 
     Ok(())
 }
