@@ -431,8 +431,11 @@ async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option
     // Audio channel — WebSocket server writes here, engine reads
     let (audio_tx, mut audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
 
-    // Start WebSocket server
-    let ws_handle = ears::ws_input::start_ws_server(host, port, audio_tx).await?;
+    // Broadcast channel for streaming events — shared by IPC server and WebSocket echo
+    let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
+
+    // Start WebSocket server (echoes events back to connected clients)
+    let ws_handle = ears::ws_input::start_ws_server(host, port, audio_tx, ipc_tx.clone()).await?;
 
     // Create streaming engine
     let streaming_config = ears::streaming::StreamingConfig::default();
@@ -509,7 +512,6 @@ async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option
         });
 
         // IPC server on custom socket path (avoids conflict with desktop ears)
-        let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
         ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
 
         tokio::spawn(async move {
