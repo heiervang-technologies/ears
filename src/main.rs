@@ -458,14 +458,14 @@ async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
     engine.set_event_sender(event_tx.clone());
 
-    // Typing settings (progressive + auto_enter from config)
+    // Disable typing for ws-listen — only emit IPC events, never type into windows
     {
         let (_settings_tx, mut settings_rx) =
             tokio::sync::watch::channel(ears::tui::TypingSettings {
-                progressive_typing: true,
-                auto_correction: true,
+                progressive_typing: false,
+                auto_correction: false,
                 typing_mode: config.typing_mode,
-                auto_enter: config.auto_enter,
+                auto_enter: false,
             });
         // Apply initial settings
         let s = *settings_rx.borrow_and_update();
