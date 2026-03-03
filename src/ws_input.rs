@@ -72,6 +72,10 @@ async fn handle_connection(
                         Some("end") => {
                             info!("WebSocket audio session ended");
                             session_active = false;
+                            // Send ~1s of silence to flush the VAD pipeline
+                            // (forces speech segment to end via silence timeout)
+                            let silence = vec![0.0f32; 16000];
+                            let _ = audio_tx.send(silence);
                         }
                         other => {
                             debug!("Unknown WS message type: {:?}", other);
