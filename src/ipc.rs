@@ -11,11 +11,54 @@ use tracing::{debug, error, info};
 
 use crate::streaming_engine::StreamingEvent;
 
-/// Return the IPC socket path.
+/// Return the default IPC socket path.
 pub fn socket_path() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")
         .map(|d| PathBuf::from(d).join("ears.sock"))
         .unwrap_or_else(|_| PathBuf::from("/tmp/ears.sock"))
+}
+
+/// Start the IPC server with a custom socket path in a background tokio task.
+pub fn start_ipc_server_at(path: PathBuf, rx: broadcast::Receiver<StreamingEvent>) {
+    tokio::spawn(async move {
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+
+        let listener = match UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to bind IPC socket at {}: {}", path.display(), e);
+                return;
+            }
+        };
+
+        info!("IPC server listening on {}", path.display());
+
+        loop {
+            tokio::select! {
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, _addr)) => {
+                            debug!("IPC client connected");
+                            let client_rx = rx.resubscribe();
+                            tokio::spawn(handle_client(stream, client_rx));
+                        }
+                        Err(e) => {
+                            error!("IPC accept error: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Remove a specific socket file (best-effort cleanup).
+pub fn cleanup_socket_at(path: &PathBuf) {
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Start the IPC server in a background tokio task.
