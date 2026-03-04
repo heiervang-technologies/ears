@@ -121,7 +121,7 @@ async fn handle_connection(
                 match event {
                     Ok(ev) => {
                         if let Ok(json) = serde_json::to_string(&ev) {
-                            if write.send(Message::Text(json.into())).await.is_err() {
+                            if write.send(Message::Text(json)).await.is_err() {
                                 break;
                             }
                         }
