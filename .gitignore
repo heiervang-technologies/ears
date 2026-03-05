@@ -33,3 +33,6 @@ build/
 # Added by cargo
 
 /target
+
+# Snapshot test review artifacts
+*.snap.new
