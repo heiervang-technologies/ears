@@ -1210,9 +1210,11 @@ impl App {
         match event {
             StreamingEvent::SpeechStarted => {
                 self.is_speaking = true;
+                crate::desktop::AudioFeedback::beep_vad_speech().ok();
             }
             StreamingEvent::SpeechEnded => {
                 self.is_speaking = false;
+                crate::desktop::AudioFeedback::beep_vad_end().ok();
             }
             StreamingEvent::TranscriptUpdate {
                 committed,

@@ -313,6 +313,12 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
 /// Toggle VAD mode: start or stop headless voice activity detection
 async fn handle_vad(config: &Config) -> Result<()> {
     let vad_pid_file = config.state_dir.join("vad.pid");
+    let vad_lock_path = config.state_dir.join("vad.lock");
+    let mut vad_lock = FileLock::new(&vad_lock_path).context("Failed to create VAD lock")?;
+    if !vad_lock.try_lock().context("Failed to check VAD lock")? {
+        // Another VAD instance is starting up — just try to kill it via PID
+        tracing::info!("VAD lock held by another process, attempting stop via PID");
+    }
 
     if let Ok(pid_str) = std::fs::read_to_string(&vad_pid_file) {
         if let Ok(pid) = pid_str.trim().parse::<i32>() {
@@ -321,6 +327,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
             if kill(Pid::from_raw(pid), None).is_ok() {
                 kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
+                AudioFeedback::beep_vad_close().ok();
                 eprintln!("VAD stopped");
                 return Ok(());
             }
@@ -363,6 +370,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
         auto_enter: config.auto_enter,
     });
 
+    AudioFeedback::beep_vad_open().ok();
     eprintln!("VAD started - listening...");
 
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
@@ -372,6 +380,12 @@ async fn handle_vad(config: &Config) -> Result<()> {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
             match event {
+                ears::streaming_engine::StreamingEvent::SpeechStarted => {
+                    AudioFeedback::beep_vad_speech().ok();
+                }
+                ears::streaming_engine::StreamingEvent::SpeechEnded => {
+                    AudioFeedback::beep_vad_end().ok();
+                }
                 ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
                 }
@@ -574,6 +588,12 @@ async fn handle_toggle(config: &Config) -> Result<()> {
     let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(120));
 
     process_mgr.cleanup_stale().ok();
+
+    // If VAD is active, toggle should not interfere
+    if state_mgr.current_state() == StateEnum::VadActive {
+        tracing::info!("VAD is active, toggle ignored");
+        return Ok(());
+    }
 
     state_mgr
         .reconcile_state(|| {

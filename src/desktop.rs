@@ -303,6 +303,10 @@ pub struct AudioFeedback;
 static SOUND_START: &[u8] = include_bytes!("../sounds/start.wav");
 static SOUND_DONE: &[u8] = include_bytes!("../sounds/done.wav");
 static SOUND_BELL: &[u8] = include_bytes!("../sounds/bell.wav");
+static SOUND_VAD_OPEN: &[u8] = include_bytes!("../sounds/vad_open.wav");
+static SOUND_VAD_CLOSE: &[u8] = include_bytes!("../sounds/vad_close.wav");
+static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
+static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
 
 impl AudioFeedback {
     /// Get custom sound directory
@@ -374,6 +378,26 @@ impl AudioFeedback {
     /// Play error bell (double B4 - 493.88Hz)
     pub fn beep_error() -> Result<()> {
         Self::play_named("bell", SOUND_BELL)
+    }
+
+    /// Play VAD open sound (ascending C5→G5 chirp)
+    pub fn beep_vad_open() -> Result<()> {
+        Self::play_named("vad_open", SOUND_VAD_OPEN)
+    }
+
+    /// Play VAD close sound (descending G5→C5 chirp)
+    pub fn beep_vad_close() -> Result<()> {
+        Self::play_named("vad_close", SOUND_VAD_CLOSE)
+    }
+
+    /// Play VAD speech detected sound (short A5 blip)
+    pub fn beep_vad_speech() -> Result<()> {
+        Self::play_named("vad_speech", SOUND_VAD_SPEECH)
+    }
+
+    /// Play VAD speech ended sound (short E5→C5 blip)
+    pub fn beep_vad_end() -> Result<()> {
+        Self::play_named("vad_end", SOUND_VAD_END)
     }
 }
 

@@ -301,6 +301,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         if let Err(e) = state_mgr.transition(EarsState::VadActive) {
                             tracing::warn!("State transition error: {}", e);
                         }
+                        crate::desktop::AudioFeedback::beep_vad_open().ok();
                         app.add_log("VAD pipeline started");
                     }
                     Err(e) => {
@@ -322,6 +323,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 if let Err(e) = state_mgr.transition(EarsState::Idle) {
                     tracing::warn!("State transition error: {}", e);
                 }
+                crate::desktop::AudioFeedback::beep_vad_close().ok();
                 app.add_log("VAD pipeline stopped");
             }
         }
