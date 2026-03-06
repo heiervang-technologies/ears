@@ -116,10 +116,7 @@ fn select_device(config: &Config) -> Result<()> {
 
     println!("Selected: {}", device.description);
     println!("Device ID: {}", device_name);
-    println!(
-        "Saved to: {}",
-        config.config_dir.join("config.toml").display()
-    );
+    println!("Saved to: {}", config.config_file().display());
 
     Ok(())
 }
@@ -163,10 +160,7 @@ fn list_devices() -> Result<()> {
 
 fn show_current(config: &Config) -> Result<()> {
     println!("Current device: {}", config.device);
-    println!(
-        "Config: {}",
-        config.config_dir.join("config.toml").display()
-    );
+    println!("Config: {}", config.config_file().display());
 
     Ok(())
 }
@@ -233,10 +227,7 @@ fn set_profile(name: &str) -> Result<()> {
 
 fn show_server(config: &Config) -> Result<()> {
     println!("Current server: {}", config.whisper_server);
-    println!(
-        "Config: {}",
-        config.config_dir.join("config.toml").display()
-    );
+    println!("Config: {}", config.config_file().display());
 
     Ok(())
 }
@@ -416,15 +407,18 @@ async fn handle_vad(config: &Config) -> Result<()> {
 }
 
 /// Run WebSocket audio input mode: starts a WS server that feeds audio into the VAD pipeline
-async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option<String>) -> Result<()> {
+async fn handle_ws_listen(
+    config: &Config,
+    host: &str,
+    port: u16,
+    socket: Option<String>,
+) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
-    let socket_path = socket
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var("XDG_RUNTIME_DIR")
-                .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
-                .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
-        });
+    let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        std::env::var("XDG_RUNTIME_DIR")
+            .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
+    });
 
     // Do NOT kill existing VAD — ws-listen runs alongside the desktop ears instance
 

@@ -99,12 +99,18 @@ pub struct Config {
     /// Enable progressive typing in streaming mode (default: false)
     #[serde(default = "default_progressive_typing")]
     pub progressive_typing: bool,
+    /// Enable auto-correction for progressive typing (None = legacy behavior)
+    #[serde(default)]
+    pub auto_correction: Option<bool>,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
+    /// Active profile name used to load this config (None = default config.toml)
+    #[serde(skip)]
+    pub active_profile: Option<String>,
     /// State directory (computed, not stored)
     #[serde(skip)]
     pub state_dir: PathBuf,
@@ -143,8 +149,10 @@ impl Config {
             typing_mode: TypingMode::default(),
             auto_enter: true,
             progressive_typing: false,
+            auto_correction: None,
             vad: VadSettings::default(),
             config_dir,
+            active_profile: None,
             state_dir,
         })
     }
@@ -186,6 +194,7 @@ impl Config {
         };
 
         config.config_dir = config_dir;
+        config.active_profile = profile_name;
         config.state_dir = state_dir;
 
         // Apply env var overrides (highest priority)
@@ -249,8 +258,10 @@ impl Config {
             typing_mode: TypingMode::default(),
             auto_enter: true,
             progressive_typing: false,
+            auto_correction: None,
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
+            active_profile: None,
             state_dir: PathBuf::new(),
         };
 
@@ -370,13 +381,24 @@ impl Config {
     /// Save configuration to TOML file
     pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
-        let config_file = self.config_dir.join("config.toml");
+        let config_file = Self::config_file_path(&self.config_dir, self.active_profile.as_deref());
         let toml_str = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        fs::write(&config_file, toml_str).context("Failed to write config.toml")?;
+        fs::write(&config_file, toml_str)
+            .with_context(|| format!("Failed to write {}", config_file.display()))?;
         Ok(())
     }
 
-    /// Save text filter settings (saves the full config.toml)
+    /// Return the resolved config file path this instance reads/writes.
+    pub fn config_file(&self) -> PathBuf {
+        Self::config_file_path(&self.config_dir, self.active_profile.as_deref())
+    }
+
+    /// Resolve effective auto-correction setting with backward compatibility.
+    pub fn effective_auto_correction(&self) -> bool {
+        self.auto_correction.unwrap_or(self.progressive_typing)
+    }
+
+    /// Save text filter settings (saves the full active config file)
     pub fn save_text_filters(&self) -> Result<()> {
         self.save()
     }
@@ -444,6 +466,29 @@ mod tests {
         assert_eq!(loaded.whisper_server.as_str(), "http://localhost:9000/");
         assert_eq!(loaded.device, "test-device");
         assert_eq!(loaded.model, Some("whisper-large-v3-turbo".to_string()));
+    }
+
+    #[test]
+    fn test_save_uses_active_profile_file() {
+        let (mut config, _temp_dir) = setup_test_config();
+        config.active_profile = Some("work".to_string());
+        config.auto_enter = false;
+        config.progressive_typing = true;
+        config.auto_correction = Some(false);
+
+        config.save().unwrap();
+
+        let profile_path = config.config_dir.join("config.work.toml");
+        let default_path = config.config_dir.join("config.toml");
+
+        assert!(profile_path.exists());
+        assert!(!default_path.exists());
+
+        let content = fs::read_to_string(profile_path).unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(!loaded.auto_enter);
+        assert!(loaded.progressive_typing);
+        assert_eq!(loaded.auto_correction, Some(false));
     }
 
     #[test]
