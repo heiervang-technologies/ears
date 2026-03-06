@@ -300,7 +300,7 @@ impl App {
             progressive_typing,
             auto_correction,
             auto_enter,
-            save_to_clipboard: false,
+            save_to_clipboard: config.save_to_clipboard,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,

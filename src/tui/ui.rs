@@ -819,7 +819,6 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
         ),
         Span::raw(" Progressive Typing [t]"),
     ]));
-    let auto_correction_line = text.len();
     let save_to_clipboard_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
@@ -829,6 +828,7 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
         ),
         Span::raw(" Save to Clipboard [b]"),
     ]));
+    let auto_correction_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
