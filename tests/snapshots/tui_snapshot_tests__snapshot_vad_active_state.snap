@@ -21,7 +21,7 @@ expression: output
 │                                                                              │
 │Settings:                                                                     │
 │  [ ] Progressive Typing [t]                                                  │
-│  [ ] Auto-correction [a]                                                     │
+│  [ ] Save to Clipboard [b]                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                            │

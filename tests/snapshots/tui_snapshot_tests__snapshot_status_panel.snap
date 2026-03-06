@@ -19,6 +19,7 @@ expression: output
 │                                                                                                  │
 │Settings:                                                                                         │
 │  [ ] Progressive Typing [t]                                                                      │
+│  [ ] Save to Clipboard [b]                                                                       │
 │  [ ] Auto-correction [a]                                                                         │
 │                                                                                                  │
 │                                                                                                  │
@@ -27,7 +28,6 @@ expression: output
 │  Segments processed: 0                                                                           │
 │  Transcriptions: 0 total, 0 ok, 0 failed                                                         │
 │  Words transcribed: 0                                                                            │
-│                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                                                │
