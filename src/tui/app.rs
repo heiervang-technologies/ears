@@ -1076,10 +1076,8 @@ impl App {
     /// Copy text to clipboard using wl-copy
     fn copy_to_clipboard(&self, text: &str) {
         use std::process::Command;
-        let result = Command::new("wl-copy")
-            .arg(text)
-            .output();
-        
+        let result = Command::new("wl-copy").arg(text).output();
+
         match result {
             Ok(output) if output.status.success() => {
                 tracing::debug!("Copied text to clipboard");

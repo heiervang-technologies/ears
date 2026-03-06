@@ -463,7 +463,12 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
     // Save to clipboard toggle
     app.add_clickable_region(
-        Rect::new(inner_x, inner_y + save_to_clipboard_line as u16, inner_width, 1),
+        Rect::new(
+            inner_x,
+            inner_y + save_to_clipboard_line as u16,
+            inner_width,
+            1,
+        ),
         ClickAction::ToggleSaveToClipboard,
     );
 
@@ -907,7 +912,12 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
 
     // Save to clipboard toggle
     app.add_clickable_region(
-        Rect::new(inner_x, inner_y + save_to_clipboard_line as u16, inner_width, 1),
+        Rect::new(
+            inner_x,
+            inner_y + save_to_clipboard_line as u16,
+            inner_width,
+            1,
+        ),
         ClickAction::ToggleSaveToClipboard,
     );
 }
