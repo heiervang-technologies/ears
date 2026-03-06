@@ -402,15 +402,18 @@ async fn handle_vad(config: &Config) -> Result<()> {
 }
 
 /// Run WebSocket audio input mode: starts a WS server that feeds audio into the VAD pipeline
-async fn handle_ws_listen(config: &Config, host: &str, port: u16, socket: Option<String>) -> Result<()> {
+async fn handle_ws_listen(
+    config: &Config,
+    host: &str,
+    port: u16,
+    socket: Option<String>,
+) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
-    let socket_path = socket
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var("XDG_RUNTIME_DIR")
-                .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
-                .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
-        });
+    let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        std::env::var("XDG_RUNTIME_DIR")
+            .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
+    });
 
     // Do NOT kill existing VAD — ws-listen runs alongside the desktop ears instance
 
