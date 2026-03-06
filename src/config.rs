@@ -43,6 +43,9 @@ fn default_cue_volume() -> u8 {
     100
 }
 
+fn default_save_to_clipboard() -> bool {
+    false
+}
 /// VAD (Voice Activity Detection) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadSettings {
@@ -103,6 +106,9 @@ pub struct Config {
     /// Enable progressive typing in streaming mode (default: false)
     #[serde(default = "default_progressive_typing")]
     pub progressive_typing: bool,
+    /// Save transcribed text to clipboard after each segment (default: false)
+    #[serde(default = "default_save_to_clipboard")]
+    pub save_to_clipboard: bool,
     /// Enable auto-correction for progressive typing (None = legacy behavior)
     #[serde(default)]
     pub auto_correction: Option<bool>,
@@ -156,6 +162,7 @@ impl Config {
             typing_mode: TypingMode::default(),
             auto_enter: true,
             progressive_typing: false,
+            save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
             vad: VadSettings::default(),
@@ -266,6 +273,7 @@ impl Config {
             typing_mode: TypingMode::default(),
             auto_enter: true,
             progressive_typing: false,
+            save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
             vad: VadSettings::default(),
