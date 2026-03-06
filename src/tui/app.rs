@@ -1050,7 +1050,11 @@ impl App {
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
         self.auto_enter = !self.auto_enter;
-        let status = if self.auto_enter { "enabled" } else { "disabled" };
+        let status = if self.auto_enter {
+            "enabled"
+        } else {
+            "disabled"
+        };
         self.logs.push(format!("Auto-enter {}", status));
         self.save_config();
     }
