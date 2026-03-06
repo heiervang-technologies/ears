@@ -1080,7 +1080,7 @@ impl App {
 
         match result {
             Ok(output) if output.status.success() => {
-                tracing::debug!("Copied text to clipboard");
+                tracing::info!("Copied text to clipboard: {:?}", text);
             }
             Ok(output) => {
                 tracing::warn!("wl-copy failed: {:?}", output.stderr);

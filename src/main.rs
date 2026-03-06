@@ -862,6 +862,22 @@ async fn stop_and_transcribe(
                 }
             }
 
+            // Copy to clipboard if enabled
+            if config.save_to_clipboard {
+                use std::process::Command;
+                match Command::new("wl-copy").arg(&filtered_text).output() {
+                    Ok(output) if output.status.success() => {
+                        tracing::info!("Copied text to clipboard");
+                    }
+                    Ok(output) => {
+                        tracing::warn!("wl-copy failed: {:?}", output.stderr);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to run wl-copy: {}", e);
+                    }
+                }
+            }
+
             run_post_transcribe_hook(&audio_file, &filtered_text);
         }
         Ok(_) => {
