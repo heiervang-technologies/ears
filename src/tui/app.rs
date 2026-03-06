@@ -257,6 +257,8 @@ impl App {
         let typing_mode = config.typing_mode;
         let auto_enter = config.auto_enter;
         let progressive_typing = config.progressive_typing;
+        let auto_correction = config.effective_auto_correction();
+        let active_profile = config.active_profile.clone();
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -286,7 +288,7 @@ impl App {
             committed_text: String::new(),
             uncommitted_text: String::new(),
             progressive_typing,
-            auto_correction: progressive_typing,
+            auto_correction,
             auto_enter,
             segments_processed: 0,
             avg_latency_ms: 0,
@@ -297,7 +299,7 @@ impl App {
             device_picker_devices: Vec::new(),
             device_picker_selected: 0,
             device_picker_error: None,
-            profile: profile.map(|s| s.to_string()),
+            profile: active_profile,
             available_profiles: Config::list_profiles().unwrap_or_default(),
             log_filter: LogFilter::All,
             help_overlay_open: false,
@@ -450,16 +452,20 @@ impl App {
                 self.toggle_vad_mode();
             }
 
-            // 't' to toggle progressive typing (in Live panel)
+            // 't' to toggle progressive typing (in Live/Configuration panels)
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration
+                {
                     self.toggle_progressive_typing();
                 }
             }
 
-            // 'a' to toggle auto-correction (in Live panel)
+            // 'a' to toggle auto-correction (in Live/Configuration panels)
             (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription {
+                if self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration
+                {
                     self.toggle_auto_correction();
                 }
             }
@@ -972,6 +978,9 @@ impl App {
             .unwrap_or_else(|| "(connecting...)".to_string());
         self.text_filters = config.text_filters.clone();
         self.typing_mode = config.typing_mode;
+        self.progressive_typing = config.progressive_typing;
+        self.auto_correction = config.effective_auto_correction();
+        self.auto_enter = config.auto_enter;
         self.profile = profile_name;
 
         self.add_log(&format!("Profile switched to: {}", display));
@@ -1002,6 +1011,7 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Progressive typing {}", status));
+        self.save_config();
     }
 
     /// Toggle auto-correction setting
@@ -1013,6 +1023,7 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Auto-correction {}", status));
+        self.save_config();
     }
 
     /// Cycle typing mode: Auto -> Wtype -> Paste -> Auto
@@ -1070,9 +1081,9 @@ impl App {
         self.save_config();
     }
 
-    /// Save current settings to config.toml
+    /// Save current settings to the active config file
     fn save_config(&self) {
-        // Reconstruct Config from App fields and save as TOML
+        // Reconstruct Config from App fields and save as TOML.
         let mut config = Config::load_profile(self.profile.as_deref()).unwrap_or_default();
         if let Ok(url) = Url::parse(&self.server) {
             config.whisper_server = url;
@@ -1081,6 +1092,8 @@ impl App {
         config.language = self.language.clone();
         config.text_filters = self.text_filters.clone();
         config.typing_mode = self.typing_mode;
+        config.progressive_typing = self.progressive_typing;
+        config.auto_correction = Some(self.auto_correction);
         config.auto_enter = self.auto_enter;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
@@ -1578,6 +1591,26 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('p'))).unwrap();
         assert_ne!(app.text_filters.remove_punctuation, initial);
+    }
+
+    #[test]
+    fn test_toggle_progressive_typing_in_configuration() {
+        let mut app = App::new();
+        app.current_panel = Panel::Configuration;
+        let initial = app.progressive_typing;
+
+        app.handle_key(key(KeyCode::Char('t'))).unwrap();
+        assert_ne!(app.progressive_typing, initial);
+    }
+
+    #[test]
+    fn test_toggle_auto_correction_in_configuration() {
+        let mut app = App::new();
+        app.current_panel = Panel::Configuration;
+        let initial = app.auto_correction;
+
+        app.handle_key(key(KeyCode::Char('a'))).unwrap();
+        assert_ne!(app.auto_correction, initial);
     }
 
     // --- Live panel toggles ---
