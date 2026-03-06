@@ -1073,24 +1073,6 @@ impl App {
         self.save_config();
     }
 
-    /// Copy text to clipboard using wl-copy
-    fn copy_to_clipboard(&self, text: &str) {
-        use std::process::Command;
-        let result = Command::new("wl-copy").arg(text).output();
-
-        match result {
-            Ok(output) if output.status.success() => {
-                tracing::info!("Copied text to clipboard: {:?}", text);
-            }
-            Ok(output) => {
-                tracing::warn!("wl-copy failed: {:?}", output.stderr);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to run wl-copy: {}", e);
-            }
-        }
-    }
-
     /// Cycle typing mode: Auto -> Wtype -> Paste -> Auto
     pub fn cycle_typing_mode(&mut self) {
         self.typing_mode = self.typing_mode.next();
@@ -1324,7 +1306,7 @@ impl App {
                 self.total_words += text.split_whitespace().count();
                 // Copy to clipboard if enabled
                 if self.save_to_clipboard && !text.is_empty() {
-                    self.copy_to_clipboard(&text);
+                    crate::desktop::TextInput::copy_to_clipboard(&text);
                 }
             }
             StreamingEvent::StatsUpdate {

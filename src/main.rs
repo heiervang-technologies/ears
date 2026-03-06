@@ -403,6 +403,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
     // Track mutable settings for command updates
     let mut auto_enter = config.auto_enter;
 
+    let save_to_clipboard = config.save_to_clipboard;
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
@@ -418,6 +419,9 @@ async fn handle_vad(config: &Config) -> Result<()> {
                 }
                 ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
+                    if save_to_clipboard && !text.is_empty() {
+                        TextInput::copy_to_clipboard(&text);
+                    }
                 }
                 ears::streaming_engine::StreamingEvent::Error(msg) => {
                     tracing::warn!("Streaming error: {}", msg);
@@ -597,6 +601,7 @@ async fn handle_ws_listen(
         // IPC server on custom socket path (avoids conflict with desktop ears)
         ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
 
+        let ws_save_to_clipboard = config.save_to_clipboard;
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
                 let _ = ipc_tx.send(event.clone());
@@ -606,6 +611,9 @@ async fn handle_ws_listen(
                         duration_ms,
                     } => {
                         tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
+                        if ws_save_to_clipboard && !text.is_empty() {
+                            TextInput::copy_to_clipboard(&text);
+                        }
                     }
                     ears::streaming_engine::StreamingEvent::Error(msg) => {
                         tracing::warn!("Streaming error: {}", msg);
@@ -864,18 +872,7 @@ async fn stop_and_transcribe(
 
             // Copy to clipboard if enabled
             if config.save_to_clipboard {
-                use std::process::Command;
-                match Command::new("wl-copy").arg(&filtered_text).output() {
-                    Ok(output) if output.status.success() => {
-                        tracing::info!("Copied text to clipboard");
-                    }
-                    Ok(output) => {
-                        tracing::warn!("wl-copy failed: {:?}", output.stderr);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to run wl-copy: {}", e);
-                    }
-                }
+                TextInput::copy_to_clipboard(&filtered_text);
             }
 
             run_post_transcribe_hook(&audio_file, &filtered_text);
