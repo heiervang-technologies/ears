@@ -198,6 +198,8 @@ pub struct App {
     pub device_picker_selected: usize,
     /// Error message if device list fetch failed
     pub device_picker_error: Option<String>,
+    /// Audio cue volume (0-100)
+    pub cue_volume: u8,
     /// Text input method (auto/wtype/paste)
     pub typing_mode: TypingMode,
     /// Active config profile name (None = default)
@@ -258,7 +260,11 @@ impl App {
         let auto_enter = config.auto_enter;
         let progressive_typing = config.progressive_typing;
         let auto_correction = config.effective_auto_correction();
+        let cue_volume = config.cue_volume;
         let active_profile = config.active_profile.clone();
+
+        // Set global audio volume from config
+        crate::desktop::AudioFeedback::set_volume(cue_volume);
 
         // Use configured model if set, otherwise fetch lazily on first tick
         let model = config
@@ -293,6 +299,7 @@ impl App {
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
+            cue_volume,
             typing_mode,
             clickable_regions: Vec::new(),
             device_picker_open: false,
@@ -495,6 +502,18 @@ impl App {
             (KeyCode::Char('m'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Configuration {
                     self.cycle_typing_mode();
+                }
+            }
+
+            // '+' / '=' to increase cue volume, '-' to decrease (in Configuration panel)
+            (KeyCode::Char('+') | KeyCode::Char('='), _) => {
+                if self.current_panel == Panel::Configuration {
+                    self.adjust_cue_volume(10);
+                }
+            }
+            (KeyCode::Char('-'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.adjust_cue_volume(-10);
                 }
             }
 
@@ -1033,6 +1052,17 @@ impl App {
         self.save_config();
     }
 
+    /// Adjust cue volume by delta (clamped to 0-100)
+    pub fn adjust_cue_volume(&mut self, delta: i16) {
+        let new_vol = (self.cue_volume as i16 + delta).clamp(0, 100) as u8;
+        self.cue_volume = new_vol;
+        crate::desktop::AudioFeedback::set_volume(new_vol);
+        self.add_log(&format!("Cue volume: {}%", new_vol));
+        // Play a preview beep so user can hear the new level
+        crate::desktop::AudioFeedback::beep_start().ok();
+        self.save_config();
+    }
+
     /// Toggle lowercase filter
     pub fn toggle_lowercase_filter(&mut self) {
         self.text_filters.lowercase = !self.text_filters.lowercase;
@@ -1095,6 +1125,7 @@ impl App {
         config.progressive_typing = self.progressive_typing;
         config.auto_correction = Some(self.auto_correction);
         config.auto_enter = self.auto_enter;
+        config.cue_volume = self.cue_volume;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
@@ -1221,9 +1252,12 @@ impl App {
     /// Handle a streaming event from the VAD pipeline
     pub fn handle_streaming_event(&mut self, event: StreamingEvent) {
         match event {
+            StreamingEvent::SpeechProbable => {
+                crate::desktop::AudioFeedback::beep_vad_speech_start().ok();
+            }
             StreamingEvent::SpeechStarted => {
                 self.is_speaking = true;
-                crate::desktop::AudioFeedback::beep_vad_speech().ok();
+                crate::desktop::AudioFeedback::beep_vad_speech_confirm().ok();
             }
             StreamingEvent::SpeechEnded => {
                 self.is_speaking = false;

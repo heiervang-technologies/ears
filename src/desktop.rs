@@ -297,7 +297,12 @@ impl Notifications {
 ///
 /// Sounds (E5 start, E4 done, double-B4 error) are embedded in the binary.
 /// Custom sounds in ~/.local/share/ears-sounds/ take priority if present.
+///
+/// Volume is controlled via a global atomic (0-100), settable with `set_volume()`.
 pub struct AudioFeedback;
+
+/// Global cue volume (0-100). Atomic so it can be changed from the TUI at runtime.
+static CUE_VOLUME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(100);
 
 // Embedded sound files
 static SOUND_START: &[u8] = include_bytes!("../sounds/start.wav");
@@ -306,9 +311,21 @@ static SOUND_BELL: &[u8] = include_bytes!("../sounds/bell.wav");
 static SOUND_VAD_OPEN: &[u8] = include_bytes!("../sounds/vad_open.wav");
 static SOUND_VAD_CLOSE: &[u8] = include_bytes!("../sounds/vad_close.wav");
 static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
+static SOUND_VAD_SPEECH_START: &[u8] = include_bytes!("../sounds/vad_speech_start.wav");
+static SOUND_VAD_SPEECH_CONFIRM: &[u8] = include_bytes!("../sounds/vad_speech_confirm.wav");
 static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
 
 impl AudioFeedback {
+    /// Set the global cue volume (0-100)
+    pub fn set_volume(volume: u8) {
+        CUE_VOLUME.store(volume.min(100), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get the current cue volume (0-100)
+    pub fn get_volume() -> u8 {
+        CUE_VOLUME.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Get custom sound directory
     fn sound_dir() -> Result<PathBuf> {
         let home = std::env::var("HOME").context("HOME environment variable not set")?;
@@ -318,9 +335,16 @@ impl AudioFeedback {
             .join("ears-sounds"))
     }
 
-    /// Play a sound file (non-blocking)
+    /// Play a sound file (non-blocking), respecting the global volume setting
     fn play_sound(path: &PathBuf) -> Result<()> {
+        let volume = Self::get_volume();
+        if volume == 0 {
+            return Ok(());
+        }
+        // Map 0-100 to PulseAudio's 0-65536 scale
+        let pa_volume = (volume as u32 * 65536 / 100).to_string();
         Command::new("paplay")
+            .arg(format!("--volume={}", pa_volume))
             .arg(path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -331,24 +355,28 @@ impl AudioFeedback {
     }
 
     /// Play embedded sound data (non-blocking)
+    ///
+    /// Writes the WAV data to a cache file in /tmp and plays via paplay,
+    /// which is more reliable than piping through stdin.
     fn play_embedded(data: &'static [u8]) -> Result<()> {
-        use std::process::{Command, Stdio};
+        use std::hash::{Hash, Hasher};
+        use std::io::Write;
 
-        let mut child = Command::new("paplay")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Failed to spawn paplay")?;
+        // Derive a stable cache path from the data pointer (each static has a unique address)
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (data.as_ptr() as usize).hash(&mut hasher);
+        let hash = hasher.finish();
+        let cache_path = std::path::PathBuf::from(format!("/tmp/ears-sound-{:x}.wav", hash));
 
-        if let Some(mut stdin) = child.stdin.take() {
-            let data = data.to_vec();
-            std::thread::spawn(move || {
-                use std::io::Write;
-                let _ = stdin.write_all(&data);
-            });
+        // Write to cache file if not already present
+        if !cache_path.exists() {
+            let mut f =
+                std::fs::File::create(&cache_path).context("Failed to create sound cache file")?;
+            f.write_all(data)
+                .context("Failed to write sound cache file")?;
         }
-        Ok(())
+
+        Self::play_sound(&cache_path)
     }
 
     /// Play a named sound (custom override or embedded)
@@ -390,12 +418,22 @@ impl AudioFeedback {
         Self::play_named("vad_close", SOUND_VAD_CLOSE)
     }
 
-    /// Play VAD speech detected sound (short A5 blip)
+    /// Play VAD speech detected sound (both notes: C5→E5)
     pub fn beep_vad_speech() -> Result<()> {
         Self::play_named("vad_speech", SOUND_VAD_SPEECH)
     }
 
-    /// Play VAD speech ended sound (short E5→C5 blip)
+    /// Play VAD probable speech sound (first note: C5)
+    pub fn beep_vad_speech_start() -> Result<()> {
+        Self::play_named("vad_speech_start", SOUND_VAD_SPEECH_START)
+    }
+
+    /// Play VAD confirmed speech sound (second note: E5)
+    pub fn beep_vad_speech_confirm() -> Result<()> {
+        Self::play_named("vad_speech_confirm", SOUND_VAD_SPEECH_CONFIRM)
+    }
+
+    /// Play VAD speech ended sound (descending E5→C5)
     pub fn beep_vad_end() -> Result<()> {
         Self::play_named("vad_end", SOUND_VAD_END)
     }

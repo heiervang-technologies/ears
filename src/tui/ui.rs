@@ -367,6 +367,14 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::styled(" [m]", Style::default().fg(Color::DarkGray)),
     ]));
+    text.push(Line::from(vec![
+        Span::raw("  Cue Volume: "),
+        Span::styled(
+            format!("{}%", app.cue_volume),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(" [+/-]", Style::default().fg(Color::DarkGray)),
+    ]));
     text.push(Line::from(""));
 
     // Show appropriate help text
@@ -388,7 +396,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [+/-] Vol",
             Style::default().fg(theme.dim),
         )));
     }

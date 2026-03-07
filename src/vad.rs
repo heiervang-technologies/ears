@@ -155,9 +155,15 @@ impl SileroVad {
         Ok(result)
     }
 
-    /// Check if currently in a speech segment
+    /// Check if currently in a confirmed speech segment
     pub fn is_speaking(&self) -> bool {
         self.in_speech
+    }
+
+    /// Check if speech frames are accumulating but not yet confirmed
+    /// (above threshold but below min_speech_duration)
+    pub fn is_probably_speaking(&self) -> bool {
+        !self.in_speech && self.speech_frames > 0
     }
 
     /// Reset the VAD state (clears LSTM hidden state and counters)
@@ -314,9 +320,14 @@ impl VadSegmentDetector {
         Ok(segment_complete)
     }
 
-    /// Check if currently in a speech segment
+    /// Check if currently in a confirmed speech segment
     pub fn is_speaking(&self) -> bool {
         self.vad.is_speaking()
+    }
+
+    /// Check if speech is probable but not yet confirmed
+    pub fn is_probably_speaking(&self) -> bool {
+        self.vad.is_probably_speaking()
     }
 
     /// Reset the detector
