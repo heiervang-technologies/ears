@@ -10,6 +10,7 @@
 use crate::desktop::{TextInput, TypingMode};
 use crate::progressive_typing::{ProgressiveTypingConfig, ProgressiveTypingEngine};
 use crate::streaming::{AudioBuffer, LocalAgreementPolicy, StreamingConfig};
+use crate::text_filters::TextFilters;
 use crate::vad::{SpeechSegment, VadConfig, VadSegmentDetector};
 use crate::whisper::WhisperClient;
 use std::path::PathBuf;
@@ -127,6 +128,12 @@ pub struct StreamingEngine {
 
     /// Current typing mode (needed for send_enter)
     typing_mode: TypingMode,
+
+    /// Text filters (lowercase, remove punctuation, etc.)
+    text_filters: TextFilters,
+
+    /// Language for text filter alphabet checking
+    language: Option<String>,
 }
 
 impl StreamingEngine {
@@ -160,6 +167,8 @@ impl StreamingEngine {
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
+            text_filters: TextFilters::default(),
+            language: None,
         })
     }
 
@@ -257,6 +266,13 @@ impl StreamingEngine {
 
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");
+            return Ok(());
+        }
+
+        // Apply text filters (lowercase, remove punctuation, strict alphabet)
+        let transcript = self.text_filters.apply(&transcript, self.language.as_deref());
+        if transcript.is_empty() {
+            debug!("Transcript filtered out (empty after filters)");
             return Ok(());
         }
 
@@ -436,6 +452,12 @@ impl StreamingEngine {
             auto_correction,
             typing_mode,
         });
+    }
+
+    /// Update text filters and language
+    pub fn set_text_filters(&mut self, filters: TextFilters, language: Option<String>) {
+        self.text_filters = filters;
+        self.language = language;
     }
 
     /// Check if VAD is currently detecting speech
