@@ -217,6 +217,10 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel::<StreamingEvent>(256);
     crate::ipc::start_ipc_server(ipc_rx);
 
+    // Command server for remote control (e.g. `ears auto-enter`)
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+    crate::ipc::start_cmd_server(cmd_tx);
+
     // VAD pipeline state
     let mut vad_running = false;
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
@@ -264,6 +268,23 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         app.add_log("Connection failed: server not responding");
                     }
                 },
+            }
+
+            // Drain remote commands (before settings push so changes propagate immediately)
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    crate::ipc::EarsCommand::ToggleAutoEnter { respond } => {
+                        app.auto_enter = !app.auto_enter;
+                        if app.auto_enter {
+                            crate::desktop::AudioFeedback::beep_toggle_on().ok();
+                        } else {
+                            crate::desktop::AudioFeedback::beep_toggle_off().ok();
+                        }
+                        let state = if app.auto_enter { "on" } else { "off" };
+                        let _ = respond.send(format!("auto-enter:{}", state));
+                        app.add_log(&format!("Auto-enter: {}", state));
+                    }
+                }
             }
 
             // Push typing settings to engine if they changed
@@ -355,8 +376,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
 
     restore_terminal(&mut terminal)?;
 
-    // Clean up IPC socket
+    // Clean up IPC sockets
     crate::ipc::cleanup_socket();
+    crate::ipc::cleanup_cmd_socket();
 
     // Drop guard is redundant on clean exit, but handles panics above
     drop(_state_guard);
