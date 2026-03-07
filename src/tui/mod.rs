@@ -270,6 +270,23 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 },
             }
 
+            // Drain remote commands (before settings push so changes propagate immediately)
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    crate::ipc::EarsCommand::ToggleAutoEnter { respond } => {
+                        app.auto_enter = !app.auto_enter;
+                        if app.auto_enter {
+                            crate::desktop::AudioFeedback::beep_toggle_on().ok();
+                        } else {
+                            crate::desktop::AudioFeedback::beep_toggle_off().ok();
+                        }
+                        let state = if app.auto_enter { "on" } else { "off" };
+                        let _ = respond.send(format!("auto-enter:{}", state));
+                        app.add_log(&format!("Auto-enter: {}", state));
+                    }
+                }
+            }
+
             // Push typing settings to engine if they changed
             if app.progressive_typing != prev_progressive
                 || app.auto_correction != prev_auto_correction
@@ -293,16 +310,6 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             while let Ok(event) = event_rx.try_recv() {
                 let _ = ipc_tx.send(event.clone());
                 app.handle_streaming_event(event);
-            }
-
-            // Drain remote commands
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                match cmd {
-                    crate::ipc::EarsCommand::ToggleAutoEnter => {
-                        app.auto_enter = !app.auto_enter;
-                        app.add_log(&format!("Auto-enter: {}", if app.auto_enter { "on" } else { "off" }));
-                    }
-                }
             }
 
             // Check if VAD state changed

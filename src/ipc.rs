@@ -159,9 +159,11 @@ pub fn cmd_socket_path() -> PathBuf {
 }
 
 /// Commands that can be sent to a running ears instance.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum EarsCommand {
-    ToggleAutoEnter,
+    ToggleAutoEnter {
+        respond: tokio::sync::oneshot::Sender<String>,
+    },
 }
 
 /// Start the command server, returning received commands via the channel.
@@ -193,12 +195,13 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
                         while let Ok(Some(line)) = lines.next_line().await {
                             let response = match line.trim() {
                                 "toggle-auto-enter" => {
-                                    let _ = tx.send(EarsCommand::ToggleAutoEnter);
-                                    "ok\n"
+                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                    let _ = tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
+                                    resp_rx.await.unwrap_or_else(|_| "error:internal".to_string())
                                 }
-                                _ => "error:unknown-command\n",
+                                _ => "error:unknown-command".to_string(),
                             };
-                            if writer.write_all(response.as_bytes()).await.is_err() {
+                            if writer.write_all(format!("{}\n", response).as_bytes()).await.is_err() {
                                 break;
                             }
                         }
@@ -221,10 +224,12 @@ pub fn cleanup_cmd_socket() {
 }
 
 /// Send a command to a running ears instance. Returns the response.
-pub async fn send_command(cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn send_command(cmd: &str) -> anyhow::Result<String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
     let sock_path = cmd_socket_path();
-    let mut stream = tokio::net::UnixStream::connect(&sock_path).await?;
+    let mut stream = tokio::net::UnixStream::connect(&sock_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to ears: {}", e))?;
     stream.write_all(cmd.as_bytes()).await?;
     stream.write_all(b"\n").await?;
     let mut reader = BufReader::new(stream);

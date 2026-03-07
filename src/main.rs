@@ -430,7 +430,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
             _ = sigint.recv() => break,
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
-                    ears::ipc::EarsCommand::ToggleAutoEnter => {
+                    ears::ipc::EarsCommand::ToggleAutoEnter { respond } => {
                         auto_enter = !auto_enter;
                         let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
                         let _ = settings_tx.send(ears::tui::TypingSettings {
@@ -441,8 +441,15 @@ async fn handle_vad(config: &Config) -> Result<()> {
                             text_filters: config.text_filters.clone(),
                             language,
                         });
+                        if auto_enter {
+                            AudioFeedback::beep_toggle_on().ok();
+                        } else {
+                            AudioFeedback::beep_toggle_off().ok();
+                        }
+                        let state = if auto_enter { "on" } else { "off" };
+                        let _ = respond.send(format!("auto-enter:{}", state));
                         tracing::info!("Auto-enter toggled to {}", auto_enter);
-                        eprintln!("Auto-enter: {}", if auto_enter { "on" } else { "off" });
+                        eprintln!("Auto-enter: {}", state);
                     }
                 }
             }
