@@ -279,10 +279,7 @@ impl WhisperClient {
 
         let metadata = tokio::fs::metadata(path).await?;
 
-        // A standard PCM WAV header is 44 bytes. Files at or below this size
-        // contain zero audio samples and will crash some ASR backends.
-        const WAV_HEADER_SIZE: u64 = 44;
-        if metadata.len() <= WAV_HEADER_SIZE {
+        if metadata.len() <= crate::WAV_HEADER_SIZE {
             return Err(WhisperError::InvalidAudioFile(format!(
                 "File contains no audio data ({} bytes): {}",
                 metadata.len(),
