@@ -270,7 +270,9 @@ impl StreamingEngine {
         }
 
         // Apply text filters (lowercase, remove punctuation, strict alphabet)
-        let transcript = self.text_filters.apply(&transcript, self.language.as_deref());
+        let transcript = self
+            .text_filters
+            .apply(&transcript, self.language.as_deref());
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
             return Ok(());

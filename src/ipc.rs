@@ -136,7 +136,11 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
         let listener = match UnixListener::bind(&sock_path) {
             Ok(l) => l,
             Err(e) => {
-                error!("Failed to bind command socket at {}: {}", sock_path.display(), e);
+                error!(
+                    "Failed to bind command socket at {}: {}",
+                    sock_path.display(),
+                    e
+                );
                 return;
             }
         };
@@ -155,12 +159,19 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
                             let response = match line.trim() {
                                 "toggle-auto-enter" => {
                                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                    let _ = tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
-                                    resp_rx.await.unwrap_or_else(|_| "error:internal".to_string())
+                                    let _ =
+                                        tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
+                                    resp_rx
+                                        .await
+                                        .unwrap_or_else(|_| "error:internal".to_string())
                                 }
                                 _ => "error:unknown-command".to_string(),
                             };
-                            if writer.write_all(format!("{}\n", response).as_bytes()).await.is_err() {
+                            if writer
+                                .write_all(format!("{}\n", response).as_bytes())
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
