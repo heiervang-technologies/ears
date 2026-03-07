@@ -375,8 +375,11 @@ async fn handle_vad(config: &Config) -> Result<()> {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
             match event {
+                ears::streaming_engine::StreamingEvent::SpeechProbable => {
+                    AudioFeedback::beep_vad_speech_start().ok();
+                }
                 ears::streaming_engine::StreamingEvent::SpeechStarted => {
-                    AudioFeedback::beep_vad_speech().ok();
+                    AudioFeedback::beep_vad_speech_confirm().ok();
                 }
                 ears::streaming_engine::StreamingEvent::SpeechEnded => {
                     AudioFeedback::beep_vad_end().ok();

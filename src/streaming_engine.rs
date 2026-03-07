@@ -41,7 +41,10 @@ pub enum StreamingEngineError {
 /// Events emitted by the streaming engine
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum StreamingEvent {
-    /// VAD detected start of speech
+    /// VAD detected probable speech (first frames above threshold, before min duration met)
+    SpeechProbable,
+
+    /// VAD confirmed speech (min duration threshold met)
     SpeechStarted,
 
     /// VAD detected end of speech
@@ -116,6 +119,9 @@ pub struct StreamingEngine {
     /// Track previous speaking state to emit SpeechStarted only on transition
     was_speaking: bool,
 
+    /// Track previous probable-speaking state to emit SpeechProbable only on transition
+    was_probably_speaking: bool,
+
     /// Whether to send Enter key after each segment
     auto_enter: bool,
 
@@ -151,6 +157,7 @@ impl StreamingEngine {
             temp_dir,
             accumulated_text: String::new(),
             was_speaking: false,
+            was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
         })
@@ -174,11 +181,19 @@ impl StreamingEngine {
             Ok(Some(segment)) => {
                 // Complete speech segment detected
                 self.was_speaking = false;
+                self.was_probably_speaking = false;
                 self.send_event(StreamingEvent::SpeechEnded);
                 self.process_segment(segment).await?;
             }
             Ok(None) => {
-                // Fire SpeechStarted only on the false→true transition
+                // Fire SpeechProbable on first speech frames (before min duration met)
+                let is_probable = self.vad_detector.is_probably_speaking();
+                if is_probable && !self.was_probably_speaking {
+                    self.send_event(StreamingEvent::SpeechProbable);
+                }
+                self.was_probably_speaking = is_probable;
+
+                // Fire SpeechStarted only on the false→true transition (confirmed)
                 let is_speaking = self.vad_detector.is_speaking();
                 if is_speaking && !self.was_speaking {
                     self.send_event(StreamingEvent::SpeechStarted);

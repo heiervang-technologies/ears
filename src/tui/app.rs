@@ -1252,9 +1252,12 @@ impl App {
     /// Handle a streaming event from the VAD pipeline
     pub fn handle_streaming_event(&mut self, event: StreamingEvent) {
         match event {
+            StreamingEvent::SpeechProbable => {
+                crate::desktop::AudioFeedback::beep_vad_speech_start().ok();
+            }
             StreamingEvent::SpeechStarted => {
                 self.is_speaking = true;
-                crate::desktop::AudioFeedback::beep_vad_speech().ok();
+                crate::desktop::AudioFeedback::beep_vad_speech_confirm().ok();
             }
             StreamingEvent::SpeechEnded => {
                 self.is_speaking = false;

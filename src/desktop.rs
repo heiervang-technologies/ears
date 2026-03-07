@@ -311,6 +311,8 @@ static SOUND_BELL: &[u8] = include_bytes!("../sounds/bell.wav");
 static SOUND_VAD_OPEN: &[u8] = include_bytes!("../sounds/vad_open.wav");
 static SOUND_VAD_CLOSE: &[u8] = include_bytes!("../sounds/vad_close.wav");
 static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
+static SOUND_VAD_SPEECH_START: &[u8] = include_bytes!("../sounds/vad_speech_start.wav");
+static SOUND_VAD_SPEECH_CONFIRM: &[u8] = include_bytes!("../sounds/vad_speech_confirm.wav");
 static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
 
 impl AudioFeedback {
@@ -416,12 +418,22 @@ impl AudioFeedback {
         Self::play_named("vad_close", SOUND_VAD_CLOSE)
     }
 
-    /// Play VAD speech detected sound (short A5 blip)
+    /// Play VAD speech detected sound (both notes: C5→E5)
     pub fn beep_vad_speech() -> Result<()> {
         Self::play_named("vad_speech", SOUND_VAD_SPEECH)
     }
 
-    /// Play VAD speech ended sound (short E5→C5 blip)
+    /// Play VAD probable speech sound (first note: C5)
+    pub fn beep_vad_speech_start() -> Result<()> {
+        Self::play_named("vad_speech_start", SOUND_VAD_SPEECH_START)
+    }
+
+    /// Play VAD confirmed speech sound (second note: E5)
+    pub fn beep_vad_speech_confirm() -> Result<()> {
+        Self::play_named("vad_speech_confirm", SOUND_VAD_SPEECH_CONFIRM)
+    }
+
+    /// Play VAD speech ended sound (descending E5→C5)
     pub fn beep_vad_end() -> Result<()> {
         Self::play_named("vad_end", SOUND_VAD_END)
     }
