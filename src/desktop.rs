@@ -331,24 +331,28 @@ impl AudioFeedback {
     }
 
     /// Play embedded sound data (non-blocking)
+    ///
+    /// Writes the WAV data to a cache file in /tmp and plays via paplay,
+    /// which is more reliable than piping through stdin.
     fn play_embedded(data: &'static [u8]) -> Result<()> {
-        use std::process::{Command, Stdio};
+        use std::hash::{Hash, Hasher};
+        use std::io::Write;
 
-        let mut child = Command::new("paplay")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Failed to spawn paplay")?;
+        // Derive a stable cache path from the data pointer (each static has a unique address)
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (data.as_ptr() as usize).hash(&mut hasher);
+        let hash = hasher.finish();
+        let cache_path = std::path::PathBuf::from(format!("/tmp/ears-sound-{:x}.wav", hash));
 
-        if let Some(mut stdin) = child.stdin.take() {
-            let data = data.to_vec();
-            std::thread::spawn(move || {
-                use std::io::Write;
-                let _ = stdin.write_all(&data);
-            });
+        // Write to cache file if not already present
+        if !cache_path.exists() {
+            let mut f =
+                std::fs::File::create(&cache_path).context("Failed to create sound cache file")?;
+            f.write_all(data)
+                .context("Failed to write sound cache file")?;
         }
-        Ok(())
+
+        Self::play_sound(&cache_path)
     }
 
     /// Play a named sound (custom override or embedded)
