@@ -44,6 +44,9 @@ async fn main() -> Result<()> {
     tracing::info!("ears started");
     tracing::info!("Log file: {}", log_file_path.display());
 
+    // Set audio cue volume from config
+    AudioFeedback::set_volume(config.cue_volume);
+
     match cli.command {
         Some(Commands::Toggle) => {
             handle_toggle(&config).await?;
@@ -303,6 +306,7 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
 
 /// Toggle VAD mode: start or stop headless voice activity detection
 async fn handle_vad(config: &Config) -> Result<()> {
+    AudioFeedback::set_volume(config.cue_volume);
     let vad_pid_file = config.state_dir.join("vad.pid");
     let vad_lock_path = config.state_dir.join("vad.lock");
     let mut vad_lock = FileLock::new(&vad_lock_path).context("Failed to create VAD lock")?;

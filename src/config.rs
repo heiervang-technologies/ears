@@ -39,6 +39,10 @@ fn default_progressive_typing() -> bool {
     false
 }
 
+fn default_cue_volume() -> u8 {
+    100
+}
+
 /// VAD (Voice Activity Detection) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadSettings {
@@ -102,6 +106,9 @@ pub struct Config {
     /// Enable auto-correction for progressive typing (None = legacy behavior)
     #[serde(default)]
     pub auto_correction: Option<bool>,
+    /// Audio cue volume (0-100, default: 100)
+    #[serde(default = "default_cue_volume")]
+    pub cue_volume: u8,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
@@ -150,6 +157,7 @@ impl Config {
             auto_enter: true,
             progressive_typing: false,
             auto_correction: None,
+            cue_volume: default_cue_volume(),
             vad: VadSettings::default(),
             config_dir,
             active_profile: None,
@@ -259,6 +267,7 @@ impl Config {
             auto_enter: true,
             progressive_typing: false,
             auto_correction: None,
+            cue_volume: default_cue_volume(),
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             active_profile: None,

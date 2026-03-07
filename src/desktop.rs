@@ -297,7 +297,12 @@ impl Notifications {
 ///
 /// Sounds (E5 start, E4 done, double-B4 error) are embedded in the binary.
 /// Custom sounds in ~/.local/share/ears-sounds/ take priority if present.
+///
+/// Volume is controlled via a global atomic (0-100), settable with `set_volume()`.
 pub struct AudioFeedback;
+
+/// Global cue volume (0-100). Atomic so it can be changed from the TUI at runtime.
+static CUE_VOLUME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(100);
 
 // Embedded sound files
 static SOUND_START: &[u8] = include_bytes!("../sounds/start.wav");
@@ -309,6 +314,16 @@ static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
 static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
 
 impl AudioFeedback {
+    /// Set the global cue volume (0-100)
+    pub fn set_volume(volume: u8) {
+        CUE_VOLUME.store(volume.min(100), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get the current cue volume (0-100)
+    pub fn get_volume() -> u8 {
+        CUE_VOLUME.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Get custom sound directory
     fn sound_dir() -> Result<PathBuf> {
         let home = std::env::var("HOME").context("HOME environment variable not set")?;
@@ -318,9 +333,16 @@ impl AudioFeedback {
             .join("ears-sounds"))
     }
 
-    /// Play a sound file (non-blocking)
+    /// Play a sound file (non-blocking), respecting the global volume setting
     fn play_sound(path: &PathBuf) -> Result<()> {
+        let volume = Self::get_volume();
+        if volume == 0 {
+            return Ok(());
+        }
+        // Map 0-100 to PulseAudio's 0-65536 scale
+        let pa_volume = (volume as u32 * 65536 / 100).to_string();
         Command::new("paplay")
+            .arg(format!("--volume={}", pa_volume))
             .arg(path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
