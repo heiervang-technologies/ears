@@ -71,12 +71,14 @@ impl Drop for StateCleanupGuard {
 }
 
 /// Typing settings sent from the TUI to the engine via watch channel.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypingSettings {
     pub progressive_typing: bool,
     pub auto_correction: bool,
     pub typing_mode: crate::desktop::TypingMode,
     pub auto_enter: bool,
+    pub text_filters: crate::text_filters::TextFilters,
+    pub language: Option<String>,
 }
 
 impl Default for TypingSettings {
@@ -86,6 +88,8 @@ impl Default for TypingSettings {
             auto_correction: false,
             typing_mode: crate::desktop::TypingMode::Auto,
             auto_enter: true,
+            text_filters: crate::text_filters::TextFilters::default(),
+            language: None,
         }
     }
 }
@@ -172,8 +176,9 @@ pub async fn start_vad_pipeline(
                     }
                 }
                 _ = settings_rx.changed() => {
-                    let s = *settings_rx.borrow_and_update();
+                    let s = settings_rx.borrow_and_update().clone();
                     engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                    engine.set_text_filters(s.text_filters, s.language);
                     tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
                 }
                 _ = shutdown_rx.changed() => {
@@ -229,6 +234,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_auto_correction = app.auto_correction;
             let prev_typing_mode = app.typing_mode;
             let prev_auto_enter = app.auto_enter;
+            let prev_text_filters = app.text_filters.clone();
 
             match event_handler.next().await? {
                 Event::Key(key) => {
@@ -265,6 +271,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 || app.auto_correction != prev_auto_correction
                 || app.typing_mode != prev_typing_mode
                 || app.auto_enter != prev_auto_enter
+                || app.text_filters != prev_text_filters
             {
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
@@ -272,6 +279,8 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         auto_correction: app.auto_correction,
                         typing_mode: app.typing_mode,
                         auto_enter: app.auto_enter,
+                        text_filters: app.text_filters.clone(),
+                        language: app.language.clone(),
                     });
                 }
             }
@@ -293,6 +302,8 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             auto_correction: app.auto_correction,
                             typing_mode: app.typing_mode,
                             auto_enter: app.auto_enter,
+                            text_filters: app.text_filters.clone(),
+                            language: app.language.clone(),
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

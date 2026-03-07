@@ -358,11 +358,14 @@ async fn handle_vad(config: &Config) -> Result<()> {
         };
 
     // Send config-driven settings to the engine
+    let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let _ = settings_tx.send(ears::tui::TypingSettings {
         progressive_typing: true,
         auto_correction: true,
         typing_mode: config.typing_mode,
         auto_enter: config.auto_enter,
+        text_filters: config.text_filters.clone(),
+        language,
     });
 
     AudioFeedback::beep_vad_open().ok();
@@ -484,15 +487,18 @@ async fn handle_ws_listen(
                 auto_correction: false,
                 typing_mode: config.typing_mode,
                 auto_enter: false,
+                text_filters: config.text_filters.clone(),
+                language: config.language.clone(),
             });
         // Apply initial settings
-        let s = *settings_rx.borrow_and_update();
+        let s = settings_rx.borrow_and_update().clone();
         engine.set_typing_enabled(
             s.progressive_typing,
             s.auto_correction,
             s.typing_mode,
             s.auto_enter,
         );
+        engine.set_text_filters(s.text_filters, s.language);
 
         // Shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -515,8 +521,9 @@ async fn handle_ws_listen(
                         }
                     }
                     _ = settings_rx.changed() => {
-                        let s = *settings_rx.borrow_and_update();
+                        let s = settings_rx.borrow_and_update().clone();
                         engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                        engine.set_text_filters(s.text_filters, s.language);
                     }
                     _ = shutdown_rx.changed() => {
                         tracing::debug!("WS VAD pipeline shutdown requested");

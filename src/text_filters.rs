@@ -14,7 +14,7 @@ fn default_strict_alphabet() -> bool {
 }
 
 /// Configuration for text filters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextFilters {
     /// Convert text to lowercase
     #[serde(default)]
