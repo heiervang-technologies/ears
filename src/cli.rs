@@ -58,6 +58,10 @@ pub enum Commands {
         url: Option<String>,
     },
 
+    /// Toggle auto-enter on the running ears instance
+    #[command(alias = "ae")]
+    AutoEnter,
+
     /// Select audio device with fzf (shortcut for `device select`)
     #[command(alias = "s", hide = true)]
     Select,

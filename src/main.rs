@@ -76,6 +76,9 @@ async fn main() -> Result<()> {
                 show_server(&config)?;
             }
         }
+        Some(Commands::AutoEnter) => {
+            handle_auto_enter().await?;
+        }
         // Hidden backwards-compat aliases
         Some(Commands::Select) => select_device(&config)?,
         Some(Commands::List) => list_devices()?,
@@ -87,6 +90,18 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn handle_auto_enter() -> Result<()> {
+    match ears::ipc::send_command("toggle-auto-enter").await {
+        Ok(resp) => {
+            eprintln!("{}", resp);
+            Ok(())
+        }
+        Err(_) => {
+            anyhow::bail!("No running ears instance found (is VAD or TUI running?)");
+        }
+    }
 }
 
 fn select_device(config: &Config) -> Result<()> {
@@ -374,6 +389,13 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
     ears::ipc::start_ipc_server(ipc_rx);
 
+    // Start command server for remote control (e.g. `ears auto-enter`)
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+    ears::ipc::start_cmd_server(cmd_tx);
+
+    // Track mutable settings for command updates
+    let mut auto_enter = config.auto_enter;
+
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
@@ -402,14 +424,35 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    tokio::select! {
-        _ = sigterm.recv() => {}
-        _ = sigint.recv() => {}
+    loop {
+        tokio::select! {
+            _ = sigterm.recv() => break,
+            _ = sigint.recv() => break,
+            Some(cmd) = cmd_rx.recv() => {
+                match cmd {
+                    ears::ipc::EarsCommand::ToggleAutoEnter => {
+                        auto_enter = !auto_enter;
+                        let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
+                        let _ = settings_tx.send(ears::tui::TypingSettings {
+                            progressive_typing: true,
+                            auto_correction: true,
+                            typing_mode: config.typing_mode,
+                            auto_enter,
+                            text_filters: config.text_filters.clone(),
+                            language,
+                        });
+                        tracing::info!("Auto-enter toggled to {}", auto_enter);
+                        eprintln!("Auto-enter: {}", if auto_enter { "on" } else { "off" });
+                    }
+                }
+            }
+        }
     }
 
     let _ = shutdown_tx.send(true);
     let _ = pipeline_handle.await;
     ears::ipc::cleanup_socket();
+    ears::ipc::cleanup_cmd_socket();
     std::fs::remove_file(&vad_pid_file).ok();
     state_mgr.transition(StateEnum::Idle).ok();
 

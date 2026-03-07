@@ -148,3 +148,87 @@ pub fn cleanup_socket() {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+// --- Command IPC (bidirectional) ---
+
+/// Return the command socket path.
+pub fn cmd_socket_path() -> PathBuf {
+    std::env::var("XDG_RUNTIME_DIR")
+        .map(|d| PathBuf::from(d).join("ears-cmd.sock"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/ears-cmd.sock"))
+}
+
+/// Commands that can be sent to a running ears instance.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EarsCommand {
+    ToggleAutoEnter,
+}
+
+/// Start the command server, returning received commands via the channel.
+pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>) {
+    let sock_path = cmd_socket_path();
+    tokio::spawn(async move {
+        if sock_path.exists() {
+            let _ = std::fs::remove_file(&sock_path);
+        }
+
+        let listener = match UnixListener::bind(&sock_path) {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to bind command socket at {}: {}", sock_path.display(), e);
+                return;
+            }
+        };
+
+        info!("Command server listening on {}", sock_path.display());
+
+        loop {
+            match listener.accept().await {
+                Ok((mut stream, _)) => {
+                    let tx = cmd_tx.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let (reader, mut writer) = stream.split();
+                        let mut lines = BufReader::new(reader).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            let response = match line.trim() {
+                                "toggle-auto-enter" => {
+                                    let _ = tx.send(EarsCommand::ToggleAutoEnter);
+                                    "ok\n"
+                                }
+                                _ => "error:unknown-command\n",
+                            };
+                            if writer.write_all(response.as_bytes()).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Command accept error: {}", e);
+                }
+            }
+        }
+    });
+}
+
+/// Remove the command socket file.
+pub fn cleanup_cmd_socket() {
+    let path = cmd_socket_path();
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Send a command to a running ears instance. Returns the response.
+pub async fn send_command(cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let sock_path = cmd_socket_path();
+    let mut stream = tokio::net::UnixStream::connect(&sock_path).await?;
+    stream.write_all(cmd.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response).await?;
+    Ok(response.trim().to_string())
+}

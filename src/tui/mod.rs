@@ -217,6 +217,10 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel::<StreamingEvent>(256);
     crate::ipc::start_ipc_server(ipc_rx);
 
+    // Command server for remote control (e.g. `ears auto-enter`)
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+    crate::ipc::start_cmd_server(cmd_tx);
+
     // VAD pipeline state
     let mut vad_running = false;
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
@@ -291,6 +295,16 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 app.handle_streaming_event(event);
             }
 
+            // Drain remote commands
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    crate::ipc::EarsCommand::ToggleAutoEnter => {
+                        app.auto_enter = !app.auto_enter;
+                        app.add_log(&format!("Auto-enter: {}", if app.auto_enter { "on" } else { "off" }));
+                    }
+                }
+            }
+
             // Check if VAD state changed
             if app.vad_active && !vad_running {
                 // Start VAD pipeline
@@ -355,8 +369,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
 
     restore_terminal(&mut terminal)?;
 
-    // Clean up IPC socket
+    // Clean up IPC sockets
     crate::ipc::cleanup_socket();
+    crate::ipc::cleanup_cmd_socket();
 
     // Drop guard is redundant on clean exit, but handles panics above
     drop(_state_guard);
