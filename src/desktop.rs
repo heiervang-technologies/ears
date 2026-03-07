@@ -314,6 +314,8 @@ static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
 static SOUND_VAD_SPEECH_START: &[u8] = include_bytes!("../sounds/vad_speech_start.wav");
 static SOUND_VAD_SPEECH_CONFIRM: &[u8] = include_bytes!("../sounds/vad_speech_confirm.wav");
 static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
+static SOUND_TOGGLE_ON: &[u8] = include_bytes!("../sounds/toggle_on.wav");
+static SOUND_TOGGLE_OFF: &[u8] = include_bytes!("../sounds/toggle_off.wav");
 
 impl AudioFeedback {
     /// Set the global cue volume (0-100)
@@ -436,6 +438,16 @@ impl AudioFeedback {
     /// Play VAD speech ended sound (descending E5→C5)
     pub fn beep_vad_end() -> Result<()> {
         Self::play_named("vad_end", SOUND_VAD_END)
+    }
+
+    /// Play toggle-on sound (ascending G5→B5)
+    pub fn beep_toggle_on() -> Result<()> {
+        Self::play_named("toggle_on", SOUND_TOGGLE_ON)
+    }
+
+    /// Play toggle-off sound (descending B5→G5)
+    pub fn beep_toggle_off() -> Result<()> {
+        Self::play_named("toggle_off", SOUND_TOGGLE_OFF)
     }
 }
 
