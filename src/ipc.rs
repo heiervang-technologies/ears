@@ -55,7 +55,7 @@ pub fn start_ipc_server_at(path: PathBuf, rx: broadcast::Receiver<StreamingEvent
 }
 
 /// Remove a specific socket file (best-effort cleanup).
-pub fn cleanup_socket_at(path: &PathBuf) {
+pub fn cleanup_socket_at(path: &std::path::Path) {
     if path.exists() {
         let _ = std::fs::remove_file(path);
     }
@@ -187,10 +187,7 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
 
 /// Remove the command socket file.
 pub fn cleanup_cmd_socket() {
-    let path = cmd_socket_path();
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
+    cleanup_socket_at(&cmd_socket_path());
 }
 
 /// Send a command to a running ears instance. Returns the response.

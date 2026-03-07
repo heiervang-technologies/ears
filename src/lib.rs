@@ -60,8 +60,5 @@ pub use vad::{SileroVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegme
 pub use text_filters::TextFilters;
 pub mod ipc;
 
-/// Standard PCM WAV header size in bytes.
-///
-/// Files at or below this size contain zero audio samples. Sending such files
-/// crashes some ASR backends (e.g. Qwen3-ASR ValueError).
-pub const WAV_HEADER_SIZE: u64 = 44;
+// Re-export audio constants
+pub use whisper::WAV_HEADER_SIZE;

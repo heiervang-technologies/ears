@@ -369,7 +369,9 @@ async fn handle_vad(config: &Config) -> Result<()> {
         match ears::tui::start_vad_pipeline(config, event_tx).await {
             Ok(result) => result,
             Err(e) => {
-                let _ = std::fs::remove_file(&vad_pid_file);
+                if let Err(e2) = std::fs::remove_file(&vad_pid_file) {
+                    tracing::debug!("Failed to remove VAD PID file: {}", e2);
+                }
                 if let Err(e2) = state_mgr.transition(StateEnum::Idle) {
                     tracing::warn!("Failed to reset state after VAD failure: {}", e2);
                 }

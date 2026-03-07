@@ -8,6 +8,12 @@ use backoff::{future::retry, ExponentialBackoff};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// Standard PCM WAV header size in bytes.
+///
+/// Files at or below this size contain zero audio samples. Sending such files
+/// crashes some ASR backends (e.g. Qwen3-ASR ValueError).
+pub const WAV_HEADER_SIZE: u64 = 44;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
