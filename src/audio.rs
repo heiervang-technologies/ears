@@ -242,4 +242,72 @@ mod tests {
         let formatted = format_device_list(&devices);
         assert_eq!(formatted, "No audio input devices found");
     }
+
+    #[test]
+    fn test_parse_no_sources() {
+        // Only Audio/Sink nodes, no Audio/Source
+        let output = r#"
+        id 44, type PipeWire:Interface:Node/3
+                object.serial = "44"
+                node.name = "some_output_device"
+                node.description = "Some Output Device"
+                media.class = "Audio/Sink"
+
+        id 45, type PipeWire:Interface:Node/3
+                object.serial = "45"
+                node.name = "another_output"
+                node.description = "Another Output"
+                media.class = "Audio/Sink"
+        "#;
+
+        let devices = parse_pw_cli_output(output).unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_missing_description() {
+        // Node with name but no description line
+        let output = r#"
+        id 42, type PipeWire:Interface:Node/3
+                object.serial = "42"
+                node.name = "alsa_input.some_device"
+                media.class = "Audio/Source"
+        "#;
+
+        let devices = parse_pw_cli_output(output).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "alsa_input.some_device");
+        assert_eq!(devices[0].description, "");
+    }
+
+    #[test]
+    fn test_parse_empty_name() {
+        // Node with empty node.name should be filtered out
+        let output = r#"
+        id 42, type PipeWire:Interface:Node/3
+                object.serial = "42"
+                node.name = ""
+                node.description = "Nameless Device"
+                media.class = "Audio/Source"
+        "#;
+
+        let devices = parse_pw_cli_output(output).unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_single_device() {
+        let output = r#"
+        id 50, type PipeWire:Interface:Node/3
+                object.serial = "50"
+                node.name = "alsa_input.usb-Blue_Yeti"
+                node.description = "Blue Yeti Stereo"
+                media.class = "Audio/Source"
+        "#;
+
+        let devices = parse_pw_cli_output(output).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "alsa_input.usb-Blue_Yeti");
+        assert_eq!(devices[0].description, "Blue Yeti Stereo");
+    }
 }

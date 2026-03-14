@@ -583,4 +583,71 @@ server = "http://my-server:9000"
 
         std::env::remove_var("EARS_SERVER");
     }
+
+    #[test]
+    fn test_toml_invalid_config() {
+        let invalid_toml = r#"
+server = [[[not valid toml
+"#;
+        let result: Result<Config, _> = toml::from_str(invalid_toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_toml_unknown_fields_ignored() {
+        let toml_str = r#"
+server = "http://localhost:8080"
+device = "my-mic"
+some_unknown_field = "should be ignored"
+another_unknown = 42
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.whisper_server.as_str(), "http://localhost:8080/");
+        assert_eq!(config.device, "my-mic");
+    }
+
+    #[test]
+    fn test_vad_settings_defaults() {
+        let vad = VadSettings::default();
+        assert_eq!(vad.speech_threshold, 0.5);
+        assert_eq!(vad.min_speech_duration_ms, 300);
+        assert_eq!(vad.max_silence_duration_ms, 700);
+        assert_eq!(vad.pre_speech_buffer_ms, 500);
+    }
+
+    #[test]
+    fn test_effective_auto_correction() {
+        let mut config = Config::new().unwrap();
+
+        // When auto_correction is None, falls back to progressive_typing value
+        config.auto_correction = None;
+        config.progressive_typing = false;
+        assert!(!config.effective_auto_correction());
+
+        config.progressive_typing = true;
+        assert!(config.effective_auto_correction());
+
+        // When auto_correction is Some, uses that value regardless of progressive_typing
+        config.auto_correction = Some(true);
+        config.progressive_typing = false;
+        assert!(config.effective_auto_correction());
+
+        config.auto_correction = Some(false);
+        config.progressive_typing = true;
+        assert!(!config.effective_auto_correction());
+    }
+
+    #[test]
+    fn test_config_file_path_with_profile() {
+        let dir = PathBuf::from("/tmp/test-ears-config");
+        let path = Config::config_file_path(&dir, Some("work"));
+        assert_eq!(path, dir.join("config.work.toml"));
+    }
+
+    #[test]
+    fn test_config_file_path_default() {
+        let dir = PathBuf::from("/tmp/test-ears-config");
+        let path = Config::config_file_path(&dir, None);
+        assert_eq!(path, dir.join("config.toml"));
+    }
 }

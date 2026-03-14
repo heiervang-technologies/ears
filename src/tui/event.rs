@@ -34,15 +34,22 @@ impl EventHandler {
         let thread_sender = sender.clone();
 
         std::thread::spawn(move || loop {
-            let event = if event::poll(tick_rate).unwrap_or(false) {
-                match event::read().unwrap_or(CrosstermEvent::FocusGained) {
-                    CrosstermEvent::Key(key) => Event::Key(key),
-                    CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
-                    CrosstermEvent::Resize(w, h) => Event::Resize(w, h),
-                    _ => Event::Tick,
+            let event = match event::poll(tick_rate) {
+                Ok(true) => match event::read() {
+                    Ok(CrosstermEvent::Key(key)) => Event::Key(key),
+                    Ok(CrosstermEvent::Mouse(mouse)) => Event::Mouse(mouse),
+                    Ok(CrosstermEvent::Resize(w, h)) => Event::Resize(w, h),
+                    Ok(_) => Event::Tick,
+                    Err(e) => {
+                        tracing::warn!("Terminal event read error: {}", e);
+                        Event::Tick
+                    }
+                },
+                Ok(false) => Event::Tick,
+                Err(e) => {
+                    tracing::warn!("Terminal event poll error: {}", e);
+                    Event::Tick
                 }
-            } else {
-                Event::Tick
             };
 
             if thread_sender.send(event).is_err() {
