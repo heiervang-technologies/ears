@@ -76,7 +76,7 @@ impl ProgressiveTypingEngine {
             // The committed text diverged from what we typed
             // Need to find the common prefix and correct from there
             let common_prefix = find_common_prefix(&self.typed_text, committed_text);
-            let chars_to_delete = self.typed_text.len() - common_prefix.len();
+            let chars_to_delete = self.typed_text.chars().count() - common_prefix.chars().count();
             let text_to_type = &committed_text[common_prefix.len()..];
 
             if chars_to_delete > 0 {
@@ -103,13 +103,18 @@ impl ProgressiveTypingEngine {
                 Ok(0)
             }
         } else if !self.config.auto_correction {
-            // Diverged but correction is disabled, just append
-            // (This will result in incorrect text but faster)
-            let new_text = &committed_text[self.typed_text.len()..];
-            if !new_text.is_empty() {
-                self.type_text(new_text)?;
-                self.typed_text.push_str(new_text);
-                Ok(new_text.len())
+            // Diverged but correction is disabled — skip the divergent portion
+            // and only append text beyond what we've already typed.
+            if committed_text.len() > self.typed_text.len() {
+                let char_count = self.typed_text.chars().count();
+                let new_text: String = committed_text.chars().skip(char_count).collect();
+                if !new_text.is_empty() {
+                    self.type_text(&new_text)?;
+                    self.typed_text.push_str(&new_text);
+                    Ok(new_text.len())
+                } else {
+                    Ok(0)
+                }
             } else {
                 Ok(0)
             }
@@ -125,12 +130,26 @@ impl ProgressiveTypingEngine {
         Ok(())
     }
 
-    /// Send backspace keypresses
+    /// Send backspace keypresses using wtype key simulation
     fn backspace(&self, count: usize) -> Result<(), ProgressiveTypingError> {
-        // Type backspace characters
-        let backspaces = "\x08".repeat(count);
-        TextInput::type_text(&backspaces, self.config.typing_mode)
-            .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
+        use std::process::{Command, Stdio};
+
+        for _ in 0..count {
+            let status = Command::new("wtype")
+                .arg("-k")
+                .arg("BackSpace")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
+
+            if !status.success() {
+                return Err(ProgressiveTypingError::TextInputError(
+                    "wtype -k BackSpace failed".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -229,5 +248,30 @@ mod tests {
 
         engine.reset();
         assert_eq!(engine.typed_text(), "");
+    }
+
+    #[test]
+    fn test_find_common_prefix_multibyte() {
+        assert_eq!(find_common_prefix("café", "cafétéria"), "café");
+        assert_eq!(find_common_prefix("cafétéria", "café"), "café");
+        assert_eq!(find_common_prefix("", "über"), "");
+        assert_eq!(find_common_prefix("über", ""), "");
+        assert_eq!(find_common_prefix("日本語", "日本人"), "日本");
+    }
+
+    #[test]
+    fn test_find_common_prefix_emoji() {
+        assert_eq!(
+            find_common_prefix("hello 👋 world", "hello 👋 earth"),
+            "hello 👋 "
+        );
+        assert_eq!(
+            find_common_prefix("👋🌍", "👋🌎"),
+            "👋"
+        );
+        assert_eq!(
+            find_common_prefix("👋", "🌍"),
+            ""
+        );
     }
 }

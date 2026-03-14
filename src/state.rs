@@ -344,4 +344,137 @@ mod tests {
         manager.transition(State::Transcribing).unwrap();
         assert!(manager.transition(State::Idle).is_ok());
     }
+
+    #[test]
+    fn test_vad_state_transitions() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        assert_eq!(manager.current_state(), State::Idle);
+
+        // Idle -> VadActive
+        assert!(manager.transition(State::VadActive).is_ok());
+        assert_eq!(manager.current_state(), State::VadActive);
+
+        // VadActive -> Idle
+        assert!(manager.transition(State::Idle).is_ok());
+        assert_eq!(manager.current_state(), State::Idle);
+    }
+
+    #[test]
+    fn test_invalid_vad_transitions() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // VadActive -> Recording is invalid
+        manager.transition(State::VadActive).unwrap();
+        assert!(manager.transition(State::Recording).is_err());
+
+        // Reset to test Recording -> VadActive
+        manager.transition(State::Idle).unwrap();
+        manager.transition(State::Recording).unwrap();
+        assert!(manager.transition(State::VadActive).is_err());
+    }
+
+    #[test]
+    fn test_load_state_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // No state file exists, load_state should default to Idle
+        manager.load_state().unwrap();
+        assert_eq!(manager.current_state(), State::Idle);
+    }
+
+    #[test]
+    fn test_load_state_corrupted() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Write garbage to the state file
+        fs::write(temp_dir.path().join("state"), "garbage_data").unwrap();
+
+        let result = manager.load_state();
+        assert!(matches!(result, Err(StateError::CorruptedState)));
+    }
+
+    #[test]
+    fn test_load_state_all_states() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let cases = vec![
+            ("idle", State::Idle),
+            ("recording", State::Recording),
+            ("transcribing", State::Transcribing),
+            ("vad_active", State::VadActive),
+        ];
+
+        for (state_str, expected_state) in cases {
+            fs::write(temp_dir.path().join("state"), state_str).unwrap();
+            let mut manager = StateManager::new(temp_dir.path()).unwrap();
+            manager.load_state().unwrap();
+            assert_eq!(manager.current_state(), expected_state, "Failed for state string: {}", state_str);
+        }
+    }
+
+    #[test]
+    fn test_reconcile_stale_transcribing() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Manually set state to Transcribing
+        fs::write(temp_dir.path().join("state"), "transcribing").unwrap();
+        manager.load_state().unwrap();
+        assert_eq!(manager.current_state(), State::Transcribing);
+
+        // Reconcile should reset to Idle
+        let reconciled = manager.reconcile_state(|| Ok(false)).unwrap();
+        assert!(reconciled);
+        assert_eq!(manager.current_state(), State::Idle);
+    }
+
+    #[test]
+    fn test_reconcile_stale_recording() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Manually set state to Recording
+        fs::write(temp_dir.path().join("state"), "recording").unwrap();
+        manager.load_state().unwrap();
+        assert_eq!(manager.current_state(), State::Recording);
+
+        // Process is dead -> reconcile to Idle
+        let reconciled = manager.reconcile_state(|| Ok(false)).unwrap();
+        assert!(reconciled);
+        assert_eq!(manager.current_state(), State::Idle);
+    }
+
+    #[test]
+    fn test_reconcile_recording_alive() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        // Manually set state to Recording
+        fs::write(temp_dir.path().join("state"), "recording").unwrap();
+        manager.load_state().unwrap();
+        assert_eq!(manager.current_state(), State::Recording);
+
+        // Process is alive -> keep Recording
+        let reconciled = manager.reconcile_state(|| Ok(true)).unwrap();
+        assert!(!reconciled);
+        assert_eq!(manager.current_state(), State::Recording);
+    }
+
+    #[test]
+    fn test_reconcile_idle_noop() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(temp_dir.path()).unwrap();
+
+        assert_eq!(manager.current_state(), State::Idle);
+
+        // Reconcile on Idle should be a no-op
+        let reconciled = manager.reconcile_state(|| Ok(false)).unwrap();
+        assert!(!reconciled);
+        assert_eq!(manager.current_state(), State::Idle);
+    }
 }

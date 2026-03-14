@@ -361,4 +361,81 @@ mod tests {
         assert!(!config.progressive_typing);
         assert!(!config.auto_correction);
     }
+
+    #[test]
+    fn test_common_prefix_multibyte() {
+        // Multi-byte UTF-8 characters
+        assert_eq!(common_prefix("café", "cafétéria"), "café");
+        assert_eq!(common_prefix("cafétéria", "café"), "café");
+        assert_eq!(common_prefix("日本語", "日本人"), "日本");
+        assert_eq!(common_prefix("日本語", "中国語"), "");
+    }
+
+    #[test]
+    fn test_local_agreement_empty_transcripts() {
+        let mut policy = LocalAgreementPolicy::new(2);
+
+        let (committed, uncommitted) = policy.process(String::new());
+        assert_eq!(committed, "");
+        assert_eq!(uncommitted, "");
+
+        let (committed, uncommitted) = policy.process(String::new());
+        assert_eq!(committed, "");
+        assert_eq!(uncommitted, "");
+    }
+
+    #[test]
+    fn test_local_agreement_n_equals_1() {
+        let mut policy = LocalAgreementPolicy::new(1);
+
+        // With n=1, everything commits immediately
+        let (committed, uncommitted) = policy.process("Hello".to_string());
+        assert_eq!(committed, "Hello");
+        assert_eq!(uncommitted, "");
+
+        let (committed, uncommitted) = policy.process("Hello world".to_string());
+        assert_eq!(committed, " world");
+        assert_eq!(uncommitted, "");
+
+        assert_eq!(policy.committed(), "Hello world");
+    }
+
+    #[test]
+    fn test_local_agreement_n_equals_3() {
+        let mut policy = LocalAgreementPolicy::new(3);
+
+        // First two iterations: not enough history
+        let (committed, _) = policy.process("Hello".to_string());
+        assert_eq!(committed, "");
+
+        let (committed, _) = policy.process("Hello world".to_string());
+        assert_eq!(committed, "");
+
+        // Third iteration: now we have 3 items in history
+        let (committed, uncommitted) = policy.process("Hello world!".to_string());
+        assert_eq!(committed, "Hello");
+        assert_eq!(uncommitted, " world!");
+    }
+
+    #[test]
+    fn test_audio_buffer_empty_read() {
+        let buffer = AudioBuffer::new(1, 16000);
+
+        // No writes, reading should return empty
+        let samples = buffer.read_recent(100);
+        assert_eq!(samples.len(), 0);
+    }
+
+    #[test]
+    fn test_audio_buffer_read_more_than_written() {
+        let mut buffer = AudioBuffer::new(1, 16000);
+
+        // Write only 3 samples
+        buffer.write(&[0.1, 0.2, 0.3]);
+
+        // Request more than written
+        let samples = buffer.read_recent(100);
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples, vec![0.1, 0.2, 0.3]);
+    }
 }
