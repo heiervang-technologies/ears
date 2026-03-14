@@ -4,7 +4,7 @@ This document describes the internal architecture of ears, a speech recognition 
 
 ## 1. System Overview
 
-ears is a Rust application that captures audio from PipeWire, sends it to a whisper.cpp-compatible ASR server for transcription, and types the resulting text into the focused window. It operates in three modes:
+ears is a Rust application that captures audio from PipeWire, sends it to a whisper.cpp-compatible ASR server for transcription, and types the resulting text into the focused window. It operates in four modes:
 
 - **TUI mode** (`ears`) -- Interactive terminal UI with VAD controls, configuration, and live status.
 - **Push-to-talk** (`ears toggle`) -- Keybind-driven: press once to start recording, press again to stop and transcribe.

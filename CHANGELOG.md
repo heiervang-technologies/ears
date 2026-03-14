@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Progressive typing: backspace now sends proper BackSpace key events via wtype instead of \x08 control characters
+- Streaming: fixed UTF-8 panic in LocalAgreementPolicy when history window slides and committed text is not a prefix of new stable prefix (byte-based slicing replaced with char-based)
+- Progressive typing: backspace now sends proper BackSpace key events (batched wtype or ydotool) instead of \x08 control characters, respecting configured typing mode
 - Progressive typing: fixed index-out-of-bounds panic when committed text is shorter than typed text with auto-correction disabled
 - Progressive typing: backspace count now uses char count instead of byte length (fixes multi-byte character handling)
 - TUI event handler: terminal read/poll errors are now logged via tracing instead of silently masked as FocusGained events

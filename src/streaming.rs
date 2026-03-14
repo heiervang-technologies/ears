@@ -72,9 +72,13 @@ impl LocalAgreementPolicy {
         // Find longest common prefix across all history
         let stable_prefix = self.find_common_prefix();
 
-        // Calculate what's newly committed
-        let newly_committed = if stable_prefix.len() > self.committed.len() {
-            stable_prefix[self.committed.len()..].to_string()
+        // Calculate what's newly committed (use char count to avoid
+        // slicing mid-character when committed and stable_prefix diverge
+        // after a history window slide)
+        let committed_chars = self.committed.chars().count();
+        let stable_chars = stable_prefix.chars().count();
+        let newly_committed = if stable_chars > committed_chars {
+            stable_prefix.chars().skip(committed_chars).collect()
         } else {
             String::new()
         };
@@ -437,5 +441,29 @@ mod tests {
         let samples = buffer.read_recent(100);
         assert_eq!(samples.len(), 3);
         assert_eq!(samples, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn test_local_agreement_multibyte_history_slide() {
+        // Regression test: when history slides and committed (from previous
+        // round) is not a prefix of the new stable_prefix, byte-based slicing
+        // would panic on multi-byte characters.
+        let mut policy = LocalAgreementPolicy::new(2);
+
+        // Round 1-2: committed becomes "x"
+        policy.process("xyz".to_string());
+        let (committed, _) = policy.process("xab".to_string());
+        assert_eq!(committed, "x");
+
+        // Round 3: history is now ["xab", "ñyz"], common prefix is ""
+        let (committed, _) = policy.process("ñyz".to_string());
+        assert_eq!(committed, "");
+
+        // Round 4: history is now ["ñyz", "ñyabc"], common prefix is "ñy"
+        // Previously this would panic: committed="", stable="ñy",
+        // stable_prefix[0..] is fine, but the general case with committed="x"
+        // and stable="ñy" would slice mid-char.
+        let (committed, _) = policy.process("ñyabc".to_string());
+        assert_eq!(committed, "ñy");
     }
 }

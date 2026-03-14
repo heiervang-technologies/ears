@@ -130,14 +130,30 @@ impl ProgressiveTypingEngine {
         Ok(())
     }
 
-    /// Send backspace keypresses using wtype key simulation
+    /// Send backspace keypresses, respecting the configured typing mode.
+    ///
+    /// Uses wtype on Omarchy/Hyprland (batched into a single invocation),
+    /// ydotool otherwise.
     fn backspace(&self, count: usize) -> Result<(), ProgressiveTypingError> {
         use std::process::{Command, Stdio};
 
-        for _ in 0..count {
-            let status = Command::new("wtype")
-                .arg("-k")
-                .arg("BackSpace")
+        if count == 0 {
+            return Ok(());
+        }
+
+        let use_wtype = match self.config.typing_mode {
+            TypingMode::Wtype => true,
+            TypingMode::Paste | TypingMode::None => false,
+            TypingMode::Auto => TextInput::is_omarchy(),
+        };
+
+        if use_wtype {
+            // Batch all backspaces into a single wtype call: wtype -k BackSpace -k BackSpace ...
+            let mut cmd = Command::new("wtype");
+            for _ in 0..count {
+                cmd.arg("-k").arg("BackSpace");
+            }
+            let status = cmd
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -149,7 +165,28 @@ impl ProgressiveTypingEngine {
                     "wtype -k BackSpace failed".to_string(),
                 ));
             }
+        } else {
+            // ydotool: KEY_BACKSPACE = 14, press (1) and release (0)
+            let mut args = vec!["key".to_string()];
+            for _ in 0..count {
+                args.push("14:1".to_string());
+                args.push("14:0".to_string());
+            }
+            let status = Command::new("ydotool")
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
+
+            if !status.success() {
+                return Err(ProgressiveTypingError::TextInputError(
+                    "ydotool key BackSpace failed".to_string(),
+                ));
+            }
         }
+
         Ok(())
     }
 
