@@ -55,56 +55,18 @@ pub fn start_ipc_server_at(path: PathBuf, rx: broadcast::Receiver<StreamingEvent
 }
 
 /// Remove a specific socket file (best-effort cleanup).
-pub fn cleanup_socket_at(path: &PathBuf) {
+pub fn cleanup_socket_at(path: &std::path::Path) {
     if path.exists() {
         let _ = std::fs::remove_file(path);
     }
 }
 
-/// Start the IPC server in a background tokio task.
+/// Start the IPC server in a background tokio task at the default socket path.
 ///
 /// Accepts concurrent client connections and broadcasts every event received
 /// on `rx` as a newline-delimited JSON line to each connected client.
 pub fn start_ipc_server(rx: broadcast::Receiver<StreamingEvent>) {
-    tokio::spawn(async move {
-        let sock_path = socket_path();
-
-        // Remove stale socket from a previous run
-        if sock_path.exists() {
-            let _ = std::fs::remove_file(&sock_path);
-        }
-
-        let listener = match UnixListener::bind(&sock_path) {
-            Ok(l) => l,
-            Err(e) => {
-                error!(
-                    "Failed to bind IPC socket at {}: {}",
-                    sock_path.display(),
-                    e
-                );
-                return;
-            }
-        };
-
-        info!("IPC server listening on {}", sock_path.display());
-
-        loop {
-            tokio::select! {
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, _addr)) => {
-                            debug!("IPC client connected");
-                            let client_rx = rx.resubscribe();
-                            tokio::spawn(handle_client(stream, client_rx));
-                        }
-                        Err(e) => {
-                            error!("IPC accept error: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-    });
+    start_ipc_server_at(socket_path(), rx);
 }
 
 /// Handle a single connected client, forwarding events until disconnect.
@@ -141,12 +103,9 @@ async fn handle_client(
     }
 }
 
-/// Remove the socket file (best-effort cleanup).
+/// Remove the default socket file (best-effort cleanup).
 pub fn cleanup_socket() {
-    let path = socket_path();
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
+    cleanup_socket_at(&socket_path());
 }
 
 // --- Command IPC (bidirectional) ---
@@ -177,7 +136,11 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
         let listener = match UnixListener::bind(&sock_path) {
             Ok(l) => l,
             Err(e) => {
-                error!("Failed to bind command socket at {}: {}", sock_path.display(), e);
+                error!(
+                    "Failed to bind command socket at {}: {}",
+                    sock_path.display(),
+                    e
+                );
                 return;
             }
         };
@@ -196,12 +159,19 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
                             let response = match line.trim() {
                                 "toggle-auto-enter" => {
                                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                    let _ = tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
-                                    resp_rx.await.unwrap_or_else(|_| "error:internal".to_string())
+                                    let _ =
+                                        tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
+                                    resp_rx
+                                        .await
+                                        .unwrap_or_else(|_| "error:internal".to_string())
                                 }
                                 _ => "error:unknown-command".to_string(),
                             };
-                            if writer.write_all(format!("{}\n", response).as_bytes()).await.is_err() {
+                            if writer
+                                .write_all(format!("{}\n", response).as_bytes())
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -217,10 +187,7 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
 
 /// Remove the command socket file.
 pub fn cleanup_cmd_socket() {
-    let path = cmd_socket_path();
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
+    cleanup_socket_at(&cmd_socket_path());
 }
 
 /// Send a command to a running ears instance. Returns the response.

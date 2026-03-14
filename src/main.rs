@@ -1,5 +1,4 @@
 mod cli;
-mod recording;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -258,11 +257,7 @@ struct TranscribingGuard {
 
 impl Drop for TranscribingGuard {
     fn drop(&mut self) {
-        let state_file = self.state_dir.join("state");
-        let _ = std::fs::write(&state_file, "idle");
-        let _ = std::process::Command::new("pkill")
-            .args(["-RTMIN+9", "waybar"])
-            .spawn();
+        ears::state::force_reset_to_idle(&self.state_dir);
     }
 }
 
@@ -336,24 +331,32 @@ async fn handle_vad(config: &Config) -> Result<()> {
             use nix::unistd::Pid;
 
             if kill(Pid::from_raw(pid), None).is_ok() {
-                kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
+                if let Err(e) = kill(Pid::from_raw(pid), Signal::SIGTERM) {
+                    tracing::warn!("Failed to send SIGTERM to VAD process {}: {}", pid, e);
+                }
                 AudioFeedback::beep_vad_close().ok();
                 eprintln!("VAD stopped");
                 return Ok(());
             }
         }
-        std::fs::remove_file(&vad_pid_file).ok();
+        if let Err(e) = std::fs::remove_file(&vad_pid_file) {
+            tracing::debug!("Failed to remove stale VAD PID file: {}", e);
+        }
     }
 
     let mut state_mgr =
         StateManager::new(&config.state_dir).context("Failed to initialize state manager")?;
-    state_mgr.load_state().ok();
+    if let Err(e) = state_mgr.load_state() {
+        tracing::warn!("Failed to load state: {}", e);
+    }
 
     std::fs::write(&vad_pid_file, std::process::id().to_string())
         .context("Failed to write VAD PID file")?;
 
     if state_mgr.current_state() != StateEnum::Idle {
-        state_mgr.transition(StateEnum::Idle).ok();
+        if let Err(e) = state_mgr.transition(StateEnum::Idle) {
+            tracing::warn!("Failed to reset state to Idle: {}", e);
+        }
     }
     state_mgr
         .transition(StateEnum::VadActive)
@@ -366,8 +369,12 @@ async fn handle_vad(config: &Config) -> Result<()> {
         match ears::tui::start_vad_pipeline(config, event_tx).await {
             Ok(result) => result,
             Err(e) => {
-                std::fs::remove_file(&vad_pid_file).ok();
-                state_mgr.transition(StateEnum::Idle).ok();
+                if let Err(e2) = std::fs::remove_file(&vad_pid_file) {
+                    tracing::debug!("Failed to remove VAD PID file: {}", e2);
+                }
+                if let Err(e2) = state_mgr.transition(StateEnum::Idle) {
+                    tracing::warn!("Failed to reset state after VAD failure: {}", e2);
+                }
                 anyhow::bail!("Failed to start VAD: {}", e);
             }
         };
@@ -460,8 +467,12 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let _ = pipeline_handle.await;
     ears::ipc::cleanup_socket();
     ears::ipc::cleanup_cmd_socket();
-    std::fs::remove_file(&vad_pid_file).ok();
-    state_mgr.transition(StateEnum::Idle).ok();
+    if let Err(e) = std::fs::remove_file(&vad_pid_file) {
+        tracing::debug!("Failed to remove VAD PID file: {}", e);
+    }
+    if let Err(e) = state_mgr.transition(StateEnum::Idle) {
+        tracing::warn!("Failed to transition to Idle on shutdown: {}", e);
+    }
 
     Ok(())
 }
@@ -645,7 +656,9 @@ async fn handle_toggle(config: &Config) -> Result<()> {
     let pid_file = config.state_dir.join("recording.pid");
     let process_mgr = ProcessManager::new(&pid_file, Duration::from_secs(120));
 
-    process_mgr.cleanup_stale().ok();
+    if let Err(e) = process_mgr.cleanup_stale() {
+        tracing::debug!("Stale process cleanup: {}", e);
+    }
 
     // If VAD is active, toggle should not interfere
     if state_mgr.current_state() == StateEnum::VadActive {
@@ -694,7 +707,9 @@ async fn start_recording(
 
     let audio_file = config.state_dir.join("recording.wav");
     if audio_file.exists() {
-        std::fs::remove_file(&audio_file).ok();
+        if let Err(e) = std::fs::remove_file(&audio_file) {
+            tracing::warn!("Failed to remove old recording file: {}", e);
+        }
     }
 
     state_mgr
@@ -738,7 +753,9 @@ async fn stop_and_transcribe(
     if !process_mgr.is_process_alive(pid) {
         AudioFeedback::beep_error().ok();
         Notifications::info("No active recording").ok();
-        process_mgr.cleanup_stale().ok();
+        if let Err(e) = process_mgr.cleanup_stale() {
+            tracing::debug!("Stale process cleanup: {}", e);
+        }
         tracing::warn!("Recording process not alive (PID: {})", pid);
         return Ok(());
     }
@@ -761,19 +778,14 @@ async fn stop_and_transcribe(
 
     let metadata = tokio::fs::metadata(&audio_file).await?;
 
-    // A standard PCM WAV header is 44 bytes. A file with only a header
-    // (or less) contains zero audio samples. This happens when pw-record
-    // is killed before capturing any audio (e.g., very fast double-tap).
-    // Sending such a file crashes some ASR servers (Qwen3-ASR ValueError).
-    const WAV_HEADER_SIZE: u64 = 44;
-    if metadata.len() <= WAV_HEADER_SIZE {
+    if metadata.len() <= ears::WAV_HEADER_SIZE {
         AudioFeedback::beep_error().ok();
         Notifications::error("Recording too short").ok();
         std::fs::remove_file(&audio_file).ok();
         tracing::error!(
             "Audio file has no audio data ({} bytes, header is {})",
             metadata.len(),
-            WAV_HEADER_SIZE
+            ears::WAV_HEADER_SIZE
         );
         anyhow::bail!("Recording file contains no audio data");
     }

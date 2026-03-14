@@ -33,6 +33,17 @@ pub enum StateError {
     CorruptedState,
 }
 
+/// Best-effort reset of state to idle and waybar notification.
+///
+/// Used by drop guards to ensure state is cleaned up on panic or early return.
+pub fn force_reset_to_idle(state_dir: &Path) {
+    let state_file = state_dir.join("state");
+    let _ = fs::write(&state_file, "idle");
+    let _ = std::process::Command::new("pkill")
+        .args(["-RTMIN+9", "waybar"])
+        .spawn();
+}
+
 /// Manages state transitions and persistence
 pub struct StateManager {
     current_state: State,

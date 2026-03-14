@@ -61,12 +61,7 @@ struct StateCleanupGuard {
 
 impl Drop for StateCleanupGuard {
     fn drop(&mut self) {
-        // Best-effort reset state to idle
-        let state_file = self.state_dir.join("state");
-        let _ = std::fs::write(&state_file, "idle");
-        let _ = std::process::Command::new("pkill")
-            .args(["-RTMIN+9", "waybar"])
-            .spawn();
+        crate::state::force_reset_to_idle(&self.state_dir);
     }
 }
 

@@ -59,3 +59,6 @@ pub use vad::{SileroVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegme
 // Re-exports from Iteration 9
 pub use text_filters::TextFilters;
 pub mod ipc;
+
+// Re-export audio constants
+pub use whisper::WAV_HEADER_SIZE;

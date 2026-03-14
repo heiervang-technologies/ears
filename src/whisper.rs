@@ -8,6 +8,12 @@ use backoff::{future::retry, ExponentialBackoff};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// Standard PCM WAV header size in bytes.
+///
+/// Files at or below this size contain zero audio samples. Sending such files
+/// crashes some ASR backends (e.g. Qwen3-ASR ValueError).
+pub const WAV_HEADER_SIZE: u64 = 44;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
@@ -279,10 +285,7 @@ impl WhisperClient {
 
         let metadata = tokio::fs::metadata(path).await?;
 
-        // A standard PCM WAV header is 44 bytes. Files at or below this size
-        // contain zero audio samples and will crash some ASR backends.
-        const WAV_HEADER_SIZE: u64 = 44;
-        if metadata.len() <= WAV_HEADER_SIZE {
+        if metadata.len() <= crate::WAV_HEADER_SIZE {
             return Err(WhisperError::InvalidAudioFile(format!(
                 "File contains no audio data ({} bytes): {}",
                 metadata.len(),
