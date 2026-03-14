@@ -413,7 +413,12 @@ mod tests {
             fs::write(temp_dir.path().join("state"), state_str).unwrap();
             let mut manager = StateManager::new(temp_dir.path()).unwrap();
             manager.load_state().unwrap();
-            assert_eq!(manager.current_state(), expected_state, "Failed for state string: {}", state_str);
+            assert_eq!(
+                manager.current_state(),
+                expected_state,
+                "Failed for state string: {}",
+                state_str
+            );
         }
     }
 

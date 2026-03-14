@@ -265,13 +265,7 @@ mod tests {
             find_common_prefix("hello 👋 world", "hello 👋 earth"),
             "hello 👋 "
         );
-        assert_eq!(
-            find_common_prefix("👋🌍", "👋🌎"),
-            "👋"
-        );
-        assert_eq!(
-            find_common_prefix("👋", "🌍"),
-            ""
-        );
+        assert_eq!(find_common_prefix("👋🌍", "👋🌎"), "👋");
+        assert_eq!(find_common_prefix("👋", "🌍"), "");
     }
 }
