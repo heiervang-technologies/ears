@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "ears"
-version = "1.1.123"
+version = "1.1.125"
 dependencies = [
  "anyhow",
  "assert_cmd",

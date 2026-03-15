@@ -491,8 +491,8 @@ async fn handle_ws_listen(
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
         std::env::var("XDG_RUNTIME_DIR")
-            .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
+            .map(|d| std::path::PathBuf::from(d).join("ears-ws.sock"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/ears-ws.sock"))
     });
 
     // Do NOT kill existing VAD — ws-listen runs alongside the desktop ears instance

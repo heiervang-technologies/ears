@@ -137,3 +137,211 @@ async fn handle_connection(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+
+    /// Helper: start the WS server on an ephemeral port and return (port, audio_rx, event_tx, handle)
+    async fn setup_server() -> (
+        u16,
+        mpsc::UnboundedReceiver<Vec<f32>>,
+        broadcast::Sender<StreamingEvent>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = broadcast::channel(64);
+        // Bind to port 0 to get an ephemeral port — but start_ws_server takes host/port,
+        // so we bind manually and extract the port.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let event_tx_clone = event_tx.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _peer)) => {
+                        let tx = audio_tx.clone();
+                        let event_rx = event_tx_clone.subscribe();
+                        tokio::spawn(async move {
+                            let _ = handle_connection(stream, tx, event_rx).await;
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        (port, audio_rx, event_tx, handle)
+    }
+
+    /// Connect a WS client to the test server
+    async fn connect_client(
+        port: u16,
+    ) -> (
+        futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
+        >,
+        futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    ) {
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (ws, _) = connect_async(&url).await.expect("Failed to connect");
+        ws.split()
+    }
+
+    /// Core protocol: start → binary PCM → end. Validates that audio arrives as f32 samples
+    /// and that the "end" message flushes silence into the pipeline.
+    #[tokio::test]
+    async fn test_ws_start_send_pcm_end() {
+        let (port, mut audio_rx, _event_tx, handle) = setup_server().await;
+        let (mut write, _read) = connect_client(port).await;
+
+        // Send start
+        write
+            .send(Message::Text(
+                r#"{"type": "start", "sample_rate": 16000, "channels": 1}"#.into(),
+            ))
+            .await
+            .unwrap();
+
+        // Send a binary frame with 4 s16le samples: [100, -100, 0, 32767]
+        let samples_i16: Vec<i16> = vec![100, -100, 0, 32767];
+        let pcm: Vec<u8> = samples_i16.iter().flat_map(|s| s.to_le_bytes()).collect();
+        write.send(Message::Binary(pcm)).await.unwrap();
+
+        // Receive the audio
+        let received = audio_rx.recv().await.expect("Should receive audio");
+        assert_eq!(received.len(), 4);
+        // Verify conversion: i16 / 32768.0
+        assert!((received[0] - 100.0 / 32768.0).abs() < 1e-6);
+        assert!((received[1] - (-100.0 / 32768.0)).abs() < 1e-6);
+        assert!((received[2] - 0.0).abs() < 1e-6);
+        assert!((received[3] - 32767.0 / 32768.0).abs() < 1e-6);
+
+        // Send end
+        write
+            .send(Message::Text(r#"{"type": "end"}"#.into()))
+            .await
+            .unwrap();
+
+        // Should receive a silence flush (16000 samples of zeros)
+        let silence = audio_rx.recv().await.expect("Should receive silence flush");
+        assert_eq!(silence.len(), 16000);
+        assert!(silence.iter().all(|&s| s == 0.0));
+
+        handle.abort();
+    }
+
+    /// Binary frames sent before "start" must be ignored (not forwarded to audio channel).
+    #[tokio::test]
+    async fn test_ws_binary_before_start_ignored() {
+        let (port, mut audio_rx, _event_tx, handle) = setup_server().await;
+        let (mut write, _read) = connect_client(port).await;
+
+        // Send binary without start — should be ignored
+        let pcm: Vec<u8> = vec![0u8; 64];
+        write.send(Message::Binary(pcm)).await.unwrap();
+
+        // Now start and send real audio
+        write
+            .send(Message::Text(r#"{"type": "start"}"#.into()))
+            .await
+            .unwrap();
+        let real_pcm: Vec<u8> = 100i16.to_le_bytes().to_vec();
+        write.send(Message::Binary(real_pcm)).await.unwrap();
+
+        // Only the post-start audio should arrive
+        let received = audio_rx.recv().await.expect("Should receive audio");
+        assert_eq!(received.len(), 1);
+
+        handle.abort();
+    }
+
+    /// Server echoes StreamingEvents back to the client as JSON text frames.
+    #[tokio::test]
+    async fn test_ws_event_echo() {
+        let (port, _audio_rx, event_tx, handle) = setup_server().await;
+        let (mut write, mut read) = connect_client(port).await;
+
+        // Start session so the connection is active
+        write
+            .send(Message::Text(r#"{"type": "start"}"#.into()))
+            .await
+            .unwrap();
+
+        // Give the server a moment to set up the event subscriber
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Broadcast an event
+        let _ = event_tx.send(StreamingEvent::SpeechStarted);
+
+        // Client should receive it as JSON
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), read.next())
+            .await
+            .expect("Timed out waiting for event")
+            .expect("Stream ended")
+            .expect("WS error");
+
+        if let Message::Text(json) = msg {
+            assert!(json.contains("SpeechStarted"), "Got: {}", json);
+        } else {
+            panic!("Expected text frame, got: {:?}", msg);
+        }
+
+        handle.abort();
+    }
+
+    /// Odd-length binary frames are handled gracefully (trimmed via chunks_exact).
+    #[tokio::test]
+    async fn test_ws_odd_byte_pcm_frame() {
+        let (port, mut audio_rx, _event_tx, handle) = setup_server().await;
+        let (mut write, _read) = connect_client(port).await;
+
+        write
+            .send(Message::Text(r#"{"type": "start"}"#.into()))
+            .await
+            .unwrap();
+
+        // 5 bytes = 2 full samples + 1 trailing byte (dropped by chunks_exact)
+        let pcm: Vec<u8> = vec![0, 0, 1, 0, 0xFF];
+        write.send(Message::Binary(pcm)).await.unwrap();
+
+        let received = audio_rx.recv().await.expect("Should receive audio");
+        assert_eq!(
+            received.len(),
+            2,
+            "Should have 2 samples, trailing byte dropped"
+        );
+
+        handle.abort();
+    }
+
+    /// Client close is handled gracefully without panics.
+    #[tokio::test]
+    async fn test_ws_client_disconnect() {
+        let (port, _audio_rx, _event_tx, handle) = setup_server().await;
+        let (mut write, _read) = connect_client(port).await;
+
+        write
+            .send(Message::Text(r#"{"type": "start"}"#.into()))
+            .await
+            .unwrap();
+
+        // Close the connection
+        write.send(Message::Close(None)).await.unwrap();
+
+        // Server should handle this without panicking — give it a moment
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        handle.abort();
+    }
+}
