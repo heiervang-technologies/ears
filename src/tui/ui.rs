@@ -358,6 +358,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(" Auto Enter [n]"),
     ]));
+    let save_to_clipboard_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.save_to_clipboard { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Save to Clipboard [b]"),
+    ]));
     let typing_mode_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
@@ -450,6 +459,17 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + auto_enter_line as u16, inner_width, 1),
         ClickAction::ToggleAutoEnter,
+    );
+
+    // Save to clipboard toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + save_to_clipboard_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleSaveToClipboard,
     );
 
     // Progressive typing toggle
@@ -799,6 +819,15 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
         ),
         Span::raw(" Progressive Typing [t]"),
     ]));
+    let save_to_clipboard_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.save_to_clipboard { "[x]" } else { "[ ]" },
+            Style::default().fg(theme.toggle),
+        ),
+        Span::raw(" Save to Clipboard [b]"),
+    ]));
     let auto_correction_line = text.len();
     text.push(Line::from(vec![
         Span::raw("  "),
@@ -879,6 +908,17 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
             1,
         ),
         ClickAction::ToggleAutoCorrection,
+    );
+
+    // Save to clipboard toggle
+    app.add_clickable_region(
+        Rect::new(
+            inner_x,
+            inner_y + save_to_clipboard_line as u16,
+            inner_width,
+            1,
+        ),
+        ClickAction::ToggleSaveToClipboard,
     );
 }
 

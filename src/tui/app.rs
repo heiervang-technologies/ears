@@ -27,6 +27,8 @@ pub enum ClickAction {
     ToggleStrictAlphabetFilter,
     /// Toggle auto-enter
     ToggleAutoEnter,
+    /// Toggle save to clipboard
+    ToggleSaveToClipboard,
     /// Toggle VAD mode
     ToggleVadMode,
     /// Select a log entry
@@ -182,6 +184,8 @@ pub struct App {
     pub auto_correction: bool,
     /// Send Enter key after each transcription
     pub auto_enter: bool,
+    /// Save transcribed text to clipboard
+    pub save_to_clipboard: bool,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -296,6 +300,7 @@ impl App {
             progressive_typing,
             auto_correction,
             auto_enter,
+            save_to_clipboard: config.save_to_clipboard,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -577,6 +582,13 @@ impl App {
                 }
             }
 
+            // 'b' to toggle save to clipboard (in Configuration panel)
+            (KeyCode::Char('b'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_save_to_clipboard();
+                }
+            }
+
             // 'N' to jump to previous search match
             (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
                 if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
@@ -632,6 +644,9 @@ impl App {
                         }
                         ClickAction::ToggleAutoEnter => {
                             self.toggle_auto_enter();
+                        }
+                        ClickAction::ToggleSaveToClipboard => {
+                            self.toggle_save_to_clipboard();
                         }
                         ClickAction::ToggleVadMode => {
                             self.toggle_vad_mode();
@@ -998,6 +1013,7 @@ impl App {
         self.text_filters = config.text_filters.clone();
         self.typing_mode = config.typing_mode;
         self.progressive_typing = config.progressive_typing;
+        self.save_to_clipboard = config.save_to_clipboard;
         self.auto_correction = config.effective_auto_correction();
         self.auto_enter = config.auto_enter;
         self.profile = profile_name;
@@ -1042,6 +1058,18 @@ impl App {
             "disabled"
         };
         self.logs.push(format!("Auto-correction {}", status));
+        self.save_config();
+    }
+
+    /// Toggle save to clipboard setting
+    pub fn toggle_save_to_clipboard(&mut self) {
+        self.save_to_clipboard = !self.save_to_clipboard;
+        let status = if self.save_to_clipboard {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.logs.push(format!("Save to clipboard {}", status));
         self.save_config();
     }
 
@@ -1126,6 +1154,7 @@ impl App {
         config.auto_correction = Some(self.auto_correction);
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
+        config.save_to_clipboard = self.save_to_clipboard;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
@@ -1275,6 +1304,10 @@ impl App {
                 self.total_transcriptions += 1;
                 self.successful_transcriptions += 1;
                 self.total_words += text.split_whitespace().count();
+                // Copy to clipboard if enabled
+                if self.save_to_clipboard && !text.is_empty() {
+                    crate::desktop::TextInput::copy_to_clipboard(&text);
+                }
             }
             StreamingEvent::StatsUpdate {
                 segments_processed,

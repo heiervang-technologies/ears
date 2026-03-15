@@ -20,12 +20,16 @@ mkdir -p "$SOUNDS_DIR"
 echo "Building Rust binary..."
 cargo build --release --all-features
 
-# Install the Rust binary (remove existing file/symlink first)
+# Install via cargo (puts binary in ~/.cargo/bin)
+echo "Installing via cargo..."
+cargo install --path . --all-features --force
+
+# Also install to ~/.local/bin for PATH compatibility
 rm -f "$INSTALL_DIR/ears"
 cp target/release/ears "$INSTALL_DIR/ears"
 chmod +x "$INSTALL_DIR/ears"
 
-echo "✓ Installed ears to $INSTALL_DIR/ears"
+echo "✓ Installed ears to ~/.cargo/bin/ears and $INSTALL_DIR/ears"
 
 # Copy sound files if they exist
 if [[ -d "sounds" ]] && [[ -n "$(ls -A sounds 2>/dev/null)" ]]; then

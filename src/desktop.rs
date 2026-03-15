@@ -615,6 +615,18 @@ impl TextInput {
         Ok(())
     }
 
+    /// Copy text to clipboard using wl-copy (fire-and-forget, non-blocking)
+    pub fn copy_to_clipboard(text: &str) {
+        match Command::new("wl-copy").arg(text).spawn() {
+            Ok(_) => {
+                tracing::info!("Copied text to clipboard");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to run wl-copy: {}", e);
+            }
+        }
+    }
+
     /// Type text using ydotool with a specific delay (fallback)
     #[allow(dead_code)]
     pub fn type_text_with_delay(text: &str, delay_ms: Option<u32>) -> Result<()> {
