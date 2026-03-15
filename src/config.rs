@@ -46,6 +46,7 @@ fn default_cue_volume() -> u8 {
 fn default_save_to_clipboard() -> bool {
     false
 }
+
 /// VAD (Voice Activity Detection) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadSettings {

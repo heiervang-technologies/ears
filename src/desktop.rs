@@ -615,17 +615,11 @@ impl TextInput {
         Ok(())
     }
 
-    /// Copy text to clipboard using wl-copy
+    /// Copy text to clipboard using wl-copy (fire-and-forget, non-blocking)
     pub fn copy_to_clipboard(text: &str) {
-        match Command::new("wl-copy").arg(text).output() {
-            Ok(output) if output.status.success() => {
+        match Command::new("wl-copy").arg(text).spawn() {
+            Ok(_) => {
                 tracing::info!("Copied text to clipboard");
-            }
-            Ok(output) => {
-                tracing::warn!(
-                    "wl-copy failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
             }
             Err(e) => {
                 tracing::warn!("Failed to run wl-copy: {}", e);

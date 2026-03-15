@@ -871,7 +871,7 @@ async fn stop_and_transcribe(
             }
 
             // Copy to clipboard if enabled
-            if config.save_to_clipboard {
+            if config.save_to_clipboard && !filtered_text.is_empty() {
                 TextInput::copy_to_clipboard(&filtered_text);
             }
 
