@@ -452,7 +452,10 @@ impl Config {
                     lang,
                     ls.server
                 );
-                return (ls.server.clone(), ls.model.clone().or_else(|| self.model.clone()));
+                return (
+                    ls.server.clone(),
+                    ls.model.clone().or_else(|| self.model.clone()),
+                );
             }
         }
         (self.whisper_server.clone(), self.model.clone())
