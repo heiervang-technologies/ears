@@ -12,19 +12,26 @@ use std::env;
 use tempfile::TempDir;
 
 /// Setup a clean environment for tests to get consistent config.
-/// Returns (TempDir, original HOME, original XDG_CONFIG_HOME) for cleanup.
-fn setup_test_env() -> (TempDir, Option<String>, Option<String>) {
+/// Returns (TempDir, original HOME, original XDG_CONFIG_HOME, original XDG_RUNTIME_DIR) for cleanup.
+fn setup_test_env() -> (TempDir, Option<String>, Option<String>, Option<String>) {
     let original_home = env::var("HOME").ok();
     let original_xdg = env::var("XDG_CONFIG_HOME").ok();
+    let original_runtime = env::var("XDG_RUNTIME_DIR").ok();
     let temp_dir = TempDir::new().unwrap();
-    // Set both HOME and XDG_CONFIG_HOME to ensure directories crate uses temp dir
+    // Set HOME, XDG_CONFIG_HOME, and XDG_RUNTIME_DIR to ensure consistent
+    // state across environments (prevents detecting host VAD processes)
     env::set_var("HOME", temp_dir.path());
     env::set_var("XDG_CONFIG_HOME", temp_dir.path().join(".config"));
-    (temp_dir, original_home, original_xdg)
+    env::set_var("XDG_RUNTIME_DIR", temp_dir.path().join("run"));
+    (temp_dir, original_home, original_xdg, original_runtime)
 }
 
 /// Restore environment variables after test
-fn restore_test_env(original_home: Option<String>, original_xdg: Option<String>) {
+fn restore_test_env(
+    original_home: Option<String>,
+    original_xdg: Option<String>,
+    original_runtime: Option<String>,
+) {
     match original_home {
         Some(h) => env::set_var("HOME", h),
         None => env::remove_var("HOME"),
@@ -32,6 +39,10 @@ fn restore_test_env(original_home: Option<String>, original_xdg: Option<String>)
     match original_xdg {
         Some(x) => env::set_var("XDG_CONFIG_HOME", x),
         None => env::remove_var("XDG_CONFIG_HOME"),
+    }
+    match original_runtime {
+        Some(r) => env::set_var("XDG_RUNTIME_DIR", r),
+        None => env::remove_var("XDG_RUNTIME_DIR"),
     }
 }
 
@@ -70,49 +81,49 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
 #[test]
 #[serial_test::serial]
 fn snapshot_initial_state() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     let output = render_to_string(&mut app, 80, 24);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_vad_active_state() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     app.vad_active = true;
     let output = render_to_string(&mut app, 80, 24);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_status_panel() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     let output = render_to_string(&mut app, 100, 30);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_config_panel() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     app.current_panel = Panel::Configuration;
     let output = render_to_string(&mut app, 100, 30);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_logs_panel_with_content() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     app.current_panel = Panel::Logs;
     app.logs = vec![
@@ -121,38 +132,38 @@ fn snapshot_logs_panel_with_content() {
         "2024-01-04 12:00:10 - Recording stopped".to_string(),
     ];
     let output = render_to_string(&mut app, 100, 30);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_command_mode() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     app.command_mode = true;
     app.command_buffer = "quit".to_string();
     let output = render_to_string(&mut app, 80, 24);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_small_terminal() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     let output = render_to_string(&mut app, 60, 15);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }
 
 #[test]
 #[serial_test::serial]
 fn snapshot_wide_terminal() {
-    let (_env, orig_home, orig_xdg) = setup_test_env();
+    let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
     let mut app = App::new();
     let output = render_to_string(&mut app, 120, 40);
-    restore_test_env(orig_home, orig_xdg);
+    restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
 }

@@ -249,17 +249,7 @@ fn show_server(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Guard that resets state to Idle on drop.
-/// Prevents getting stuck in Transcribing after crashes or early returns.
-struct TranscribingGuard {
-    state_dir: std::path::PathBuf,
-}
-
-impl Drop for TranscribingGuard {
-    fn drop(&mut self) {
-        ears::state::force_reset_to_idle(&self.state_dir);
-    }
-}
+// Use shared StateResetGuard from ears::state
 
 /// Run post-transcribe hook if it exists (fire-and-forget)
 fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
@@ -379,16 +369,21 @@ async fn handle_vad(config: &Config) -> Result<()> {
             }
         };
 
+    // Helper to build typing settings from current config state
+    let make_settings = |auto_enter: bool| {
+        let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
+        ears::tui::TypingSettings {
+            progressive_typing: true,
+            auto_correction: true,
+            typing_mode: config.typing_mode,
+            auto_enter,
+            text_filters: config.text_filters.clone(),
+            language,
+        }
+    };
+
     // Send config-driven settings to the engine
-    let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
-    let _ = settings_tx.send(ears::tui::TypingSettings {
-        progressive_typing: true,
-        auto_correction: true,
-        typing_mode: config.typing_mode,
-        auto_enter: config.auto_enter,
-        text_filters: config.text_filters.clone(),
-        language,
-    });
+    let _ = settings_tx.send(make_settings(config.auto_enter));
 
     AudioFeedback::beep_vad_open().ok();
     eprintln!("VAD started - listening...");
@@ -443,15 +438,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
                 match cmd {
                     ears::ipc::EarsCommand::ToggleAutoEnter { respond } => {
                         auto_enter = !auto_enter;
-                        let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
-                        let _ = settings_tx.send(ears::tui::TypingSettings {
-                            progressive_typing: true,
-                            auto_correction: true,
-                            typing_mode: config.typing_mode,
-                            auto_enter,
-                            text_filters: config.text_filters.clone(),
-                            language,
-                        });
+                        let _ = settings_tx.send(make_settings(auto_enter));
                         if auto_enter {
                             AudioFeedback::beep_toggle_on().ok();
                         } else {
@@ -705,6 +692,7 @@ async fn start_recording(
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let (server_url, model) = config.resolve_server(language.as_deref());
     let client = WhisperClient::new(server_url.to_string())
+        .with_language(language)
         .with_api_key(config.api_key.clone())
         .with_model(model);
     if client.health_check().await.is_err() {
@@ -824,9 +812,7 @@ async fn stop_and_transcribe(
 
     // Guard ensures state resets to Idle even if we return early via `?` or panic.
     // This prevents getting stuck in Transcribing after crashes or unexpected errors.
-    let _state_guard = TranscribingGuard {
-        state_dir: config.state_dir.clone(),
-    };
+    let _state_guard = ears::state::StateResetGuard::new(&config.state_dir);
 
     let lang_start = std::time::Instant::now();
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());

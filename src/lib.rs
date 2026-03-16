@@ -42,7 +42,7 @@ pub use config::Config;
 // Re-exports from Iteration 2
 pub use lock::{FileLock, LockError};
 pub use process::{ProcessError, ProcessManager};
-pub use state::{State, StateError, StateManager};
+pub use state::{State, StateError, StateManager, StateResetGuard};
 
 // Re-exports from Iteration 4
 pub use whisper::{WhisperClient, WhisperError};
