@@ -160,17 +160,12 @@ mod tests {
 
         let event_tx_clone = event_tx.clone();
         let handle = tokio::spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, _peer)) => {
-                        let tx = audio_tx.clone();
-                        let event_rx = event_tx_clone.subscribe();
-                        tokio::spawn(async move {
-                            let _ = handle_connection(stream, tx, event_rx).await;
-                        });
-                    }
-                    Err(_) => break,
-                }
+            while let Ok((stream, _peer)) = listener.accept().await {
+                let tx = audio_tx.clone();
+                let event_rx = event_tx_clone.subscribe();
+                tokio::spawn(async move {
+                    let _ = handle_connection(stream, tx, event_rx).await;
+                });
             }
         });
 

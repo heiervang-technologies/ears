@@ -447,7 +447,7 @@ impl Config {
     pub fn resolve_server(&self, language: Option<&str>) -> (Url, Option<String>) {
         if let Some(lang) = language {
             if let Some(ls) = self.language_servers.get(lang) {
-                tracing::info!(
+                tracing::debug!(
                     "Using language-specific server for '{}': {}",
                     lang,
                     ls.server
@@ -698,5 +698,54 @@ another_unknown = 42
         let dir = PathBuf::from("/tmp/test-ears-config");
         let path = Config::config_file_path(&dir, None);
         assert_eq!(path, dir.join("config.toml"));
+    }
+
+    #[test]
+    fn test_resolve_server_with_language_match() {
+        let mut config = Config::new().unwrap();
+        let no_url = Url::parse("http://192.168.8.170:30190/").unwrap();
+        config.language_servers.insert(
+            "no".to_string(),
+            LanguageServer {
+                server: no_url.clone(),
+                model: Some("nb-asr-model".to_string()),
+            },
+        );
+
+        let (server, model) = config.resolve_server(Some("no"));
+        assert_eq!(server, no_url);
+        assert_eq!(model, Some("nb-asr-model".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_server_fallback() {
+        let config = Config::new().unwrap();
+
+        // Unknown language falls back to default server
+        let (server, model) = config.resolve_server(Some("de"));
+        assert_eq!(server, config.whisper_server);
+        assert_eq!(model, config.model);
+
+        // No language falls back to default server
+        let (server, model) = config.resolve_server(None);
+        assert_eq!(server, config.whisper_server);
+        assert_eq!(model, config.model);
+    }
+
+    #[test]
+    fn test_resolve_server_inherits_default_model() {
+        let mut config = Config::new().unwrap();
+        config.model = Some("default-model".to_string());
+        config.language_servers.insert(
+            "no".to_string(),
+            LanguageServer {
+                server: Url::parse("http://localhost:9999/").unwrap(),
+                model: None, // No model override
+            },
+        );
+
+        let (_server, model) = config.resolve_server(Some("no"));
+        // Should inherit the default model when language server has no model
+        assert_eq!(model, Some("default-model".to_string()));
     }
 }
