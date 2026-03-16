@@ -372,11 +372,15 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
 
     restore_terminal(&mut terminal)?;
 
-    // Clean up IPC sockets
-    crate::ipc::cleanup_socket();
-    crate::ipc::cleanup_cmd_socket();
+    // Only clean up IPC sockets if no external VAD process is running,
+    // otherwise we'd yank the socket out from under it.
+    if !crate::state::is_external_vad_alive(&config.state_dir) {
+        crate::ipc::cleanup_socket();
+        crate::ipc::cleanup_cmd_socket();
+    }
 
     // Drop guard is redundant on clean exit, but handles panics above
+    // (force_reset_to_idle already checks for external VAD)
     drop(_state_guard);
 
     result

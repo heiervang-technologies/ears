@@ -33,10 +33,30 @@ pub enum StateError {
     CorruptedState,
 }
 
+/// Check if an external VAD process is running (by checking vad.pid).
+pub fn is_external_vad_alive(state_dir: &Path) -> bool {
+    let pid_file = state_dir.join("vad.pid");
+    if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            // Check if process exists (signal 0 = no signal, just check)
+            unsafe { libc::kill(pid, 0) == 0 }
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
 /// Best-effort reset of state to idle and waybar notification.
 ///
 /// Used by drop guards to ensure state is cleaned up on panic or early return.
+/// Skips the reset if an external VAD process is still running, to avoid
+/// stomping on its state.
 pub fn force_reset_to_idle(state_dir: &Path) {
+    if is_external_vad_alive(state_dir) {
+        return;
+    }
     let state_file = state_dir.join("state");
     let _ = fs::write(&state_file, "idle");
     let _ = std::process::Command::new("pkill")
