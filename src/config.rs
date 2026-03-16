@@ -3,6 +3,7 @@ use crate::text_filters::TextFilters;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -45,6 +46,15 @@ fn default_cue_volume() -> u8 {
 
 fn default_save_to_clipboard() -> bool {
     false
+}
+
+/// Language-specific ASR server override
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageServer {
+    /// ASR server URL for this language
+    pub server: Url,
+    /// Model name to send with requests (optional)
+    pub model: Option<String>,
 }
 
 /// VAD (Voice Activity Detection) configuration
@@ -116,6 +126,12 @@ pub struct Config {
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
+    /// Language-specific ASR server overrides.
+    /// Maps language codes (e.g. "no", "de") to server + optional model.
+    /// When the detected keyboard language matches a key, that server is used
+    /// instead of the default `server`.
+    #[serde(default)]
+    pub language_servers: HashMap<String, LanguageServer>,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
@@ -166,6 +182,7 @@ impl Config {
             save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
+            language_servers: HashMap::new(),
             vad: VadSettings::default(),
             config_dir,
             active_profile: None,
@@ -277,6 +294,7 @@ impl Config {
             save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
+            language_servers: HashMap::new(),
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             active_profile: None,
@@ -419,6 +437,25 @@ impl Config {
     /// Save text filter settings (saves the full active config file)
     pub fn save_text_filters(&self) -> Result<()> {
         self.save()
+    }
+
+    /// Resolve the ASR server URL and model for a given language.
+    ///
+    /// If `language_servers` contains an entry for the language code, that
+    /// server (and optional model) is returned. Otherwise falls back to the
+    /// default `whisper_server` and `model`.
+    pub fn resolve_server(&self, language: Option<&str>) -> (Url, Option<String>) {
+        if let Some(lang) = language {
+            if let Some(ls) = self.language_servers.get(lang) {
+                tracing::info!(
+                    "Using language-specific server for '{}': {}",
+                    lang,
+                    ls.server
+                );
+                return (ls.server.clone(), ls.model.clone().or_else(|| self.model.clone()));
+            }
+        }
+        (self.whisper_server.clone(), self.model.clone())
     }
 
     /// Validate the configuration
