@@ -4,16 +4,16 @@ expression: output
 ---
 ┌──────────────────────────────────────────────────────────┐
 ┌──────────────────────────────────────────────────────────┐
-┌ Live Transcription ──────────────────────────────────────┐
+┌ Configuration ───────────────────────────────────────────┐
 │                                                          │
-│VAD Mode: ○ Inactive                                      │
+│Profile: default [Shift+P]                                │
 │                                                          │
-│Transcription:                                            │
+│Server URL: http://127.0.0.1:8178/ [e]                    │
 │                                                          │
-│  VAD mode is inactive. Press [Space] or [v] to enable.   │
+│Model: [MODEL]                                    │
 │                                                          │
-│                                                          │
+│Audio Device: default [d]                                 │
 └──────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────┐
-│[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit        │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p]│
 └──────────────────────────────────────────────────────────┘

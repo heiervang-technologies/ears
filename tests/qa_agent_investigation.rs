@@ -13,8 +13,8 @@ fn test_keybinding_conflict_c_key() {
     // This test verifies both behaviors work correctly
     let mut app = App::new();
 
-    // Start on LiveTranscription panel
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    // Start on Configuration panel
+    assert_eq!(app.current_panel, Panel::Configuration);
 
     // Press 'c' alone - should jump to Configuration panel
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
@@ -186,8 +186,8 @@ fn test_scroll_on_non_logs_panel() {
     // What happens when pressing j/k on other panels?
     let mut app = App::new();
 
-    // Start on LiveTranscription panel
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    // Start on Configuration panel
+    assert_eq!(app.current_panel, Panel::Configuration);
 
     // Press j and k - should do nothing
     let key_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -196,17 +196,17 @@ fn test_scroll_on_non_logs_panel() {
     app.handle_key(key_j).unwrap();
     app.handle_key(key_k).unwrap();
 
-    // Still on LiveTranscription panel
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    // Still on Configuration panel
+    assert_eq!(app.current_panel, Panel::Configuration);
 
-    // Switch to Configuration panel
-    app.current_panel = Panel::Configuration;
+    // Switch to LiveTranscription panel
+    app.current_panel = Panel::LiveTranscription;
 
     app.handle_key(key_j).unwrap();
     app.handle_key(key_k).unwrap();
 
-    // Still on Configuration panel
-    assert_eq!(app.current_panel, Panel::Configuration);
+    // Still on LiveTranscription panel
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     println!("✓ Scroll keys correctly do nothing on non-Logs panels");
 }

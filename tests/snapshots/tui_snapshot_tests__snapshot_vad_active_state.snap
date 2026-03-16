@@ -8,21 +8,21 @@ expression: output
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ▸ Configuration │ ▸ Logs │ ▸ Live                                            │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Live Transcription ──────────────────────────────────────────────────────────┐
+┌ Configuration ───────────────────────────────────────────────────────────────┐
 │                                                                              │
-│VAD Mode: ● Active                                                            │
+│Profile: default [Shift+P]                                                    │
 │                                                                              │
-│Transcription:                                                                │
+│Server URL: http://127.0.0.1:8178/ [e]                                        │
 │                                                                              │
-│  Listening...                                                                │
+│Model: [MODEL]                                                        │
 │                                                                              │
-│  (gray = uncommitted)                                                        │
+│Audio Device: default [d]                                                     │
+│                                                                              │
+│Language: auto (Shift+L to cycle)                                             │
 │                                                                              │
 │                                                                              │
-│Settings:                                                                     │
-│  [ ] Progressive Typing [t]                                                  │
-│  [ ] Save to Clipboard [b]                                                   │
+│Text Filters:                                                                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                            │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [│
 └──────────────────────────────────────────────────────────────────────────────┘

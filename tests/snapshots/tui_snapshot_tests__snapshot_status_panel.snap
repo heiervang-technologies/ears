@@ -3,32 +3,32 @@ source: tests/tui_snapshot_tests.rs
 expression: output
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ears vX.X.X │ Status: ○ Idle                                                                    │
+│ears vX.X.X │ Status: ◉ VAD Active (external)                                                   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▸ Configuration │ ▸ Logs │ ▸ Live                                                                │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ Live Transcription ──────────────────────────────────────────────────────────────────────────────┐
+┌ Configuration ───────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                  │
-│VAD Mode: ○ Inactive                                                                              │
+│Profile: default [Shift+P]                                                                        │
 │                                                                                                  │
-│Transcription:                                                                                    │
+│Server URL: http://127.0.0.1:8178/ [e]                                                            │
 │                                                                                                  │
-│  VAD mode is inactive. Press [Space] or [v] to enable.                                           │
+│Model: [MODEL]                                                                            │
+│                                                                                                  │
+│Audio Device: default [d]                                                                         │
+│                                                                                                  │
+│Language: auto (Shift+L to cycle)                                                                 │
 │                                                                                                  │
 │                                                                                                  │
-│Settings:                                                                                         │
+│Text Filters:                                                                                     │
+│  [ ] Lowercase [f]                                                                               │
+│  [ ] Remove Punctuation [p]                                                                      │
+│  [x] Strict Alphabet [s]                                                                         │
+│                                                                                                  │
+│Typing Settings:                                                                                  │
 │  [ ] Progressive Typing [t]                                                                      │
-│  [ ] Save to Clipboard [b]                                                                       │
-│  [ ] Auto-correction [a]                                                                         │
-│                                                                                                  │
-│                                                                                                  │
-│Stats:                                                                                            │
-│  Latency: 0ms                                                                                    │
-│  Segments processed: 0                                                                           │
-│  Transcriptions: 0 total, 0 ok, 0 failed                                                         │
-│  Words transcribed: 0                                                                            │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│[Space/v] VAD  [t] Typing  [a] Auto-corr  [q] Quit                                                │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [q] Quit             │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

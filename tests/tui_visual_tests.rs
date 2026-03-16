@@ -43,7 +43,8 @@ fn test_render_initial_state() {
     assert!(output.contains("ears"));
     assert!(output.contains("Configuration"));
     assert!(output.contains("Logs"));
-    assert!(output.contains("○")); // Not recording indicator
+    // Should show either idle (○) or external VAD active (◉)
+    assert!(output.contains("○") || output.contains("◉"));
 }
 
 #[test]

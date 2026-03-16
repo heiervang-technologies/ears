@@ -11,24 +11,24 @@ fn test_tab_key_works_but_not_documented() {
     // This is a documentation issue - Tab keys work but aren't shown to users
     let mut app = App::new();
 
-    // Start on LiveTranscription
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    // Start on Configuration
+    assert_eq!(app.current_panel, Panel::Configuration);
 
-    // Press Tab - should move to next panel (Configuration)
+    // Press Tab - should move to next panel (Logs)
     let key_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
     app.handle_key(key_tab).unwrap();
     assert_eq!(
         app.current_panel,
-        Panel::Configuration,
+        Panel::Logs,
         "Tab should move to next panel"
     );
 
-    // Press Shift+Tab - should move to previous panel (LiveTranscription)
+    // Press Shift+Tab - should move to previous panel (Configuration)
     let key_shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
     app.handle_key(key_shift_tab).unwrap();
     assert_eq!(
         app.current_panel,
-        Panel::LiveTranscription,
+        Panel::Configuration,
         "Shift+Tab should move to previous panel"
     );
 
@@ -44,8 +44,9 @@ fn test_c_key_shortcut_not_documented() {
     // but this is not documented in the footer
     let mut app = App::new();
 
-    // Start on LiveTranscription
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    // Start on Configuration — navigate away first
+    assert_eq!(app.current_panel, Panel::Configuration);
+    app.current_panel = Panel::LiveTranscription;
 
     // Press 'c' - should jump to Configuration
     let key_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
