@@ -491,7 +491,8 @@ async fn handle_ws_listen(
         ears::WhisperClient::new(server_url.to_string())
             .with_language(language)
             .with_api_key(config.api_key.clone())
-            .with_model(model),
+            .with_model(model)
+            .with_prompt(config.prompt.clone()),
     );
 
     whisper_client
@@ -694,7 +695,8 @@ async fn start_recording(
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language)
         .with_api_key(config.api_key.clone())
-        .with_model(model);
+        .with_model(model)
+        .with_prompt(config.prompt.clone());
     if client.health_check().await.is_err() {
         tracing::error!("Whisper server health check failed");
         AudioFeedback::beep_error().ok();
@@ -826,7 +828,8 @@ async fn stop_and_transcribe(
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
         .with_api_key(config.api_key.clone())
-        .with_model(model);
+        .with_model(model)
+        .with_prompt(config.prompt.clone());
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!(

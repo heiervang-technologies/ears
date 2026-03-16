@@ -63,6 +63,8 @@ pub struct WhisperClient {
     api_key: Option<String>,
     /// Model name for transcription (None = server default)
     model: Option<String>,
+    /// Prompt for context biasing (None = no prompt)
+    prompt: Option<String>,
     /// Maximum number of retry attempts
     #[allow(dead_code)]
     max_retries: u32,
@@ -95,6 +97,7 @@ impl WhisperClient {
             language: None,
             api_key: None,
             model: None,
+            prompt: None,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
@@ -128,6 +131,16 @@ impl WhisperClient {
         self
     }
 
+    /// Sets the prompt for context biasing
+    ///
+    /// When set, includes a `prompt` field in the multipart form.
+    /// Use this to pass entity names, acronyms, or domain-specific terms
+    /// that should be recognized correctly (e.g., "vLLM, PyTorch, Safetensors").
+    pub fn with_prompt(mut self, prompt: Option<String>) -> Self {
+        self.prompt = prompt;
+        self
+    }
+
     /// Creates a new WhisperClient with custom retry settings
     ///
     /// # Arguments
@@ -151,6 +164,7 @@ impl WhisperClient {
             language: None,
             api_key: None,
             model: None,
+            prompt: None,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -331,6 +345,12 @@ impl WhisperClient {
         if let Some(ref model) = self.model {
             debug!("Using model: {}", model);
             form = form.text("model", model.clone());
+        }
+
+        // Add prompt for context biasing (entity names, acronyms, etc.)
+        if let Some(ref prompt) = self.prompt {
+            debug!("Using prompt: {}", prompt);
+            form = form.text("prompt", prompt.clone());
         }
 
         // Send request
