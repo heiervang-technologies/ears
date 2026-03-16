@@ -18,7 +18,6 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
@@ -54,16 +53,7 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -
     Ok(())
 }
 
-/// Guard that resets state to Idle on drop (handles panics and early returns)
-struct StateCleanupGuard {
-    state_dir: PathBuf,
-}
-
-impl Drop for StateCleanupGuard {
-    fn drop(&mut self) {
-        crate::state::force_reset_to_idle(&self.state_dir);
-    }
-}
+// Use shared StateResetGuard from crate::state
 
 /// Typing settings sent from the TUI to the engine via watch channel.
 #[derive(Debug, Clone, PartialEq)]
@@ -202,9 +192,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     let mut state_mgr = StateManager::new(&config.state_dir)?;
 
     // Drop guard ensures state resets to idle even on panic/crash
-    let _state_guard = StateCleanupGuard {
-        state_dir: config.state_dir.clone(),
-    };
+    let _state_guard = crate::state::StateResetGuard::new(&config.state_dir);
 
     // Streaming event channel
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamingEvent>();

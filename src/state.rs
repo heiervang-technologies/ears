@@ -64,6 +64,28 @@ pub fn force_reset_to_idle(state_dir: &Path) {
         .spawn();
 }
 
+/// Guard that resets state to Idle on drop.
+///
+/// Prevents getting stuck in a non-idle state after panics or early returns.
+/// Respects external VAD processes (skips reset if one is alive).
+pub struct StateResetGuard {
+    state_dir: PathBuf,
+}
+
+impl StateResetGuard {
+    pub fn new(state_dir: &Path) -> Self {
+        Self {
+            state_dir: state_dir.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for StateResetGuard {
+    fn drop(&mut self) {
+        force_reset_to_idle(&self.state_dir);
+    }
+}
+
 /// Manages state transitions and persistence
 pub struct StateManager {
     current_state: State,
