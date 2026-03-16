@@ -3,6 +3,7 @@ use crate::text_filters::TextFilters;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -45,6 +46,15 @@ fn default_cue_volume() -> u8 {
 
 fn default_save_to_clipboard() -> bool {
     false
+}
+
+/// Language-specific ASR server override
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageServer {
+    /// ASR server URL for this language
+    pub server: Url,
+    /// Model name to send with requests (optional)
+    pub model: Option<String>,
 }
 
 /// VAD (Voice Activity Detection) configuration
@@ -116,6 +126,12 @@ pub struct Config {
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
+    /// Language-specific ASR server overrides.
+    /// Maps language codes (e.g. "no", "de") to server + optional model.
+    /// When the detected keyboard language matches a key, that server is used
+    /// instead of the default `server`.
+    #[serde(default)]
+    pub language_servers: HashMap<String, LanguageServer>,
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
@@ -166,6 +182,7 @@ impl Config {
             save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
+            language_servers: HashMap::new(),
             vad: VadSettings::default(),
             config_dir,
             active_profile: None,
@@ -277,6 +294,7 @@ impl Config {
             save_to_clipboard: false,
             auto_correction: None,
             cue_volume: default_cue_volume(),
+            language_servers: HashMap::new(),
             vad: VadSettings::default(),
             config_dir: PathBuf::new(),
             active_profile: None,
@@ -419,6 +437,28 @@ impl Config {
     /// Save text filter settings (saves the full active config file)
     pub fn save_text_filters(&self) -> Result<()> {
         self.save()
+    }
+
+    /// Resolve the ASR server URL and model for a given language.
+    ///
+    /// If `language_servers` contains an entry for the language code, that
+    /// server (and optional model) is returned. Otherwise falls back to the
+    /// default `whisper_server` and `model`.
+    pub fn resolve_server(&self, language: Option<&str>) -> (Url, Option<String>) {
+        if let Some(lang) = language {
+            if let Some(ls) = self.language_servers.get(lang) {
+                tracing::debug!(
+                    "Using language-specific server for '{}': {}",
+                    lang,
+                    ls.server
+                );
+                return (
+                    ls.server.clone(),
+                    ls.model.clone().or_else(|| self.model.clone()),
+                );
+            }
+        }
+        (self.whisper_server.clone(), self.model.clone())
     }
 
     /// Validate the configuration
@@ -658,5 +698,54 @@ another_unknown = 42
         let dir = PathBuf::from("/tmp/test-ears-config");
         let path = Config::config_file_path(&dir, None);
         assert_eq!(path, dir.join("config.toml"));
+    }
+
+    #[test]
+    fn test_resolve_server_with_language_match() {
+        let mut config = Config::new().unwrap();
+        let no_url = Url::parse("http://192.168.8.170:30190/").unwrap();
+        config.language_servers.insert(
+            "no".to_string(),
+            LanguageServer {
+                server: no_url.clone(),
+                model: Some("nb-asr-model".to_string()),
+            },
+        );
+
+        let (server, model) = config.resolve_server(Some("no"));
+        assert_eq!(server, no_url);
+        assert_eq!(model, Some("nb-asr-model".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_server_fallback() {
+        let config = Config::new().unwrap();
+
+        // Unknown language falls back to default server
+        let (server, model) = config.resolve_server(Some("de"));
+        assert_eq!(server, config.whisper_server);
+        assert_eq!(model, config.model);
+
+        // No language falls back to default server
+        let (server, model) = config.resolve_server(None);
+        assert_eq!(server, config.whisper_server);
+        assert_eq!(model, config.model);
+    }
+
+    #[test]
+    fn test_resolve_server_inherits_default_model() {
+        let mut config = Config::new().unwrap();
+        config.model = Some("default-model".to_string());
+        config.language_servers.insert(
+            "no".to_string(),
+            LanguageServer {
+                server: Url::parse("http://localhost:9999/").unwrap(),
+                model: None, // No model override
+            },
+        );
+
+        let (_server, model) = config.resolve_server(Some("no"));
+        // Should inherit the default model when language server has no model
+        assert_eq!(model, Some("default-model".to_string()));
     }
 }

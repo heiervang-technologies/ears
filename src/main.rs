@@ -491,19 +491,20 @@ async fn handle_ws_listen(
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
         std::env::var("XDG_RUNTIME_DIR")
-            .map(|d| std::path::PathBuf::from(d).join("fay-ears.sock"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/fay-ears.sock"))
+            .map(|d| std::path::PathBuf::from(d).join("ears-ws.sock"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/ears-ws.sock"))
     });
 
     // Do NOT kill existing VAD — ws-listen runs alongside the desktop ears instance
 
     // Build the VAD pipeline components manually (like start_vad_pipeline but without pw-record)
     let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    let (server_url, model) = config.resolve_server(language.as_deref());
     let whisper_client = std::sync::Arc::new(
-        ears::WhisperClient::new(config.whisper_server.to_string())
+        ears::WhisperClient::new(server_url.to_string())
             .with_language(language)
             .with_api_key(config.api_key.clone())
-            .with_model(config.model.clone()),
+            .with_model(model),
     );
 
     whisper_client
@@ -701,9 +702,11 @@ async fn start_recording(
     tracing::info!("Starting recording");
 
     let health_start = std::time::Instant::now();
-    let client = WhisperClient::new(config.whisper_server.clone())
+    let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    let (server_url, model) = config.resolve_server(language.as_deref());
+    let client = WhisperClient::new(server_url.to_string())
         .with_api_key(config.api_key.clone())
-        .with_model(config.model.clone());
+        .with_model(model);
     if client.health_check().await.is_err() {
         tracing::error!("Whisper server health check failed");
         AudioFeedback::beep_error().ok();
@@ -833,10 +836,11 @@ async fn stop_and_transcribe(
     }
 
     let transcribe_start = std::time::Instant::now();
-    let client = WhisperClient::new(config.whisper_server.clone())
+    let (server_url, model) = config.resolve_server(language.as_deref());
+    let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
         .with_api_key(config.api_key.clone())
-        .with_model(config.model.clone());
+        .with_model(model);
     match client.transcribe(&audio_file).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!(

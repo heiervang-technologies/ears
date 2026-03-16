@@ -116,7 +116,7 @@ A `spawn_blocking` reader thread reads 1600-sample chunks (100ms at 16kHz) from 
 
 ### WebSocket Input
 
-`ws-listen` mode (`src/ws_input.rs`) accepts WebSocket connections instead of using `pw-record`. Clients send a `{"type": "start", ...}` text frame followed by binary frames of raw s16le PCM audio. The audio is converted to `f32` and fed into the same streaming engine pipeline. Events are echoed back to the WebSocket client as JSON text frames. This mode uses a separate IPC socket (default `$XDG_RUNTIME_DIR/fay-ears.sock`) to avoid conflicting with the desktop instance.
+`ws-listen` mode (`src/ws_input.rs`) accepts WebSocket connections instead of using `pw-record`. Clients send a `{"type": "start", ...}` text frame followed by binary frames of raw s16le PCM audio. The audio is converted to `f32` and fed into the same streaming engine pipeline. Events are echoed back to the WebSocket client as JSON text frames. This mode uses a separate IPC socket (default `$XDG_RUNTIME_DIR/ears-ws.sock`) to avoid conflicting with the desktop instance. Clients can override the socket path with `--socket`.
 
 ## 4. VAD Pipeline
 
@@ -250,7 +250,7 @@ The `ears auto-enter` CLI command uses `ipc::send_command("toggle-auto-enter")` 
 
 ### WebSocket IPC
 
-When running in `ws-listen` mode, events are also echoed back to connected WebSocket clients as JSON text frames. The WS server uses a separate IPC socket path (default `$XDG_RUNTIME_DIR/fay-ears.sock`) to avoid conflicts with the desktop instance.
+When running in `ws-listen` mode, events are also echoed back to connected WebSocket clients as JSON text frames. The WS server uses a separate IPC socket path (default `$XDG_RUNTIME_DIR/ears-ws.sock`) to avoid conflicts with the desktop instance. Integrations can specify a custom socket path via the `--socket` flag.
 
 ## 7. TUI Architecture
 
