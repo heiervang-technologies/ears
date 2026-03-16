@@ -3,25 +3,25 @@ source: tests/tui_snapshot_tests.rs
 expression: output
 ---
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ears vX.X.X │ Status: ○ Idle                                                │
+│ears vX.X.X │ Status: ◉ VAD Active (external)                               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ▸ Configuration │ ▸ Logs │ ▸ Live                                            │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Live Transcription ──────────────────────────────────────────────────────────┐
+┌ Configuration ───────────────────────────────────────────────────────────────┐
 │                                                                              │
-│VAD Mode: ○ Inactive                                                          │
+│Profile: default [Shift+P]                                                    │
 │                                                                              │
-│Transcription:                                                                │
+│Server URL: http://127.0.0.1:8178/ [e]                                        │
 │                                                                              │
-│  VAD mode is inactive. Press [Space] or [v] to enable.                       │
+│Model: [MODEL]                                                        │
+│                                                                              │
+│Audio Device: default [d]                                                     │
+│                                                                              │
+│Language: auto (Shift+L to cycle)                                             │
 │                                                                              │
 │                                                                              │
-│Settings:                                                                     │
-│  [ ] Progressive Typing [t]                                                  │
-│  [ ] Save to Clipboard [b]                                                   │
-│  [ ] Auto-correction [a]                                                     │
-│                                                                              │
+│Text Filters:                                                                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │:quit_                                                                        │

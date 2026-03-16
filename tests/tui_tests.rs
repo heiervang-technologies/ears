@@ -6,7 +6,7 @@ use ears::tui::{App, Panel};
 #[test]
 fn test_app_initialization() {
     let app = App::new();
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    assert_eq!(app.current_panel, Panel::Configuration);
     assert!(!app.command_mode);
 }
 
@@ -14,73 +14,73 @@ fn test_app_initialization() {
 fn test_panel_navigation_next() {
     let mut app = App::new();
 
-    // Start at LiveTranscription
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
-
-    // Press 'l' to go to next panel (Configuration)
-    let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
-    let result = app.handle_key(key);
-    assert!(result.is_ok());
-    assert!(result.unwrap());
+    // Start at Configuration
     assert_eq!(app.current_panel, Panel::Configuration);
 
-    // Press 'l' again to go to Logs
+    // Press 'l' to go to next panel (Logs)
+    let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Logs);
 
-    // Press 'l' again to wrap back to LiveTranscription
+    // Press 'l' again to go to LiveTranscription
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::LiveTranscription);
+
+    // Press 'l' again to wrap back to Configuration
+    let result = app.handle_key(key);
+    assert!(result.is_ok());
+    assert!(result.unwrap());
+    assert_eq!(app.current_panel, Panel::Configuration);
 }
 
 #[test]
 fn test_panel_navigation_prev() {
     let mut app = App::new();
 
-    // Start at LiveTranscription
+    // Start at Configuration
+    assert_eq!(app.current_panel, Panel::Configuration);
+
+    // Press 'h' to go to previous panel (LiveTranscription - wraps around)
+    let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+    let result = app.handle_key(key);
+    assert!(result.is_ok());
+    assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::LiveTranscription);
 
-    // Press 'h' to go to previous panel (Logs - wraps around)
-    let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+    // Press 'h' again to go to Logs
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Logs);
 
-    // Press 'h' again to go to Configuration
+    // Press 'h' again to wrap back to Configuration
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
     assert_eq!(app.current_panel, Panel::Configuration);
-
-    // Press 'h' again to wrap back to LiveTranscription
-    let result = app.handle_key(key);
-    assert!(result.is_ok());
-    assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
 }
 
 #[test]
 fn test_tab_navigation() {
     let mut app = App::new();
 
-    // Press Tab to go to next panel
+    // Press Tab to go to next panel (Logs)
     let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::Configuration);
+    assert_eq!(app.current_panel, Panel::Logs);
 
-    // Press Shift+Tab to go back
+    // Press Shift+Tab to go back (Configuration)
     let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
     let result = app.handle_key(key);
     assert!(result.is_ok());
     assert!(result.unwrap());
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    assert_eq!(app.current_panel, Panel::Configuration);
 }
 
 #[test]

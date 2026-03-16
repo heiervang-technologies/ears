@@ -38,22 +38,21 @@ fn test_interactive_session_scripted() {
     println!("\n=== INITIAL STATE ===");
     let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
-    assert!(output.contains("○ Idle"));
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
-
-    println!("\n=== PRESS 'l' to go to Configuration panel ===");
-    app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
-        .unwrap();
-    let output = render_to_string(&mut app, 80, 24);
-    println!("{}", output);
     assert_eq!(app.current_panel, Panel::Configuration);
 
-    println!("\n=== PRESS 'l' again to go to Logs panel ===");
+    println!("\n=== PRESS 'l' to go to Logs panel ===");
     app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
         .unwrap();
     let output = render_to_string(&mut app, 80, 24);
     println!("{}", output);
     assert_eq!(app.current_panel, Panel::Logs);
+
+    println!("\n=== PRESS 'l' again to go to LiveTranscription panel ===");
+    app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
+        .unwrap();
+    let output = render_to_string(&mut app, 80, 24);
+    println!("{}", output);
+    assert_eq!(app.current_panel, Panel::LiveTranscription);
 
     println!("\n=== PRESS Space to enable VAD ===");
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
@@ -103,8 +102,8 @@ fn test_cannot_freely_interact() {
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE))
         .unwrap();
 
-    // - Check the resulting state
-    assert_eq!(app.current_panel, Panel::Configuration);
+    // - Check the resulting state (started on Configuration, pressed 'l' -> Logs)
+    assert_eq!(app.current_panel, Panel::Logs);
 
     // - Verify visual output
     let output = render_to_string(&mut app, 80, 24);
@@ -121,24 +120,20 @@ fn test_complex_interaction_flow() {
     let mut app = App::new();
 
     // User opens app
-    println!("1. App opens on LiveTranscription panel");
-    let output = render_to_string(&mut app, 80, 24);
-    println!("{}\n", output);
-
-    // Navigate to Config
-    println!("2. User presses Tab to go to Config");
-    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-        .unwrap();
+    println!("1. App opens on Configuration panel");
     let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
 
     // Navigate to Logs
-    println!("3. User presses Tab again to go to Logs");
+    println!("2. User presses Tab to go to Logs");
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
         .unwrap();
+    let output = render_to_string(&mut app, 80, 24);
+    println!("{}\n", output);
+    assert_eq!(app.current_panel, Panel::Logs);
 
     // Add some log entries (simulating app activity)
-    println!("4. App generates some logs");
+    println!("3. App generates some logs");
     app.logs.push("Started recording".to_string());
     app.logs.push("Transcribed: Hello world".to_string());
     app.logs.push("Stopped recording".to_string());
@@ -148,21 +143,19 @@ fn test_complex_interaction_flow() {
     assert!(output.contains("Hello world"));
 
     // Scroll through logs
-    println!("5. User presses 'j' to scroll down in logs");
+    println!("4. User presses 'j' to scroll down in logs");
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
         .unwrap();
     assert_eq!(app.selected_log, 1);
 
-    // Navigate back to LiveTranscription (Logs -> Configuration -> LiveTranscription)
-    println!("6. User presses 'h' twice to go back to LiveTranscription");
-    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
-        .unwrap();
+    // Navigate to Configuration (Logs -> Configuration)
+    println!("5. User presses 'h' to go to Configuration");
     app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
         .unwrap();
 
     let output = render_to_string(&mut app, 80, 24);
     println!("{}\n", output);
-    assert_eq!(app.current_panel, Panel::LiveTranscription);
+    assert_eq!(app.current_panel, Panel::Configuration);
 
     println!("=== SESSION COMPLETE ===");
     println!("\nThis demonstrates SCRIPTED interaction, not FREE interaction.");

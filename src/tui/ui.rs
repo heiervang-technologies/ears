@@ -58,6 +58,8 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             theme.success
         };
         (ch, color, "VAD Active".to_string())
+    } else if app.external_vad_active {
+        ('◉', theme.success, "VAD Active (external)".to_string())
     } else {
         ('○', Color::Gray, "Idle".to_string())
     };
@@ -725,13 +727,23 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
 fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     // VAD status indicator
-    let vad_status_char = if app.vad_active { '●' } else { '○' };
-    let vad_status_color = if app.vad_active {
+    let vad_status_char = if app.vad_active || app.external_vad_active {
+        '●'
+    } else {
+        '○'
+    };
+    let vad_status_color = if app.vad_active || app.external_vad_active {
         theme.success
     } else {
         Color::Gray
     };
-    let vad_status_text = if app.vad_active { "Active" } else { "Inactive" };
+    let vad_status_text = if app.vad_active {
+        "Active"
+    } else if app.external_vad_active {
+        "Active (external)"
+    } else {
+        "Inactive"
+    };
 
     let mut text = vec![
         Line::from(""),
@@ -794,6 +806,11 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
             Span::styled("gray", Style::default().fg(theme.dim)),
             Span::styled(" = uncommitted)", Style::default().fg(theme.dim)),
         ]));
+    } else if app.external_vad_active {
+        text.push(Line::from(vec![Span::styled(
+            "  VAD is running externally (ears vad).",
+            Style::default().fg(theme.success),
+        )]));
     } else {
         text.push(Line::from(vec![Span::styled(
             "  VAD mode is inactive. Press [Space] or [v] to enable.",

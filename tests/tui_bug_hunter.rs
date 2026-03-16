@@ -166,16 +166,15 @@ fn bug_hunt_recording_indicator_consistency() {
     let states = explore_and_collect_states(200);
     let mut bugs = Vec::new();
 
-    for (state, _app, output) in &states {
+    for (state, app, output) in &states {
         let has_idle_symbol = output.contains("○");
         let has_vad_symbol = output.contains("◉");
 
-        if state.vad_active {
-            // VAD active: should show ◉ (listening) or ● (speaking)
+        if state.vad_active || app.external_vad_active {
+            // VAD active (internal or external): should show ◉ (listening) or ● (speaking)
             if !has_vad_symbol && !output.contains("●") {
                 bugs.push(Bug {
-                    description: "State says vad_active=true but no ◉ or ● symbol shown"
-                        .to_string(),
+                    description: "State says vad active but no ◉ or ● symbol shown".to_string(),
                     state: state.clone(),
                     visual_sample: output.lines().take(3).collect::<Vec<_>>().join("\n"),
                 });

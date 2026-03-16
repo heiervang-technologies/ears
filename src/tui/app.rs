@@ -170,8 +170,10 @@ pub struct App {
     pub logs: Vec<String>,
     /// Selected log index (for scrolling)
     pub selected_log: usize,
-    /// VAD mode active
+    /// VAD mode active (managed by this TUI instance)
     pub vad_active: bool,
+    /// External VAD process is running (display only, not managed by TUI)
+    pub external_vad_active: bool,
     /// Whether VAD is currently detecting speech
     pub is_speaking: bool,
     /// Committed (stable) transcription text
@@ -277,7 +279,7 @@ impl App {
             .unwrap_or_else(|| "(connecting...)".to_string());
 
         Self {
-            current_panel: Panel::LiveTranscription,
+            current_panel: Panel::Configuration,
             command_mode: false,
             command_buffer: String::new(),
             editing_field: None,
@@ -294,6 +296,7 @@ impl App {
             ],
             selected_log: 0,
             vad_active: false,
+            external_vad_active: crate::state::is_external_vad_alive(&config.state_dir),
             is_speaking: false,
             committed_text: String::new(),
             uncommitted_text: String::new(),
@@ -1359,9 +1362,6 @@ mod tests {
     #[test]
     fn test_panel_navigation_tab() {
         let mut app = App::new();
-        assert_eq!(app.current_panel, Panel::LiveTranscription);
-
-        app.handle_key(key(KeyCode::Tab)).unwrap();
         assert_eq!(app.current_panel, Panel::Configuration);
 
         app.handle_key(key(KeyCode::Tab)).unwrap();
@@ -1369,20 +1369,23 @@ mod tests {
 
         app.handle_key(key(KeyCode::Tab)).unwrap();
         assert_eq!(app.current_panel, Panel::LiveTranscription);
+
+        app.handle_key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(app.current_panel, Panel::Configuration);
     }
 
     #[test]
     fn test_panel_navigation_hl() {
         let mut app = App::new();
         app.handle_key(key(KeyCode::Char('h'))).unwrap();
-        assert_eq!(app.current_panel, Panel::Logs);
+        assert_eq!(app.current_panel, Panel::LiveTranscription);
 
         app.handle_key(key(KeyCode::Char('h'))).unwrap();
-        assert_eq!(app.current_panel, Panel::Configuration);
+        assert_eq!(app.current_panel, Panel::Logs);
 
         // Wrap backwards
         app.handle_key(key(KeyCode::Char('h'))).unwrap();
-        assert_eq!(app.current_panel, Panel::LiveTranscription);
+        assert_eq!(app.current_panel, Panel::Configuration);
     }
 
     // --- Help overlay ---
