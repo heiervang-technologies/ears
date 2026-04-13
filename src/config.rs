@@ -105,6 +105,10 @@ pub struct Config {
     pub api_key: Option<String>,
     /// Model name for transcription (None = server default)
     pub model: Option<String>,
+    /// Prompt for context biasing (entity names, acronyms, domain terms)
+    /// Passed as the `prompt` field in the OpenAI transcription API.
+    /// Example: "Soumith Chintala, Safetensors, vLLM, PyTorch"
+    pub prompt: Option<String>,
     /// Text filters for transcription output
     #[serde(default)]
     pub text_filters: TextFilters,
@@ -175,6 +179,7 @@ impl Config {
             language: None,
             api_key: None,
             model: None,
+            prompt: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
@@ -276,6 +281,14 @@ impl Config {
             let model = model.trim().to_string();
             self.model = if model.is_empty() { None } else { Some(model) };
         }
+        if let Ok(prompt) = std::env::var("EARS_PROMPT") {
+            let prompt = prompt.trim().to_string();
+            self.prompt = if prompt.is_empty() {
+                None
+            } else {
+                Some(prompt)
+            };
+        }
         Ok(())
     }
 
@@ -287,6 +300,7 @@ impl Config {
             language: None,
             api_key: None,
             model: None,
+            prompt: None,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,

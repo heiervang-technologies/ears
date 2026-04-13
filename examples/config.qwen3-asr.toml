@@ -4,3 +4,7 @@
 server = "http://192.168.8.123:30189"
 model = "Qwen/Qwen3-ASR-1.7B"
 language = "en"
+
+# Context biasing: comma-separated entity names, acronyms, or domain terms.
+# Helps the model correctly spell proper nouns it would otherwise approximate.
+# prompt = "vLLM, Safetensors, Soumith Chintala, PyTorch, Anthropic"

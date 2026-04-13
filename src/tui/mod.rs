@@ -97,7 +97,8 @@ pub async fn start_vad_pipeline(
         WhisperClient::new(server_url.to_string())
             .with_language(language)
             .with_api_key(config.api_key.clone())
-            .with_model(model),
+            .with_model(model)
+            .with_prompt(config.prompt.clone()),
     );
 
     // Health check
