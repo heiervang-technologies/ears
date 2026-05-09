@@ -3,6 +3,7 @@
 use super::theme::{Theme, ThemeName};
 use crate::config::Config;
 use crate::desktop::TypingMode;
+use crate::ducker::VolumeDucker;
 use crate::streaming_engine::StreamingEvent;
 use crate::text_filters::TextFilters;
 use anyhow::Result;
@@ -31,6 +32,10 @@ pub enum ClickAction {
     ToggleSaveToClipboard,
     /// Toggle VAD mode
     ToggleVadMode,
+    /// Toggle volume ducking
+    ToggleDuck,
+    /// Set duck percent (0-100) — used by slider clicks
+    SetDuckPercent(u8),
     /// Select a log entry
     SelectLog(usize),
     /// Cycle typing mode
@@ -188,6 +193,12 @@ pub struct App {
     pub auto_enter: bool,
     /// Save transcribed text to clipboard
     pub save_to_clipboard: bool,
+    /// Volume ducking enabled (lowers system volume during speech)
+    pub duck_enabled: bool,
+    /// Volume ducking percent (0-100; 50 = halve current volume)
+    pub duck_percent: u8,
+    /// Volume ducker — drives wpctl in response to VAD events
+    pub ducker: VolumeDucker,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -268,6 +279,9 @@ impl App {
         let auto_correction = config.effective_auto_correction();
         let cue_volume = config.cue_volume;
         let active_profile = config.active_profile.clone();
+        let duck_enabled = config.vad.duck_enabled;
+        let duck_percent = config.vad.duck_percent;
+        let ducker = VolumeDucker::new(duck_enabled, duck_percent);
 
         // Set global audio volume from config
         crate::desktop::AudioFeedback::set_volume(cue_volume);
@@ -304,6 +318,9 @@ impl App {
             auto_correction,
             auto_enter,
             save_to_clipboard: config.save_to_clipboard,
+            duck_enabled,
+            duck_percent,
+            ducker,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -592,6 +609,23 @@ impl App {
                 }
             }
 
+            // Shift+D to toggle volume ducking (works from any panel)
+            (KeyCode::Char('D'), KeyModifiers::SHIFT) => {
+                self.toggle_duck();
+            }
+
+            // '[' / ']' to nudge duck percent (in Configuration panel)
+            (KeyCode::Char('['), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.adjust_duck_percent(-5);
+                }
+            }
+            (KeyCode::Char(']'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.adjust_duck_percent(5);
+                }
+            }
+
             // 'N' to jump to previous search match
             (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
                 if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
@@ -653,6 +687,12 @@ impl App {
                         }
                         ClickAction::ToggleVadMode => {
                             self.toggle_vad_mode();
+                        }
+                        ClickAction::ToggleDuck => {
+                            self.toggle_duck();
+                        }
+                        ClickAction::SetDuckPercent(p) => {
+                            self.set_duck_percent(p);
                         }
                         ClickAction::CycleTypingMode => {
                             self.cycle_typing_mode();
@@ -1019,6 +1059,10 @@ impl App {
         self.save_to_clipboard = config.save_to_clipboard;
         self.auto_correction = config.effective_auto_correction();
         self.auto_enter = config.auto_enter;
+        self.duck_enabled = config.vad.duck_enabled;
+        self.duck_percent = config.vad.duck_percent;
+        self.ducker
+            .set_settings(self.duck_enabled, self.duck_percent);
         self.profile = profile_name;
 
         self.add_log(&format!("Profile switched to: {}", display));
@@ -1037,6 +1081,8 @@ impl App {
         } else {
             self.add_log("VAD mode disabled");
             self.is_speaking = false;
+            // Restore audio volume if we were ducking mid-speech.
+            self.ducker.on_speech_ended();
         }
     }
 
@@ -1081,6 +1127,43 @@ impl App {
         self.typing_mode = self.typing_mode.next();
         self.add_log(&format!("Typing mode: {}", self.typing_mode.display_name()));
         self.save_config();
+    }
+
+    /// Toggle volume ducking
+    pub fn toggle_duck(&mut self) {
+        self.duck_enabled = !self.duck_enabled;
+        self.ducker
+            .set_settings(self.duck_enabled, self.duck_percent);
+        // If turning off mid-speech, restore immediately.
+        if !self.duck_enabled {
+            self.ducker.on_speech_ended();
+        }
+        let status = if self.duck_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.add_log(&format!("Volume ducking {}", status));
+        self.save_config();
+    }
+
+    /// Set duck percent directly (clamped 0-100). Used by slider clicks.
+    pub fn set_duck_percent(&mut self, percent: u8) {
+        let clamped = percent.min(100);
+        if clamped == self.duck_percent {
+            return;
+        }
+        self.duck_percent = clamped;
+        self.ducker
+            .set_settings(self.duck_enabled, self.duck_percent);
+        self.add_log(&format!("Duck percent: {}%", self.duck_percent));
+        self.save_config();
+    }
+
+    /// Adjust duck percent by delta (clamped 0-100). Used by [/] keys.
+    pub fn adjust_duck_percent(&mut self, delta: i16) {
+        let new_pct = (self.duck_percent as i16 + delta).clamp(0, 100) as u8;
+        self.set_duck_percent(new_pct);
     }
 
     /// Adjust cue volume by delta (clamped to 0-100)
@@ -1158,6 +1241,8 @@ impl App {
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
         config.save_to_clipboard = self.save_to_clipboard;
+        config.vad.duck_enabled = self.duck_enabled;
+        config.vad.duck_percent = self.duck_percent;
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
@@ -1286,6 +1371,7 @@ impl App {
         match event {
             StreamingEvent::SpeechProbable => {
                 crate::desktop::AudioFeedback::beep_vad_speech_start().ok();
+                self.ducker.on_speech_probable();
             }
             StreamingEvent::SpeechStarted => {
                 self.is_speaking = true;
@@ -1294,6 +1380,7 @@ impl App {
             StreamingEvent::SpeechEnded => {
                 self.is_speaking = false;
                 crate::desktop::AudioFeedback::beep_vad_end().ok();
+                self.ducker.on_speech_ended();
             }
             StreamingEvent::TranscriptUpdate {
                 committed,

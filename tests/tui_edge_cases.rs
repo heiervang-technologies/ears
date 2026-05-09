@@ -52,7 +52,7 @@ fn edge_case_very_wide_terminal() {
     let output = render_to_string(&mut app, 300, 50);
 
     assert!(!output.is_empty());
-    assert!(output.contains("ears"));
+    assert!(output.contains("EARS"));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn edge_case_very_tall_terminal() {
     let output = render_to_string(&mut app, 80, 100);
 
     assert!(!output.is_empty());
-    assert!(output.contains("ears"));
+    assert!(output.contains("EARS"));
 }
 
 #[test]

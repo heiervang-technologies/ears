@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-09
+
+First public release. Ears is now considered stable and ready for general use.
+
+### Added
+- Volume ducking — optionally lowers system volume while VAD detects speech, restoring on speech end. Toggle and percentage adjustable in TUI config panel.
+- TUI header refresh — bolder branding, right-aligned status indicator, version display
+- README — sharper opening hook, updated feature list, accurate project structure
+
+### Changed
+- Release workflow now reads version from `Cargo.toml` instead of auto-bumping from commit count. Releases happen on intentional version bumps.
+- Versioning reset to `1.0.0` to mark the first stable public release.
+
 ### Fixed
 - Streaming: fixed UTF-8 panic in LocalAgreementPolicy when history window slides and committed text is not a prefix of new stable prefix (byte-based slicing replaced with char-based)
 - Progressive typing: backspace now sends proper BackSpace key events (batched wtype or ydotool) instead of \x08 control characters, respecting configured typing mode
