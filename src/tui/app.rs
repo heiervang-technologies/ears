@@ -1180,8 +1180,29 @@ impl App {
 
     /// Save current settings to the active config file
     fn save_config(&self) {
-        // Reconstruct Config from App fields and save as TOML.
-        let mut config = Config::load_profile(self.profile.as_deref()).unwrap_or_default();
+        // Never persist during unit tests: the TUI tests construct a real `App`
+        // (which reads the user's actual ~/.config/ears) and exercise toggle
+        // keys, which would otherwise overwrite the developer's real config.
+        if cfg!(test) {
+            return;
+        }
+        // Load the existing config first so fields the TUI doesn't manage
+        // (model, prompt, language_servers, vad, ...) are preserved on save.
+        //
+        // CRITICAL: do NOT fall back to a default config if the load fails.
+        // Writing defaults here would clobber the user's real settings (server,
+        // model, device) — e.g. if `apply_env_overrides` transiently errors on a
+        // bad EARS_* env var. On load failure, skip the save entirely.
+        let mut config = match Config::load_profile(self.profile.as_deref()) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(
+                    "Skipping config save (could not load existing config): {}",
+                    e
+                );
+                return;
+            }
+        };
         if let Ok(url) = Url::parse(&self.server) {
             config.whisper_server = url;
         }
