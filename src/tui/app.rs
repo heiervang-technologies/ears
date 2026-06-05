@@ -188,6 +188,10 @@ pub struct App {
     pub auto_enter: bool,
     /// Save transcribed text to clipboard
     pub save_to_clipboard: bool,
+    /// Bash mode: constrain ASR output to a shell grammar (constrained decoding)
+    pub bash_mode: bool,
+    /// Custom guided grammar override (None = use built-in bash grammar)
+    guided_grammar: Option<String>,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -267,6 +271,8 @@ impl App {
         let progressive_typing = config.progressive_typing;
         let auto_correction = config.effective_auto_correction();
         let cue_volume = config.cue_volume;
+        let bash_mode = config.bash_mode;
+        let guided_grammar = config.guided_grammar.clone();
         let active_profile = config.active_profile.clone();
 
         // Set global audio volume from config
@@ -304,6 +310,8 @@ impl App {
             auto_correction,
             auto_enter,
             save_to_clipboard: config.save_to_clipboard,
+            bash_mode,
+            guided_grammar,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -513,6 +521,13 @@ impl App {
                 }
             }
 
+            // 'g' to toggle bash mode (constrained decoding) in Configuration panel
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_bash_mode();
+                }
+            }
+
             // '+' / '=' to increase cue volume, '-' to decrease (in Configuration panel)
             (KeyCode::Char('+') | KeyCode::Char('='), _) => {
                 if self.current_panel == Panel::Configuration {
@@ -593,15 +608,15 @@ impl App {
             }
 
             // 'N' to jump to previous search match
-            (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
-                    self.search_match_index = if self.search_match_index == 0 {
-                        self.search_matches.len() - 1
-                    } else {
-                        self.search_match_index - 1
-                    };
-                    self.selected_log = self.search_matches[self.search_match_index];
-                }
+            (KeyCode::Char('N'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() =>
+            {
+                self.search_match_index = if self.search_match_index == 0 {
+                    self.search_matches.len() - 1
+                } else {
+                    self.search_match_index - 1
+                };
+                self.selected_log = self.search_matches[self.search_match_index];
             }
 
             _ => {}
@@ -1130,6 +1145,27 @@ impl App {
         self.save_config();
     }
 
+    /// Resolve the active guided grammar (bash mode). Mirrors
+    /// [`crate::config::Config::active_grammar`].
+    pub fn active_grammar(&self) -> Option<String> {
+        if !self.bash_mode {
+            return None;
+        }
+        Some(
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| crate::config::Config::BASH_GRAMMAR.to_string()),
+        )
+    }
+
+    /// Toggle bash mode (constrained decoding to shell grammar)
+    pub fn toggle_bash_mode(&mut self) {
+        self.bash_mode = !self.bash_mode;
+        let status = if self.bash_mode { "on" } else { "off" };
+        self.add_log(&format!("Bash mode: {}", status));
+        self.save_config();
+    }
+
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
         self.auto_enter = !self.auto_enter;
@@ -1158,6 +1194,8 @@ impl App {
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
         config.save_to_clipboard = self.save_to_clipboard;
+        config.bash_mode = self.bash_mode;
+        config.guided_grammar = self.guided_grammar.clone();
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
@@ -1243,14 +1281,12 @@ impl App {
                         (self.device_picker_selected + 1) % self.device_picker_devices.len();
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if !self.device_picker_devices.is_empty() {
-                    self.device_picker_selected = if self.device_picker_selected == 0 {
-                        self.device_picker_devices.len() - 1
-                    } else {
-                        self.device_picker_selected - 1
-                    };
-                }
+            KeyCode::Char('k') | KeyCode::Up if !self.device_picker_devices.is_empty() => {
+                self.device_picker_selected = if self.device_picker_selected == 0 {
+                    self.device_picker_devices.len() - 1
+                } else {
+                    self.device_picker_selected - 1
+                };
             }
             _ => {}
         }

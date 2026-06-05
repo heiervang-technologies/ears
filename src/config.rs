@@ -127,6 +127,15 @@ pub struct Config {
     /// Enable auto-correction for progressive typing (None = legacy behavior)
     #[serde(default)]
     pub auto_correction: Option<bool>,
+    /// Enable bash mode: constrain ASR output to a shell grammar via the
+    /// chat-completions endpoint (constrained decoding). When on, spoken
+    /// commands are biased toward valid bash syntax. Default: false.
+    #[serde(default)]
+    pub bash_mode: bool,
+    /// Custom guided grammar (GBNF) override. When None and `bash_mode` is on,
+    /// the built-in bash grammar ([`Config::BASH_GRAMMAR`]) is used. Default: None.
+    #[serde(default)]
+    pub guided_grammar: Option<String>,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -186,6 +195,8 @@ impl Config {
             progressive_typing: false,
             save_to_clipboard: false,
             auto_correction: None,
+            bash_mode: false,
+            guided_grammar: None,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -307,6 +318,8 @@ impl Config {
             progressive_typing: false,
             save_to_clipboard: false,
             auto_correction: None,
+            bash_mode: false,
+            guided_grammar: None,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -441,6 +454,32 @@ impl Config {
     /// Return the resolved config file path this instance reads/writes.
     pub fn config_file(&self) -> PathBuf {
         Self::config_file_path(&self.config_dir, self.active_profile.as_deref())
+    }
+
+    /// Built-in bash dictation grammar (GBNF), embedded at compile time.
+    ///
+    /// Constrains ASR output to valid bash syntax when [`Config::bash_mode`] is
+    /// on and no custom [`Config::guided_grammar`] is set. See
+    /// `grammars/bash.gbnf` for the grammar and the rationale behind the
+    /// `scaffold` rule.
+    pub const BASH_GRAMMAR: &'static str = include_str!("../grammars/bash.gbnf");
+
+    /// Resolve the active guided grammar for constrained decoding.
+    ///
+    /// Returns `Some(grammar)` only when `bash_mode` is enabled (using the
+    /// custom `guided_grammar` if set, otherwise the built-in bash grammar).
+    /// Returns `None` when bash mode is off, which keeps ears on the plain
+    /// transcription endpoint. Constrained decoding is therefore gated on
+    /// `bash_mode`.
+    pub fn active_grammar(&self) -> Option<String> {
+        if !self.bash_mode {
+            return None;
+        }
+        Some(
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| Self::BASH_GRAMMAR.to_string()),
+        )
     }
 
     /// Resolve effective auto-correction setting with backward compatibility.
@@ -676,6 +715,50 @@ another_unknown = 42
         assert_eq!(vad.min_speech_duration_ms, 300);
         assert_eq!(vad.max_silence_duration_ms, 700);
         assert_eq!(vad.pre_speech_buffer_ms, 500);
+    }
+
+    #[test]
+    fn test_bash_grammar_embedded() {
+        // The built-in grammar must be present and contain its load-bearing rules.
+        assert!(!Config::BASH_GRAMMAR.trim().is_empty());
+        assert!(Config::BASH_GRAMMAR.contains("root"));
+        assert!(Config::BASH_GRAMMAR.contains("::="));
+        // The scaffold rule is what keeps audio conditioning alive — guard it.
+        assert!(Config::BASH_GRAMMAR.contains("<asr_text>"));
+    }
+
+    #[test]
+    fn test_active_grammar_gated_on_bash_mode() {
+        let mut config = Config::new().unwrap();
+
+        // Off by default → no constrained decoding.
+        assert!(config.active_grammar().is_none());
+
+        // A custom grammar set but bash_mode off → still none.
+        config.guided_grammar = Some("root ::= \"ls\"".to_string());
+        assert!(config.active_grammar().is_none());
+
+        // bash_mode on with a custom grammar → the custom grammar.
+        config.bash_mode = true;
+        assert_eq!(config.active_grammar().as_deref(), Some("root ::= \"ls\""));
+
+        // bash_mode on without a custom grammar → the built-in bash grammar.
+        config.guided_grammar = None;
+        assert_eq!(
+            config.active_grammar().as_deref(),
+            Some(Config::BASH_GRAMMAR)
+        );
+    }
+
+    #[test]
+    fn test_bash_mode_roundtrips_toml() {
+        let (mut config, _temp_dir) = setup_test_config();
+        config.bash_mode = true;
+        config.save().unwrap();
+
+        let content = fs::read_to_string(config.config_dir.join("config.toml")).unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.bash_mode);
     }
 
     #[test]
