@@ -593,15 +593,15 @@ impl App {
             }
 
             // 'N' to jump to previous search match
-            (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
-                    self.search_match_index = if self.search_match_index == 0 {
-                        self.search_matches.len() - 1
-                    } else {
-                        self.search_match_index - 1
-                    };
-                    self.selected_log = self.search_matches[self.search_match_index];
-                }
+            (KeyCode::Char('N'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() =>
+            {
+                self.search_match_index = if self.search_match_index == 0 {
+                    self.search_matches.len() - 1
+                } else {
+                    self.search_match_index - 1
+                };
+                self.selected_log = self.search_matches[self.search_match_index];
             }
 
             _ => {}
@@ -1243,14 +1243,12 @@ impl App {
                         (self.device_picker_selected + 1) % self.device_picker_devices.len();
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if !self.device_picker_devices.is_empty() {
-                    self.device_picker_selected = if self.device_picker_selected == 0 {
-                        self.device_picker_devices.len() - 1
-                    } else {
-                        self.device_picker_selected - 1
-                    };
-                }
+            KeyCode::Char('k') | KeyCode::Up if !self.device_picker_devices.is_empty() => {
+                self.device_picker_selected = if self.device_picker_selected == 0 {
+                    self.device_picker_devices.len() - 1
+                } else {
+                    self.device_picker_selected - 1
+                };
             }
             _ => {}
         }
