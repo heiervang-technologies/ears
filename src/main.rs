@@ -75,6 +75,9 @@ async fn main() -> Result<()> {
                 show_server(&config)?;
             }
         }
+        Some(Commands::Test { file }) => {
+            test_config(&config, file.as_deref()).await?;
+        }
         Some(Commands::AutoEnter) => {
             handle_auto_enter().await?;
         }
@@ -246,6 +249,97 @@ fn show_server(config: &Config) -> Result<()> {
     println!("Current server: {}", config.whisper_server);
     println!("Config: {}", config.config_file().display());
 
+    Ok(())
+}
+
+/// Mask a secret for display: keep a short prefix/suffix, hide the middle.
+fn mask_secret(secret: &str) -> String {
+    let len = secret.chars().count();
+    if len <= 8 {
+        return "set (hidden)".to_string();
+    }
+    let prefix: String = secret.chars().take(4).collect();
+    let suffix: String = secret.chars().skip(len - 3).collect();
+    format!("set ({}…{})", prefix, suffix)
+}
+
+/// Validate the active configuration: print a summary, check server health, and
+/// optionally transcribe a sample audio file. Exits non-zero on failure.
+async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
+    let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    let (server_url, model) = config.resolve_server(language.as_deref());
+
+    println!("Config:   {}", config.config_file().display());
+    println!(
+        "Profile:  {}",
+        config.active_profile.as_deref().unwrap_or("default")
+    );
+    println!("Server:   {}", server_url);
+    // Mirror the endpoint WhisperClient actually builds (trim trailing '/').
+    println!(
+        "Endpoint: {}/v1/audio/transcriptions",
+        server_url.as_str().trim_end_matches('/')
+    );
+    println!(
+        "Model:    {}",
+        model.as_deref().unwrap_or("(server default)")
+    );
+    println!("Device:   {}", config.device);
+    println!(
+        "Language: {}",
+        language.as_deref().unwrap_or("(auto-detect)")
+    );
+    println!(
+        "API key:  {}",
+        config
+            .api_key
+            .as_deref()
+            .map(mask_secret)
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+
+    if config.server_has_redundant_v1() {
+        println!();
+        println!(
+            "⚠  Server URL ends in /v1. ears appends /v1/audio/transcriptions itself, so\n   \
+             requests hit a doubled /v1/v1 path and will fail. Drop the trailing /v1."
+        );
+    }
+
+    println!();
+    print!("Health check… ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+
+    let client = WhisperClient::new(server_url.to_string())
+        .with_language(language.clone())
+        .with_api_key(config.api_key.clone())
+        .with_model(model)
+        .with_prompt(config.prompt.clone());
+
+    if let Err(e) = client.health_check().await {
+        println!("FAILED");
+        anyhow::bail!("Server health check failed: {}", e);
+    }
+    println!("OK");
+
+    if let Some(path) = file {
+        print!("Transcribing {}… ", path);
+        std::io::stdout().flush().ok();
+        match client.transcribe(path).await {
+            Ok(text) => {
+                println!("OK");
+                println!("Transcript: {}", text);
+            }
+            Err(e) => {
+                println!("FAILED");
+                anyhow::bail!("Transcription failed: {}", e);
+            }
+        }
+    }
+
+    println!();
+    println!("✓ Config OK");
     Ok(())
 }
 
@@ -917,6 +1011,18 @@ mod tests {
     #[test]
     fn test_invalid_url() {
         assert!(Url::parse("not-a-url").is_err());
+    }
+
+    #[test]
+    fn test_mask_secret() {
+        // Long secret keeps a prefix/suffix, hides the middle and never leaks it.
+        let masked = mask_secret("gsk_abcdefghijklmnopqrstuvwxyz0123");
+        assert_eq!(masked, "set (gsk_…123)");
+        assert!(!masked.contains("abcdef"));
+
+        // Short secrets reveal nothing.
+        assert_eq!(mask_secret("short"), "set (hidden)");
+        assert_eq!(mask_secret("12345678"), "set (hidden)");
     }
 
     #[test]
