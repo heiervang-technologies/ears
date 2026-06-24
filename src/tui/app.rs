@@ -468,61 +468,59 @@ impl App {
             }
 
             // 't' to toggle progressive typing (in Live/Configuration panels)
-            (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription
-                    || self.current_panel == Panel::Configuration
-                {
-                    self.toggle_progressive_typing();
-                }
+            (KeyCode::Char('t'), KeyModifiers::NONE)
+                if (self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration) =>
+            {
+                self.toggle_progressive_typing();
             }
 
             // 'a' to toggle auto-correction (in Live/Configuration panels)
-            (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription
-                    || self.current_panel == Panel::Configuration
-                {
-                    self.toggle_auto_correction();
-                }
+            (KeyCode::Char('a'), KeyModifiers::NONE)
+                if (self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration) =>
+            {
+                self.toggle_auto_correction();
             }
 
             // 'f' to toggle lowercase filter (in Configuration panel)
-            (KeyCode::Char('f'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_lowercase_filter();
-                }
+            (KeyCode::Char('f'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_lowercase_filter();
             }
 
             // 'p' to toggle punctuation filter (in Configuration panel)
-            (KeyCode::Char('p'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_punctuation_filter();
-                }
+            (KeyCode::Char('p'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_punctuation_filter();
             }
 
             // 's' to toggle strict alphabet filter (in Configuration panel)
-            (KeyCode::Char('s'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_strict_alphabet_filter();
-                }
+            (KeyCode::Char('s'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_strict_alphabet_filter();
             }
 
             // 'm' to cycle typing mode (in Configuration panel)
-            (KeyCode::Char('m'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.cycle_typing_mode();
-                }
+            (KeyCode::Char('m'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_typing_mode();
             }
 
             // '+' / '=' to increase cue volume, '-' to decrease (in Configuration panel)
-            (KeyCode::Char('+') | KeyCode::Char('='), _) => {
-                if self.current_panel == Panel::Configuration {
-                    self.adjust_cue_volume(10);
-                }
+            (KeyCode::Char('+') | KeyCode::Char('='), _)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.adjust_cue_volume(10);
             }
-            (KeyCode::Char('-'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.adjust_cue_volume(-10);
-                }
+            (KeyCode::Char('-'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.adjust_cue_volume(-10);
             }
 
             // 'c' to go to configuration panel
@@ -536,42 +534,38 @@ impl App {
             }
 
             // 'P' to cycle profile
-            (KeyCode::Char('P'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Configuration {
-                    self.cycle_profile();
-                }
+            (KeyCode::Char('P'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_profile();
             }
 
             // 'e' to edit server URL (in Configuration panel)
-            (KeyCode::Char('e'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.start_editing(EditableField::ServerUrl);
-                }
+            (KeyCode::Char('e'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.start_editing(EditableField::ServerUrl);
             }
 
             // 'd' to open device picker (in Configuration panel)
-            (KeyCode::Char('d'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.open_device_picker();
-                }
+            (KeyCode::Char('d'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.open_device_picker();
             }
 
             // 'F' to cycle log filter (in Logs panel)
-            (KeyCode::Char('F'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Logs {
-                    self.log_filter = self.log_filter.next();
-                    self.add_log(&format!("Log filter: {}", self.log_filter.label()));
-                }
+            (KeyCode::Char('F'), KeyModifiers::SHIFT) if self.current_panel == Panel::Logs => {
+                self.log_filter = self.log_filter.next();
+                self.add_log(&format!("Log filter: {}", self.log_filter.label()));
             }
 
             // '/' to search logs (in Logs panel)
-            (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Logs {
-                    self.search_mode = true;
-                    self.search_buffer.clear();
-                    self.search_matches.clear();
-                    self.search_match_index = 0;
-                }
+            (KeyCode::Char('/'), KeyModifiers::NONE) if self.current_panel == Panel::Logs => {
+                self.search_mode = true;
+                self.search_buffer.clear();
+                self.search_matches.clear();
+                self.search_match_index = 0;
             }
 
             // 'n' to jump to next search match (Logs) or toggle auto-enter (Configuration)
@@ -586,10 +580,10 @@ impl App {
             }
 
             // 'b' to toggle save to clipboard (in Configuration panel)
-            (KeyCode::Char('b'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_save_to_clipboard();
-                }
+            (KeyCode::Char('b'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_save_to_clipboard();
             }
 
             // 'N' to jump to previous search match
@@ -1237,11 +1231,9 @@ impl App {
             KeyCode::Enter => {
                 self.confirm_device_selection();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if !self.device_picker_devices.is_empty() {
-                    self.device_picker_selected =
-                        (self.device_picker_selected + 1) % self.device_picker_devices.len();
-                }
+            KeyCode::Char('j') | KeyCode::Down if !self.device_picker_devices.is_empty() => {
+                self.device_picker_selected =
+                    (self.device_picker_selected + 1) % self.device_picker_devices.len();
             }
             KeyCode::Char('k') | KeyCode::Up if !self.device_picker_devices.is_empty() => {
                 self.device_picker_selected = if self.device_picker_selected == 0 {
