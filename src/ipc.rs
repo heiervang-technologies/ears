@@ -21,9 +21,7 @@ pub fn socket_path() -> PathBuf {
 /// Start the IPC server with a custom socket path in a background tokio task.
 pub fn start_ipc_server_at(path: PathBuf, rx: broadcast::Receiver<StreamingEvent>) {
     tokio::spawn(async move {
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
+        let _ = std::fs::remove_file(&path);
 
         let listener = match UnixListener::bind(&path) {
             Ok(l) => l,

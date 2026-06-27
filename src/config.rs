@@ -494,11 +494,6 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default config")
-    }
-}
 
 #[cfg(test)]
 mod tests {

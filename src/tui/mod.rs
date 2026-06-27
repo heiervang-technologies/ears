@@ -189,7 +189,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     app.event_tx = Some(event_handler.sender());
 
     // Load config and create state manager for waybar integration
-    let config = Config::load_profile(profile).unwrap_or_default();
+    let config = Config::load_profile(profile).unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
     let mut state_mgr = StateManager::new(&config.state_dir)?;
 
     // Drop guard ensures state resets to idle even on panic/crash
