@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ears test [FILE]` — validate the active profile: prints a summary (server, endpoint, model, device, language, masked API key), runs a server health check, and optionally transcribes a sample audio file. Exits non-zero on failure.
+- Warning when the configured `server` URL ends in `/v1` — ears appends `/v1/audio/transcriptions` itself, so a trailing `/v1` produces a doubled `/v1/v1/...` path that 404s.
+
+### Changed
+- Config files are now written with `0600` permissions, since they may contain a plaintext `api_key`.
+- README: documented the `{server}/v1/audio/transcriptions` endpoint behavior, the `ears test` command, the plaintext-key/0600 note, and that `EARS_*` env overrides do not reach keybind-launched `ears toggle`.
+
 ### Fixed
+- TUI: `save_config()` no longer clobbers the user's real config. Unit tests construct a real `App` (reading `~/.config/ears`) and exercise toggle keys; a concurrent env-override test could make config loading fail, and the previous `.unwrap_or_default()` then wrote a default config over the user's real settings. Now a no-op under `cfg!(test)` and skips the save on load failure instead of writing defaults.
 - Streaming: fixed UTF-8 panic in LocalAgreementPolicy when history window slides and committed text is not a prefix of new stable prefix (byte-based slicing replaced with char-based)
 - Progressive typing: backspace now sends proper BackSpace key events (batched wtype or ydotool) instead of \x08 control characters, respecting configured typing mode
 - Progressive typing: fixed index-out-of-bounds panic when committed text is shorter than typed text with auto-correction disabled
@@ -15,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TUI event handler: terminal read/poll errors are now logged via tracing instead of silently masked as FocusGained events
 
 ### Added
+- Bash mode: constrain dictation to valid shell syntax via grammar-guided decoding. Enable with `bash_mode = true` (optional `guided_grammar` override); routes requests to `/v1/chat/completions` with `structured_outputs.grammar` since the transcription endpoint does not support guided decoding. Built-in grammar in `grammars/bash.gbnf`. Toggle live in the TUI config panel with `g`. Best used with push-to-talk.
 - `docs/ARCHITECTURE.md` — system design documentation covering state machine, audio pipeline, VAD, IPC protocol, and TUI architecture
 - `LICENSE` — MIT license file (was declared in Cargo.toml but missing)
 - `CHANGELOG.md` — this file

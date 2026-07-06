@@ -1,0 +1,75 @@
+# Bash "voice dictation" grammar (GBNF / xgrammar-compatible).
+#
+# Purpose: when you SPEAK shell commands out loud ("ls", "git status",
+# "cargo build"), constrain the ASR output to valid lowercase bash syntax so
+# short/ambiguous tokens land as code ("ls", not "LS"/"Alice"/"eles") instead of
+# the model's prose interpretation. This is dictation biasing, NOT translation —
+# you say the command, the grammar keeps it structurally valid bash.
+#
+# Sent to vLLM /v1/chat/completions via structured_outputs.grammar when ears is
+# in bash mode. See src/whisper.rs (transcribe_chat_internal).
+#
+# CRITICAL — the `scaffold` rule:
+#   Qwen3-ASR emits a "language <Lang><asr_text>" preamble before the actual
+#   transcription. If the grammar forces the first token to be a command (i.e.
+#   skips this preamble), the model drops OUT of its audio-conditioned regime and
+#   free-runs on priors (every utterance collapses to the same token). Anchoring
+#   the scaffold keeps audio cross-attention engaged so the constrained body
+#   actually tracks what was spoken. The client strips everything up to and
+#   including "<asr_text>" from the response.
+#
+# Bounded {m,n} repetition is deliberate: it prevents runaway token loops
+# (e.g. "dirdirdir...") on hard-to-parse audio.
+#
+# Scope: an allow-list of common commands plus generic arg/flag/path/pipe/
+# redirect structure. NOT full POSIX (no subshells, command substitution,
+# heredocs, arithmetic, brace expansion).
+
+root      ::= scaffold pipeline (seq pipeline)*
+
+# Qwen3-ASR preamble — keep the model in its transcription regime.
+scaffold  ::= "language " [A-Za-z]+ "<asr_text>"
+
+pipeline  ::= command (ws "|" ws command)*
+command   ::= cmd (ws arg)*
+
+# Allow-listed commands. Extend as real usage demands.
+cmd ::= "ls" | "cd" | "pwd" | "cat" | "echo" | "grep" | "find" | "git"
+      | "docker" | "kubectl" | "ssh" | "scp" | "ps" | "kill" | "mkdir"
+      | "rmdir" | "rm" | "cp" | "mv" | "touch" | "ln" | "which" | "whoami"
+      | "head" | "tail" | "less" | "wc" | "sort" | "uniq" | "cut" | "tr"
+      | "awk" | "sed" | "xargs" | "curl" | "wget" | "tar" | "gzip" | "unzip"
+      | "make" | "cargo" | "npm" | "node" | "python" | "python3" | "pip"
+      | "go" | "rustc" | "bash" | "sh" | "zsh" | "sudo" | "chmod" | "chown"
+      | "df" | "du" | "free" | "top" | "htop" | "man" | "export" | "env"
+      | "source" | "history" | "clear" | "exit" | "systemctl" | "journalctl"
+      | "ping" | "ip" | "ifconfig" | "netstat" | "diff" | "tmux" | "vim"
+
+arg ::= redirect | flag | string | path | word
+
+# Short flags (-l, -rf) and long flags (--all, --color=auto).
+flag ::= "--" word ("=" (word | string))? | "-" flagchar{1,8}
+
+# Bare words: filenames, args, subcommands, hostnames, etc.
+word ::= wordchar{1,40}
+
+# Paths anchored to a recognizable root so they don't collide with bare words.
+path ::= ("/" | "./" | "../" | "~/") pathchar{0,60}
+
+# Quoted strings (double and single).
+string ::= "\"" dqchar{0,60} "\"" | "'" sqchar{0,60} "'"
+
+# Redirections: > >> < 2> 2>&1
+redirect ::= redirop (ws (path | word))?
+redirop  ::= "2>&1" | "2>" | ">>" | ">" | "<"
+
+# Command separators: ; && ||
+seq ::= ws ("&&" | "||" | ";") ws
+
+ws ::= " "
+
+flagchar ::= [a-zA-Z0-9]
+wordchar ::= [a-zA-Z0-9._+=@:,%/-]
+pathchar ::= [a-zA-Z0-9._/~-]
+dqchar   ::= [^"\\]
+sqchar   ::= [^']

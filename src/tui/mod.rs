@@ -64,6 +64,8 @@ pub struct TypingSettings {
     pub auto_enter: bool,
     pub text_filters: crate::text_filters::TextFilters,
     pub language: Option<String>,
+    /// Active guided grammar (bash mode); `None` = plain transcription.
+    pub guided_grammar: Option<String>,
 }
 
 impl Default for TypingSettings {
@@ -75,6 +77,7 @@ impl Default for TypingSettings {
             auto_enter: true,
             text_filters: crate::text_filters::TextFilters::default(),
             language: None,
+            guided_grammar: None,
         }
     }
 }
@@ -166,7 +169,8 @@ pub async fn start_vad_pipeline(
                     let s = settings_rx.borrow_and_update().clone();
                     engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
                     engine.set_text_filters(s.text_filters, s.language);
-                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                    engine.set_guided_grammar(s.guided_grammar.clone());
+                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
                 }
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
@@ -189,7 +193,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     app.event_tx = Some(event_handler.sender());
 
     // Load config and create state manager for waybar integration
-    let config = Config::load_profile(profile).unwrap_or_default();
+    let config = Config::load_profile(profile).unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
     let mut state_mgr = StateManager::new(&config.state_dir)?;
 
     // Drop guard ensures state resets to idle even on panic/crash
@@ -224,6 +228,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_typing_mode = app.typing_mode;
             let prev_auto_enter = app.auto_enter;
             let prev_text_filters = app.text_filters.clone();
+            let prev_bash_mode = app.bash_mode;
 
             match event_handler.next().await? {
                 Event::Key(key) => {
@@ -278,6 +283,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 || app.typing_mode != prev_typing_mode
                 || app.auto_enter != prev_auto_enter
                 || app.text_filters != prev_text_filters
+                || app.bash_mode != prev_bash_mode
             {
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
@@ -287,6 +293,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         auto_enter: app.auto_enter,
                         text_filters: app.text_filters.clone(),
                         language: app.language.clone(),
+                        guided_grammar: app.active_grammar(),
                     });
                 }
             }
@@ -310,6 +317,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             auto_enter: app.auto_enter,
                             text_filters: app.text_filters.clone(),
                             language: app.language.clone(),
+                            guided_grammar: app.active_grammar(),
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);
