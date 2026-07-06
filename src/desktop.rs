@@ -616,10 +616,19 @@ impl TextInput {
     }
 
     /// Copy text to clipboard using wl-copy (fire-and-forget, non-blocking)
+    ///
+    /// wl-copy exits quickly after the clipboard is updated. We can't block on
+    /// it here (callers want fire-and-forget), but we also can't let Child drop
+    /// without a wait — that leaks a <defunct> zombie until ears itself exits.
+    /// Under long-running `ws-listen`, those add up (centurion reported 34
+    /// zombies stacked after a session). Park the wait in a detached thread.
     pub fn copy_to_clipboard(text: &str) {
         match Command::new("wl-copy").arg(text).spawn() {
-            Ok(_) => {
+            Ok(mut child) => {
                 tracing::info!("Copied text to clipboard");
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
             }
             Err(e) => {
                 tracing::warn!("Failed to run wl-copy: {}", e);
