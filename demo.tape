@@ -9,6 +9,14 @@ Set Height 600
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 80ms
 
+# Isolate config into throwaway dirs BEFORE launching, so recording this demo
+# never mutates the real ~/.config/ears — the toggle keys below (f/p/t/a) call
+# save_config(). Hidden from the recording.
+Hide
+Type "export XDG_CONFIG_HOME=$(mktemp -d) XDG_RUNTIME_DIR=$(mktemp -d)"
+Enter
+Show
+
 # Launch ears TUI
 Type "ears"
 Enter

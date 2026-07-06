@@ -5,6 +5,7 @@
 //! with exponential backoff.
 
 use backoff::{future::retry, ExponentialBackoff};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -48,6 +49,22 @@ pub enum WhisperError {
 struct TranscriptionResponse {
     /// The transcribed text
     text: String,
+}
+
+/// Minimal chat-completions response shape (used for the grammar path).
+#[derive(Debug, Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    message: ChatMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    content: Option<String>,
 }
 
 /// Client for interacting with whisper.cpp server
@@ -261,17 +278,47 @@ impl WhisperClient {
     /// # }
     /// ```
     pub async fn transcribe(&self, audio_path: impl AsRef<Path>) -> Result<String, WhisperError> {
+        self.transcribe_with_grammar(audio_path, None).await
+    }
+
+    /// Transcribes an audio file, optionally constraining output to a grammar.
+    ///
+    /// When `grammar` is `None` this is identical to [`WhisperClient::transcribe`]
+    /// — a multipart POST to `/v1/audio/transcriptions`.
+    ///
+    /// When `grammar` is `Some(gbnf)` the request is routed to the
+    /// chat-completions endpoint instead (audio as a base64 `input_audio` part
+    /// plus `structured_outputs.grammar`), because vLLM's transcription endpoint
+    /// does not support guided decoding — only chat-completions does. This is
+    /// how "bash mode" biases spoken commands toward valid shell syntax.
+    ///
+    /// # Arguments
+    /// * `audio_path` - Path to the audio file (WAV, 16kHz, mono, 16-bit PCM)
+    /// * `grammar` - Optional GBNF grammar to constrain the transcription
+    pub async fn transcribe_with_grammar(
+        &self,
+        audio_path: impl AsRef<Path>,
+        grammar: Option<&str>,
+    ) -> Result<String, WhisperError> {
         let path = audio_path.as_ref();
 
         // Validate audio file exists and has content
         self.validate_audio_file(path).await?;
 
-        info!("Transcribing audio file: {}", path.display());
+        info!(
+            "Transcribing audio file: {} (grammar: {})",
+            path.display(),
+            grammar.is_some()
+        );
 
         // Perform transcription with retry logic
         let backoff = self.create_backoff();
         let text = retry(backoff, || async {
-            self.transcribe_internal(path).await.map_err(|e| {
+            let result = match grammar {
+                Some(g) => self.transcribe_chat_internal(path, g).await,
+                None => self.transcribe_internal(path).await,
+            };
+            result.map_err(|e| {
                 warn!("Transcription attempt failed: {}", e);
                 backoff::Error::transient(e)
             })
@@ -380,6 +427,116 @@ impl WhisperClient {
         );
 
         Ok(transcription.text)
+    }
+
+    /// Grammar-constrained transcription via the chat-completions endpoint.
+    ///
+    /// vLLM's `/v1/audio/transcriptions` endpoint does not wire guided decoding
+    /// into sampling params (`vllm_xargs` is passed opaquely as `extra_args`),
+    /// so constrained decoding must go through `/v1/chat/completions`, which
+    /// supports `structured_outputs.grammar`. The audio is sent as a base64
+    /// `input_audio` content part.
+    ///
+    /// The model prefixes its output with a `language <Lang><asr_text>` scaffold
+    /// (which the grammar must allow — see `grammars/bash.gbnf`); we strip
+    /// everything up to and including `<asr_text>` from the response.
+    async fn transcribe_chat_internal(
+        &self,
+        path: &Path,
+        grammar: &str,
+    ) -> Result<String, WhisperError> {
+        let start = std::time::Instant::now();
+        let base = self.server_url.trim_end_matches('/');
+        let url = format!("{}/v1/chat/completions", base);
+        debug!("Sending grammar-constrained request to {}", url);
+
+        // Chat completions requires a model name; bash mode can't work without one.
+        let model = self.model.as_deref().ok_or_else(|| {
+            WhisperError::TranscriptionError(
+                "grammar-constrained (bash) mode requires a configured model".to_string(),
+            )
+        })?;
+
+        let audio_data = tokio::fs::read(path).await?;
+        let audio_b64 = BASE64.encode(&audio_data);
+
+        // `max_tokens` is a hard backstop against runaway token loops the grammar
+        // can otherwise produce on unintelligible audio.
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "wav"}},
+                    {"type": "text", "text": "Transcribe the audio."}
+                ]
+            }],
+            "max_tokens": 64,
+            "temperature": 0.0,
+            "structured_outputs": {"grammar": grammar}
+        });
+
+        let mut request = self.client.post(&url).json(&body);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(WhisperError::TranscriptionError(format!(
+                "Server returned status: {}",
+                response.status()
+            )));
+        }
+
+        let completion: ChatCompletionResponse = response.json().await?;
+        let raw = completion
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message.content)
+            .unwrap_or_default();
+
+        let text = Self::strip_asr_scaffold(&raw);
+
+        // Reject degenerate runaway output (e.g. "lndirdirdir...") rather than
+        // typing garbage into the user's terminal.
+        if Self::looks_degenerate(text) {
+            warn!("Discarding degenerate grammar output: {:?}", text);
+            return Ok(String::new());
+        }
+
+        info!(
+            "Grammar-constrained call completed in {:?}: \"{}\"",
+            start.elapsed(),
+            text
+        );
+
+        Ok(text.to_string())
+    }
+
+    /// Strip the Qwen3-ASR `language <Lang><asr_text>` scaffold and any trailing
+    /// sentence punctuation, leaving just the command text.
+    fn strip_asr_scaffold(raw: &str) -> &str {
+        let body = match raw.split_once("<asr_text>") {
+            Some((_, rest)) => rest,
+            None => raw,
+        };
+        body.trim().trim_end_matches(['.', '。'])
+    }
+
+    /// Heuristic: detect runaway repetition that the grammar can emit on
+    /// unintelligible audio (a single long token with a short substring repeated
+    /// many times). Such output is never a real command.
+    fn looks_degenerate(text: &str) -> bool {
+        // A single "word" longer than this is almost certainly a runaway loop;
+        // real commands break into space-separated tokens well before this.
+        const MAX_TOKEN_LEN: usize = 40;
+        text.split_whitespace().any(|tok| tok.len() > MAX_TOKEN_LEN)
     }
 
     /// Filters out common silence artifacts from whisper.cpp and Qwen3-ASR
@@ -556,6 +713,36 @@ mod tests {
         // Qwen3 artifacts are exact-match filtered regardless of language
         assert_eq!(client.filter_silence_artifacts("啊！"), "");
         assert_eq!(client.filter_silence_artifacts("嗯。"), "");
+    }
+
+    #[test]
+    fn test_strip_asr_scaffold() {
+        // Strips the Qwen3-ASR scaffold and trailing sentence punctuation.
+        assert_eq!(
+            WhisperClient::strip_asr_scaffold("language English<asr_text>git status."),
+            "git status"
+        );
+        assert_eq!(
+            WhisperClient::strip_asr_scaffold("language Norwegian<asr_text>ls"),
+            "ls"
+        );
+        // No scaffold → returned as-is (trimmed).
+        assert_eq!(WhisperClient::strip_asr_scaffold("  pwd  "), "pwd");
+        // CJK full stop is also stripped.
+        assert_eq!(
+            WhisperClient::strip_asr_scaffold("<asr_text>cargo build。"),
+            "cargo build"
+        );
+    }
+
+    #[test]
+    fn test_looks_degenerate() {
+        // Real commands are not degenerate.
+        assert!(!WhisperClient::looks_degenerate("ls -la"));
+        assert!(!WhisperClient::looks_degenerate("git commit -m fix"));
+        assert!(!WhisperClient::looks_degenerate(""));
+        // A single very long token is a runaway loop.
+        assert!(WhisperClient::looks_degenerate(&"dir".repeat(30)));
     }
 
     #[tokio::test]
