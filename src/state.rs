@@ -48,6 +48,12 @@ pub fn is_external_vad_alive(state_dir: &Path) -> bool {
     }
 }
 
+fn atomic_write_state(path: &Path, content: &str) -> io::Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, content)?;
+    fs::rename(tmp_path, path)
+}
+
 /// Best-effort reset of state to idle and waybar notification.
 ///
 /// Used by drop guards to ensure state is cleaned up on panic or early return.
@@ -58,7 +64,7 @@ pub fn force_reset_to_idle(state_dir: &Path) {
         return;
     }
     let state_file = state_dir.join("state");
-    let _ = fs::write(&state_file, "idle");
+    let _ = atomic_write_state(&state_file, "idle");
     let _ = std::process::Command::new("pkill")
         .args(["-RTMIN+9", "waybar"])
         .spawn();
@@ -188,7 +194,7 @@ impl StateManager {
             State::VadActive => "vad_active",
         };
 
-        fs::write(self.state_file_path(), state_str)?;
+        atomic_write_state(&self.state_file_path(), state_str)?;
 
         // Signal waybar to refresh the ears indicator (signal 9 = SIGRTMIN+9)
         let _ = std::process::Command::new("pkill")

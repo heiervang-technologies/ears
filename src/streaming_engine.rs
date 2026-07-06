@@ -340,8 +340,10 @@ impl StreamingEngine {
         let latency_ms = start_time.elapsed().as_millis() as u64;
         self.stats.segments_processed += 1;
         self.stats.total_latency_ms += latency_ms;
-        self.stats.avg_latency_ms =
-            self.stats.total_latency_ms / self.stats.segments_processed as u64;
+        if self.stats.segments_processed > 0 {
+            self.stats.avg_latency_ms =
+                self.stats.total_latency_ms / self.stats.segments_processed as u64;
+        }
 
         // Send events
         self.send_event(StreamingEvent::TranscriptUpdate {

@@ -260,7 +260,7 @@ impl App {
 
     pub fn with_profile(profile: Option<&str>) -> Self {
         // Load config from files
-        let config = Config::load_profile(profile).unwrap_or_default();
+        let config = Config::load_profile(profile).unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
         let server_url = config.whisper_server.to_string();
         let device = config.device.clone();
         let language = config.language.clone();
@@ -1013,7 +1013,7 @@ impl App {
         Config::set_default_profile(profile_name.as_deref().unwrap_or("")).ok();
 
         // Reload config from the new profile
-        let config = Config::load_profile(profile_name.as_deref()).unwrap_or_default();
+        let config = Config::load_profile(profile_name.as_deref()).unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
         self.server = config.whisper_server.to_string();
         self.device = config.device.clone();
         self.language = config.language.clone();
