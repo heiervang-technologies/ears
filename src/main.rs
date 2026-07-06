@@ -473,6 +473,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
             auto_enter,
             text_filters: config.text_filters.clone(),
             language,
+            guided_grammar: config.active_grammar(),
         }
     };
 
@@ -637,6 +638,7 @@ async fn handle_ws_listen(
                 auto_enter: false,
                 text_filters: config.text_filters.clone(),
                 language: config.language.clone(),
+                guided_grammar: config.active_grammar(),
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();
@@ -647,6 +649,7 @@ async fn handle_ws_listen(
             s.auto_enter,
         );
         engine.set_text_filters(s.text_filters, s.language);
+        engine.set_guided_grammar(s.guided_grammar.clone());
 
         // Shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -672,6 +675,7 @@ async fn handle_ws_listen(
                         let s = settings_rx.borrow_and_update().clone();
                         engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
                         engine.set_text_filters(s.text_filters, s.language);
+                        engine.set_guided_grammar(s.guided_grammar.clone());
                     }
                     _ = shutdown_rx.changed() => {
                         tracing::debug!("WS VAD pipeline shutdown requested");
@@ -924,7 +928,11 @@ async fn stop_and_transcribe(
         .with_api_key(config.api_key.clone())
         .with_model(model)
         .with_prompt(config.prompt.clone());
-    match client.transcribe(&audio_file).await {
+    let grammar = config.active_grammar();
+    match client
+        .transcribe_with_grammar(&audio_file, grammar.as_deref())
+        .await
+    {
         Ok(text) if !text.is_empty() => {
             tracing::info!(
                 "Transcription completed in {:?}: {}",
@@ -932,7 +940,13 @@ async fn stop_and_transcribe(
                 text
             );
 
-            let filtered_text = config.text_filters.apply(&text, language.as_deref());
+            // Bash mode bypasses text filters — the grammar already guarantees
+            // valid shell syntax and the filters would mangle it.
+            let filtered_text = if config.bash_mode {
+                text.clone()
+            } else {
+                config.text_filters.apply(&text, language.as_deref())
+            };
             tracing::debug!("Filtered text: {}", filtered_text);
 
             let typing_start = std::time::Instant::now();

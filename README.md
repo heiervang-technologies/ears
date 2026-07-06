@@ -11,6 +11,7 @@ A production-grade speech recognition daemon for Linux that integrates with whis
 - **VAD mode**: Voice Activity Detection for hands-free continuous transcription (`ears vad`)
 - **Streaming transcription**: Real-time text output using LocalAgreement policy for stable text
 - **Text filters**: Optional lowercase conversion and punctuation removal
+- **Bash mode**: Constrain dictation to valid shell syntax via grammar-guided decoding — speak commands, get code
 - **Language detection**: Automatic language selection from keyboard layout (Hyprland + GNOME)
 - **Smart text input**: Uses `wtype` on Hyprland/Wayland, clipboard paste via `ydotool` elsewhere
 - **PipeWire audio**: Native support for modern Linux audio stack
@@ -210,6 +211,37 @@ bindsym $mod+Shift+v exec ears toggle
 ```
 
 Then: press shortcut → speak → press again → text is typed.
+
+### Bash Mode (dictate shell commands)
+
+Bash mode constrains the speech model's output to valid shell syntax, so spoken
+commands land as code (`ls` → `ls`, not `LS`/`Alice`) instead of prose. You say
+the command out loud; the grammar keeps it structurally valid bash. It is **not**
+translation — say "git status", not "show me the git status".
+
+Enable it per profile in `~/.config/ears/config.<name>.toml`:
+
+```toml
+bash_mode = true             # constrain output to the built-in bash grammar
+auto_enter = false           # recommended: type the command but DON'T run it
+# guided_grammar = "..."     # optional: override the built-in grammar (GBNF)
+```
+
+Then use **push-to-talk** — it's the right fit for discrete commands:
+
+```bash
+ears -p bash toggle    # speak a command, toggle again → it's typed (not run)
+```
+
+Notes:
+- Requires a server with grammar-guided decoding. Bash mode routes requests to
+  the OpenAI-compatible `/v1/chat/completions` endpoint with
+  `structured_outputs.grammar` (e.g. vLLM); the plain transcription endpoint
+  does not support it. Normal (non-bash) profiles are unaffected.
+- A configured `model` is required in bash mode.
+- The command allow-list lives in `grammars/bash.gbnf` — extend it as needed.
+- Best with push-to-talk. The streaming/VAD path accumulates text across
+  utterances and isn't suited to discrete commands yet.
 
 ### VAD Mode (headless)
 

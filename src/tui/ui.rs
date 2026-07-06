@@ -379,6 +379,14 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         Span::styled(" [m]", Style::default().fg(Color::DarkGray)),
     ]));
     text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.bash_mode { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Bash Mode [g]"),
+    ]));
+    text.push(Line::from(vec![
         Span::raw("  Cue Volume: "),
         Span::styled(
             format!("{}%", app.cue_volume),
@@ -407,7 +415,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [+/-] Vol",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] Bash  [+/-] Vol",
             Style::default().fg(theme.dim),
         )));
     }

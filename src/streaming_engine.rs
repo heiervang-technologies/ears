@@ -134,6 +134,10 @@ pub struct StreamingEngine {
 
     /// Language for text filter alphabet checking
     language: Option<String>,
+
+    /// Active guided grammar (bash mode). When set, transcription is routed to
+    /// the constrained chat-completions path and text filters are bypassed.
+    guided_grammar: Option<String>,
 }
 
 impl StreamingEngine {
@@ -169,6 +173,7 @@ impl StreamingEngine {
             typing_mode: TypingMode::Auto,
             text_filters: TextFilters::default(),
             language: None,
+            guided_grammar: None,
         })
     }
 
@@ -248,9 +253,14 @@ impl StreamingEngine {
             .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
         debug!("WAV save took {:?}", wav_start.elapsed());
 
-        // Transcribe with Whisper
+        // Transcribe with Whisper. In bash mode a guided grammar routes the
+        // request to the constrained chat-completions path.
         let transcribe_start = Instant::now();
-        let transcript = match self.whisper_client.transcribe(&segment_file).await {
+        let transcript = match self
+            .whisper_client
+            .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
+            .await
+        {
             Ok(text) => text,
             Err(e) => {
                 warn!("Transcription error: {}", e);
@@ -269,10 +279,15 @@ impl StreamingEngine {
             return Ok(());
         }
 
-        // Apply text filters (lowercase, remove punctuation, strict alphabet)
-        let transcript = self
-            .text_filters
-            .apply(&transcript, self.language.as_deref());
+        // Apply text filters (lowercase, remove punctuation, strict alphabet).
+        // Bash mode bypasses them: the grammar already guarantees valid shell
+        // syntax, and the filters would mangle it (lowercase/strip punctuation).
+        let transcript = if self.guided_grammar.is_some() {
+            transcript
+        } else {
+            self.text_filters
+                .apply(&transcript, self.language.as_deref())
+        };
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
             return Ok(());
@@ -460,6 +475,12 @@ impl StreamingEngine {
     pub fn set_text_filters(&mut self, filters: TextFilters, language: Option<String>) {
         self.text_filters = filters;
         self.language = language;
+    }
+
+    /// Update the active guided grammar (bash mode). `None` disables constrained
+    /// decoding and returns to the plain transcription endpoint.
+    pub fn set_guided_grammar(&mut self, grammar: Option<String>) {
+        self.guided_grammar = grammar;
     }
 
     /// Check if VAD is currently detecting speech

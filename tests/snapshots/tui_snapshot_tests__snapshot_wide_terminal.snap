@@ -32,10 +32,10 @@ expression: output
 │  [x] Auto Enter [n]                                                                                                  │
 │  [ ] Save to Clipboard [b]                                                                                           │
 │  Auto [m]                                                                                                            │
+│  [ ] Bash Mode [g]                                                                                                   │
 │  Cue Volume: 100% [+/-]                                                                                              │
 │                                                                                                                      │
-│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [+/-│
-│                                                                                                                      │
+│[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] │
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

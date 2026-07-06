@@ -188,6 +188,10 @@ pub struct App {
     pub auto_enter: bool,
     /// Save transcribed text to clipboard
     pub save_to_clipboard: bool,
+    /// Bash mode: constrain ASR output to a shell grammar (constrained decoding)
+    pub bash_mode: bool,
+    /// Custom guided grammar override (None = use built-in bash grammar)
+    guided_grammar: Option<String>,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -267,6 +271,8 @@ impl App {
         let progressive_typing = config.progressive_typing;
         let auto_correction = config.effective_auto_correction();
         let cue_volume = config.cue_volume;
+        let bash_mode = config.bash_mode;
+        let guided_grammar = config.guided_grammar.clone();
         let active_profile = config.active_profile.clone();
 
         // Set global audio volume from config
@@ -304,6 +310,8 @@ impl App {
             auto_correction,
             auto_enter,
             save_to_clipboard: config.save_to_clipboard,
+            bash_mode,
+            guided_grammar,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -509,6 +517,13 @@ impl App {
                 if self.current_panel == Panel::Configuration =>
             {
                 self.cycle_typing_mode();
+            }
+
+            // 'g' to toggle bash mode (constrained decoding) in Configuration panel
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                if self.current_panel == Panel::Configuration {
+                    self.toggle_bash_mode();
+                }
             }
 
             // '+' / '=' to increase cue volume, '-' to decrease (in Configuration panel)
@@ -1124,6 +1139,27 @@ impl App {
         self.save_config();
     }
 
+    /// Resolve the active guided grammar (bash mode). Mirrors
+    /// [`crate::config::Config::active_grammar`].
+    pub fn active_grammar(&self) -> Option<String> {
+        if !self.bash_mode {
+            return None;
+        }
+        Some(
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| crate::config::Config::BASH_GRAMMAR.to_string()),
+        )
+    }
+
+    /// Toggle bash mode (constrained decoding to shell grammar)
+    pub fn toggle_bash_mode(&mut self) {
+        self.bash_mode = !self.bash_mode;
+        let status = if self.bash_mode { "on" } else { "off" };
+        self.add_log(&format!("Bash mode: {}", status));
+        self.save_config();
+    }
+
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
         self.auto_enter = !self.auto_enter;
@@ -1138,8 +1174,29 @@ impl App {
 
     /// Save current settings to the active config file
     fn save_config(&self) {
-        // Reconstruct Config from App fields and save as TOML.
-        let mut config = Config::load_profile(self.profile.as_deref()).unwrap_or_default();
+        // Never persist during unit tests: the TUI tests construct a real `App`
+        // (which reads the user's actual ~/.config/ears) and exercise toggle
+        // keys, which would otherwise overwrite the developer's real config.
+        if cfg!(test) {
+            return;
+        }
+        // Load the existing config first so fields the TUI doesn't manage
+        // (model, prompt, language_servers, vad, ...) are preserved on save.
+        //
+        // CRITICAL: do NOT fall back to a default config if the load fails.
+        // Writing defaults here would clobber the user's real settings (server,
+        // model, device) — e.g. if `apply_env_overrides` transiently errors on a
+        // bad EARS_* env var. On load failure, skip the save entirely.
+        let mut config = match Config::load_profile(self.profile.as_deref()) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(
+                    "Skipping config save (could not load existing config): {}",
+                    e
+                );
+                return;
+            }
+        };
         if let Ok(url) = Url::parse(&self.server) {
             config.whisper_server = url;
         }
@@ -1152,6 +1209,8 @@ impl App {
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
         config.save_to_clipboard = self.save_to_clipboard;
+        config.bash_mode = self.bash_mode;
+        config.guided_grammar = self.guided_grammar.clone();
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
