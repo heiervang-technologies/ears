@@ -1,6 +1,6 @@
 [package]
 name = "ears"
-version = "1.1.135"
+version = "1.1.139"
 edition = "2021"
 authors = ["Mark Sverdhei <mark.sverdhei@heiervang.com>"]
 description = "A production-grade speech recognition daemon for Linux"
@@ -14,6 +14,7 @@ url = { version = "2.5", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+base64 = "0.22"
 anyhow = "1.0"
 thiserror = "2.0"
 directories = "5.0"

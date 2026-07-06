@@ -188,6 +188,10 @@ pub struct App {
     pub auto_enter: bool,
     /// Save transcribed text to clipboard
     pub save_to_clipboard: bool,
+    /// Bash mode: constrain ASR output to a shell grammar (constrained decoding)
+    pub bash_mode: bool,
+    /// Custom guided grammar override (None = use built-in bash grammar)
+    guided_grammar: Option<String>,
     /// Number of segments processed (for stats)
     pub segments_processed: usize,
     /// Average latency in milliseconds (for stats)
@@ -267,6 +271,8 @@ impl App {
         let progressive_typing = config.progressive_typing;
         let auto_correction = config.effective_auto_correction();
         let cue_volume = config.cue_volume;
+        let bash_mode = config.bash_mode;
+        let guided_grammar = config.guided_grammar.clone();
         let active_profile = config.active_profile.clone();
 
         // Set global audio volume from config
@@ -304,6 +310,8 @@ impl App {
             auto_correction,
             auto_enter,
             save_to_clipboard: config.save_to_clipboard,
+            bash_mode,
+            guided_grammar,
             segments_processed: 0,
             avg_latency_ms: 0,
             text_filters,
@@ -468,61 +476,66 @@ impl App {
             }
 
             // 't' to toggle progressive typing (in Live/Configuration panels)
-            (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription
-                    || self.current_panel == Panel::Configuration
-                {
-                    self.toggle_progressive_typing();
-                }
+            (KeyCode::Char('t'), KeyModifiers::NONE)
+                if (self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration) =>
+            {
+                self.toggle_progressive_typing();
             }
 
             // 'a' to toggle auto-correction (in Live/Configuration panels)
-            (KeyCode::Char('a'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::LiveTranscription
-                    || self.current_panel == Panel::Configuration
-                {
-                    self.toggle_auto_correction();
-                }
+            (KeyCode::Char('a'), KeyModifiers::NONE)
+                if (self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration) =>
+            {
+                self.toggle_auto_correction();
             }
 
             // 'f' to toggle lowercase filter (in Configuration panel)
-            (KeyCode::Char('f'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_lowercase_filter();
-                }
+            (KeyCode::Char('f'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_lowercase_filter();
             }
 
             // 'p' to toggle punctuation filter (in Configuration panel)
-            (KeyCode::Char('p'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_punctuation_filter();
-                }
+            (KeyCode::Char('p'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_punctuation_filter();
             }
 
             // 's' to toggle strict alphabet filter (in Configuration panel)
-            (KeyCode::Char('s'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_strict_alphabet_filter();
-                }
+            (KeyCode::Char('s'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_strict_alphabet_filter();
             }
 
             // 'm' to cycle typing mode (in Configuration panel)
-            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+            (KeyCode::Char('m'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_typing_mode();
+            }
+
+            // 'g' to toggle bash mode (constrained decoding) in Configuration panel
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
                 if self.current_panel == Panel::Configuration {
-                    self.cycle_typing_mode();
+                    self.toggle_bash_mode();
                 }
             }
 
             // '+' / '=' to increase cue volume, '-' to decrease (in Configuration panel)
-            (KeyCode::Char('+') | KeyCode::Char('='), _) => {
-                if self.current_panel == Panel::Configuration {
-                    self.adjust_cue_volume(10);
-                }
+            (KeyCode::Char('+') | KeyCode::Char('='), _)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.adjust_cue_volume(10);
             }
-            (KeyCode::Char('-'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.adjust_cue_volume(-10);
-                }
+            (KeyCode::Char('-'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.adjust_cue_volume(-10);
             }
 
             // 'c' to go to configuration panel
@@ -536,42 +549,38 @@ impl App {
             }
 
             // 'P' to cycle profile
-            (KeyCode::Char('P'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Configuration {
-                    self.cycle_profile();
-                }
+            (KeyCode::Char('P'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_profile();
             }
 
             // 'e' to edit server URL (in Configuration panel)
-            (KeyCode::Char('e'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.start_editing(EditableField::ServerUrl);
-                }
+            (KeyCode::Char('e'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.start_editing(EditableField::ServerUrl);
             }
 
             // 'd' to open device picker (in Configuration panel)
-            (KeyCode::Char('d'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.open_device_picker();
-                }
+            (KeyCode::Char('d'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.open_device_picker();
             }
 
             // 'F' to cycle log filter (in Logs panel)
-            (KeyCode::Char('F'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Logs {
-                    self.log_filter = self.log_filter.next();
-                    self.add_log(&format!("Log filter: {}", self.log_filter.label()));
-                }
+            (KeyCode::Char('F'), KeyModifiers::SHIFT) if self.current_panel == Panel::Logs => {
+                self.log_filter = self.log_filter.next();
+                self.add_log(&format!("Log filter: {}", self.log_filter.label()));
             }
 
             // '/' to search logs (in Logs panel)
-            (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Logs {
-                    self.search_mode = true;
-                    self.search_buffer.clear();
-                    self.search_matches.clear();
-                    self.search_match_index = 0;
-                }
+            (KeyCode::Char('/'), KeyModifiers::NONE) if self.current_panel == Panel::Logs => {
+                self.search_mode = true;
+                self.search_buffer.clear();
+                self.search_matches.clear();
+                self.search_match_index = 0;
             }
 
             // 'n' to jump to next search match (Logs) or toggle auto-enter (Configuration)
@@ -586,22 +595,22 @@ impl App {
             }
 
             // 'b' to toggle save to clipboard (in Configuration panel)
-            (KeyCode::Char('b'), KeyModifiers::NONE) => {
-                if self.current_panel == Panel::Configuration {
-                    self.toggle_save_to_clipboard();
-                }
+            (KeyCode::Char('b'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.toggle_save_to_clipboard();
             }
 
             // 'N' to jump to previous search match
-            (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() {
-                    self.search_match_index = if self.search_match_index == 0 {
-                        self.search_matches.len() - 1
-                    } else {
-                        self.search_match_index - 1
-                    };
-                    self.selected_log = self.search_matches[self.search_match_index];
-                }
+            (KeyCode::Char('N'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Logs && !self.search_matches.is_empty() =>
+            {
+                self.search_match_index = if self.search_match_index == 0 {
+                    self.search_matches.len() - 1
+                } else {
+                    self.search_match_index - 1
+                };
+                self.selected_log = self.search_matches[self.search_match_index];
             }
 
             _ => {}
@@ -1130,6 +1139,27 @@ impl App {
         self.save_config();
     }
 
+    /// Resolve the active guided grammar (bash mode). Mirrors
+    /// [`crate::config::Config::active_grammar`].
+    pub fn active_grammar(&self) -> Option<String> {
+        if !self.bash_mode {
+            return None;
+        }
+        Some(
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| crate::config::Config::BASH_GRAMMAR.to_string()),
+        )
+    }
+
+    /// Toggle bash mode (constrained decoding to shell grammar)
+    pub fn toggle_bash_mode(&mut self) {
+        self.bash_mode = !self.bash_mode;
+        let status = if self.bash_mode { "on" } else { "off" };
+        self.add_log(&format!("Bash mode: {}", status));
+        self.save_config();
+    }
+
     /// Toggle auto-enter (send Enter key after each transcription)
     pub fn toggle_auto_enter(&mut self) {
         self.auto_enter = !self.auto_enter;
@@ -1144,8 +1174,29 @@ impl App {
 
     /// Save current settings to the active config file
     fn save_config(&self) {
-        // Reconstruct Config from App fields and save as TOML.
-        let mut config = Config::load_profile(self.profile.as_deref()).unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
+        // Never persist during unit tests: the TUI tests construct a real `App`
+        // (which reads the user's actual ~/.config/ears) and exercise toggle
+        // keys, which would otherwise overwrite the developer's real config.
+        if cfg!(test) {
+            return;
+        }
+        // Load the existing config first so fields the TUI doesn't manage
+        // (model, prompt, language_servers, vad, ...) are preserved on save.
+        //
+        // CRITICAL: do NOT fall back to a default config if the load fails.
+        // Writing defaults here would clobber the user's real settings (server,
+        // model, device) — e.g. if `apply_env_overrides` transiently errors on a
+        // bad EARS_* env var. On load failure, skip the save entirely.
+        let mut config = match Config::load_profile(self.profile.as_deref()) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(
+                    "Skipping config save (could not load existing config): {}",
+                    e
+                );
+                return;
+            }
+        };
         if let Ok(url) = Url::parse(&self.server) {
             config.whisper_server = url;
         }
@@ -1158,6 +1209,8 @@ impl App {
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
         config.save_to_clipboard = self.save_to_clipboard;
+        config.bash_mode = self.bash_mode;
+        config.guided_grammar = self.guided_grammar.clone();
         if let Err(e) = config.save() {
             tracing::warn!("Failed to save config: {}", e);
         }
@@ -1237,20 +1290,16 @@ impl App {
             KeyCode::Enter => {
                 self.confirm_device_selection();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if !self.device_picker_devices.is_empty() {
-                    self.device_picker_selected =
-                        (self.device_picker_selected + 1) % self.device_picker_devices.len();
-                }
+            KeyCode::Char('j') | KeyCode::Down if !self.device_picker_devices.is_empty() => {
+                self.device_picker_selected =
+                    (self.device_picker_selected + 1) % self.device_picker_devices.len();
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if !self.device_picker_devices.is_empty() {
-                    self.device_picker_selected = if self.device_picker_selected == 0 {
-                        self.device_picker_devices.len() - 1
-                    } else {
-                        self.device_picker_selected - 1
-                    };
-                }
+            KeyCode::Char('k') | KeyCode::Up if !self.device_picker_devices.is_empty() => {
+                self.device_picker_selected = if self.device_picker_selected == 0 {
+                    self.device_picker_devices.len() - 1
+                } else {
+                    self.device_picker_selected - 1
+                };
             }
             _ => {}
         }

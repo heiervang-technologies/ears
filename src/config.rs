@@ -127,6 +127,15 @@ pub struct Config {
     /// Enable auto-correction for progressive typing (None = legacy behavior)
     #[serde(default)]
     pub auto_correction: Option<bool>,
+    /// Enable bash mode: constrain ASR output to a shell grammar via the
+    /// chat-completions endpoint (constrained decoding). When on, spoken
+    /// commands are biased toward valid bash syntax. Default: false.
+    #[serde(default)]
+    pub bash_mode: bool,
+    /// Custom guided grammar (GBNF) override. When None and `bash_mode` is on,
+    /// the built-in bash grammar ([`Config::BASH_GRAMMAR`]) is used. Default: None.
+    #[serde(default)]
+    pub guided_grammar: Option<String>,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -186,6 +195,8 @@ impl Config {
             progressive_typing: false,
             save_to_clipboard: false,
             auto_correction: None,
+            bash_mode: false,
+            guided_grammar: None,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -237,6 +248,16 @@ impl Config {
 
         // Apply env var overrides (highest priority)
         config.apply_env_overrides()?;
+
+        // Warn about a common cloud-config mistake: appending /v1 to the server
+        // URL. ears adds /v1/audio/transcriptions itself.
+        if config.server_has_redundant_v1() {
+            tracing::warn!(
+                "Server URL '{}' ends in /v1; ears appends /v1/audio/transcriptions itself, \
+                 so requests will hit a doubled /v1/v1 path. Drop the trailing /v1.",
+                config.whisper_server
+            );
+        }
 
         // Ensure state directory exists
         fs::create_dir_all(&config.state_dir).context("Failed to create state directory")?;
@@ -307,6 +328,8 @@ impl Config {
             progressive_typing: false,
             save_to_clipboard: false,
             auto_correction: None,
+            bash_mode: false,
+            guided_grammar: None,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -429,18 +452,67 @@ impl Config {
     }
 
     /// Save configuration to TOML file
+    ///
+    /// The file is written with `0600` permissions because it may contain a
+    /// plaintext `api_key` for cloud ASR services.
     pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.config_dir).context("Failed to create config directory")?;
         let config_file = Self::config_file_path(&self.config_dir, self.active_profile.as_deref());
         let toml_str = toml::to_string_pretty(self).context("Failed to serialize config")?;
         fs::write(&config_file, toml_str)
             .with_context(|| format!("Failed to write {}", config_file.display()))?;
+        Self::restrict_permissions(&config_file);
         Ok(())
     }
+
+    /// Restrict a config file to owner read/write only (`0600`).
+    ///
+    /// Config files can hold a plaintext `api_key`, so they should not be
+    /// world- or group-readable. Best-effort: failures are logged, not fatal.
+    #[cfg(unix)]
+    fn restrict_permissions(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(
+                "Failed to restrict permissions on {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn restrict_permissions(_path: &Path) {}
 
     /// Return the resolved config file path this instance reads/writes.
     pub fn config_file(&self) -> PathBuf {
         Self::config_file_path(&self.config_dir, self.active_profile.as_deref())
+    }
+
+    /// Built-in bash dictation grammar (GBNF), embedded at compile time.
+    ///
+    /// Constrains ASR output to valid bash syntax when [`Config::bash_mode`] is
+    /// on and no custom [`Config::guided_grammar`] is set. See
+    /// `grammars/bash.gbnf` for the grammar and the rationale behind the
+    /// `scaffold` rule.
+    pub const BASH_GRAMMAR: &'static str = include_str!("../grammars/bash.gbnf");
+
+    /// Resolve the active guided grammar for constrained decoding.
+    ///
+    /// Returns `Some(grammar)` only when `bash_mode` is enabled (using the
+    /// custom `guided_grammar` if set, otherwise the built-in bash grammar).
+    /// Returns `None` when bash mode is off, which keeps ears on the plain
+    /// transcription endpoint. Constrained decoding is therefore gated on
+    /// `bash_mode`.
+    pub fn active_grammar(&self) -> Option<String> {
+        if !self.bash_mode {
+            return None;
+        }
+        Some(
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| Self::BASH_GRAMMAR.to_string()),
+        )
     }
 
     /// Resolve effective auto-correction setting with backward compatibility.
@@ -473,6 +545,20 @@ impl Config {
             }
         }
         (self.whisper_server.clone(), self.model.clone())
+    }
+
+    /// Returns true if the configured server URL path ends in a `/v1` segment.
+    ///
+    /// ears appends `/v1/audio/transcriptions` to the server URL itself, so a
+    /// server that already ends in `/v1` (as some cloud provider docs present
+    /// their base URL) produces a doubled `/v1/v1/audio/transcriptions` path
+    /// that 404s. Used to surface a warning rather than silently rewriting the
+    /// URL (which would break servers that legitimately live under `/v1`).
+    pub fn server_has_redundant_v1(&self) -> bool {
+        self.whisper_server
+            .path()
+            .trim_end_matches('/')
+            .ends_with("/v1")
     }
 
     /// Validate the configuration
@@ -674,6 +760,50 @@ another_unknown = 42
     }
 
     #[test]
+    fn test_bash_grammar_embedded() {
+        // The built-in grammar must be present and contain its load-bearing rules.
+        assert!(!Config::BASH_GRAMMAR.trim().is_empty());
+        assert!(Config::BASH_GRAMMAR.contains("root"));
+        assert!(Config::BASH_GRAMMAR.contains("::="));
+        // The scaffold rule is what keeps audio conditioning alive — guard it.
+        assert!(Config::BASH_GRAMMAR.contains("<asr_text>"));
+    }
+
+    #[test]
+    fn test_active_grammar_gated_on_bash_mode() {
+        let mut config = Config::new().unwrap();
+
+        // Off by default → no constrained decoding.
+        assert!(config.active_grammar().is_none());
+
+        // A custom grammar set but bash_mode off → still none.
+        config.guided_grammar = Some("root ::= \"ls\"".to_string());
+        assert!(config.active_grammar().is_none());
+
+        // bash_mode on with a custom grammar → the custom grammar.
+        config.bash_mode = true;
+        assert_eq!(config.active_grammar().as_deref(), Some("root ::= \"ls\""));
+
+        // bash_mode on without a custom grammar → the built-in bash grammar.
+        config.guided_grammar = None;
+        assert_eq!(
+            config.active_grammar().as_deref(),
+            Some(Config::BASH_GRAMMAR)
+        );
+    }
+
+    #[test]
+    fn test_bash_mode_roundtrips_toml() {
+        let (mut config, _temp_dir) = setup_test_config();
+        config.bash_mode = true;
+        config.save().unwrap();
+
+        let content = fs::read_to_string(config.config_dir.join("config.toml")).unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.bash_mode);
+    }
+
+    #[test]
     fn test_effective_auto_correction() {
         let mut config = Config::new().unwrap();
 
@@ -739,6 +869,46 @@ another_unknown = 42
         let (server, model) = config.resolve_server(None);
         assert_eq!(server, config.whisper_server);
         assert_eq!(model, config.model);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_save_restricts_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut config, _temp_dir) = setup_test_config();
+        config.api_key = Some("gsk_secret".to_string());
+        config.save().unwrap();
+
+        let mode = fs::metadata(config.config_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        // Only the owner read/write bits should be set.
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "config should be 0600, got {:o}",
+            mode & 0o777
+        );
+    }
+
+    #[test]
+    fn test_server_has_redundant_v1() {
+        let mut config = Config::new().unwrap();
+
+        config.whisper_server = Url::parse("https://api.groq.com/openai/v1").unwrap();
+        assert!(config.server_has_redundant_v1());
+
+        config.whisper_server = Url::parse("https://api.groq.com/openai/v1/").unwrap();
+        assert!(config.server_has_redundant_v1());
+
+        // Correct Groq base — ears appends /v1/audio/transcriptions.
+        config.whisper_server = Url::parse("https://api.groq.com/openai").unwrap();
+        assert!(!config.server_has_redundant_v1());
+
+        // Local server with no path.
+        config.whisper_server = Url::parse("http://127.0.0.1:8178").unwrap();
+        assert!(!config.server_has_redundant_v1());
     }
 
     #[test]

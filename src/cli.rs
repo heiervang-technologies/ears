@@ -58,6 +58,12 @@ pub enum Commands {
         url: Option<String>,
     },
 
+    /// Validate the active config: print a summary and check server health
+    Test {
+        /// Optional audio file (WAV) to run a sample transcription against
+        file: Option<String>,
+    },
+
     /// Toggle auto-enter on the running ears instance
     #[command(alias = "ae")]
     AutoEnter,
@@ -210,6 +216,24 @@ mod tests {
                 assert_eq!(url.as_deref(), Some("http://localhost:8080"));
             }
             _ => panic!("Expected Server command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_test_no_file() {
+        let cli = Cli::try_parse_from(["ears", "test"]).unwrap();
+        match cli.command {
+            Some(Commands::Test { file }) => assert!(file.is_none()),
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_test_with_file() {
+        let cli = Cli::try_parse_from(["ears", "test", "sample.wav"]).unwrap();
+        match cli.command {
+            Some(Commands::Test { file }) => assert_eq!(file.as_deref(), Some("sample.wav")),
+            _ => panic!("Expected Test command"),
         }
     }
 
