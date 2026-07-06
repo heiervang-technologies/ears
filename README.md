@@ -105,11 +105,24 @@ device = "alsa_input.usb-..."
 # language = "en"          # Optional (auto-detects from keyboard layout)
 # api_key = "sk-..."       # Optional (for authenticated ASR services)
 # model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
+# prompt = "vLLM, PyTorch" # Optional (context biasing: names, acronyms, jargon)
 
 [text_filters]
 lowercase = false
 remove_punctuation = false
 ```
+
+> **Server URL:** ears sends requests to `{server}/v1/audio/transcriptions`,
+> appending `/v1/audio/transcriptions` for you. Set `server` to the host (and
+> base path) **without** a trailing `/v1` — e.g. Groq is
+> `https://api.groq.com/openai`, not `.../openai/v1`. A trailing `/v1` produces
+> a doubled `/v1/v1/...` path that 404s; `ears test` warns about this.
+
+> **Secrets:** `api_key` is stored in plaintext, so ears writes config files
+> with `0600` permissions. The `EARS_API_KEY` (and other `EARS_*`) environment
+> overrides only apply to interactive runs — a keybind-launched `ears toggle`
+> inherits the graphical session environment, not your shell, so for
+> push-to-talk the key must live in the config file.
 
 ### Profiles
 
@@ -138,6 +151,21 @@ Priority: `-p` flag > `EARS_PROFILE` env var > default `config.toml`.
 ears server http://localhost:8178   # Set
 ears server                          # Show current
 ```
+
+### Test the configuration
+
+Validate the active profile before binding a key to it. `ears test` prints a
+summary (server, endpoint, model, device, language, and whether an API key is
+set — masked), then runs a health check against the server:
+
+```bash
+ears test                 # Summary + server health check
+ears -p groq test         # Test a specific profile
+ears test sample.wav      # Also run a sample transcription
+```
+
+It exits non-zero if the server is unreachable or transcription fails, so it
+also works in scripts.
 
 ### Select microphone
 
