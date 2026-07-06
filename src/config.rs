@@ -32,6 +32,14 @@ fn default_pre_speech_buffer_ms() -> u64 {
     500
 }
 
+fn default_duck_enabled() -> bool {
+    false
+}
+
+fn default_duck_percent() -> u8 {
+    50
+}
+
 fn default_auto_enter() -> bool {
     true
 }
@@ -74,6 +82,14 @@ pub struct VadSettings {
     /// Keeps recent audio so utterance onsets are not clipped
     #[serde(default = "default_pre_speech_buffer_ms")]
     pub pre_speech_buffer_ms: u64,
+    /// Enable volume ducking when speech is detected (default: false)
+    /// Lowers the system audio sink while you talk, restores when you stop.
+    #[serde(default = "default_duck_enabled")]
+    pub duck_enabled: bool,
+    /// Volume reduction percent when ducking (0-100, default: 50)
+    /// 50 = halve current volume; 100 = mute
+    #[serde(default = "default_duck_percent")]
+    pub duck_percent: u8,
 }
 
 impl Default for VadSettings {
@@ -83,6 +99,8 @@ impl Default for VadSettings {
             min_speech_duration_ms: default_min_speech_duration_ms(),
             max_silence_duration_ms: default_max_silence_duration_ms(),
             pre_speech_buffer_ms: default_pre_speech_buffer_ms(),
+            duck_enabled: default_duck_enabled(),
+            duck_percent: default_duck_percent(),
         }
     }
 }

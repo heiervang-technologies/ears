@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-09
+
+First public release. Ears is now considered stable and ready for general use.
+
 ### Added
 - `ears test [FILE]` — validate the active profile: prints a summary (server, endpoint, model, device, language, masked API key), runs a server health check, and optionally transcribes a sample audio file. Exits non-zero on failure.
 - Warning when the configured `server` URL ends in `/v1` — ears appends `/v1/audio/transcriptions` itself, so a trailing `/v1` produces a doubled `/v1/v1/...` path that 404s.
+- Volume ducking — optionally lowers system volume while VAD detects speech, restoring on speech end. Toggle and percentage adjustable in TUI config panel.
+- TUI header refresh — bolder branding, right-aligned status indicator, version display
+- README — sharper opening hook, updated feature list, accurate project structure
 
 ### Changed
+- Release workflow now reads version from `Cargo.toml` instead of auto-bumping from commit count. Releases happen on intentional version bumps.
+- Versioning reset to `1.0.0` to mark the first stable public release.
 - Config files are now written with `0600` permissions, since they may contain a plaintext `api_key`.
 - README: documented the `{server}/v1/audio/transcriptions` endpoint behavior, the `ears test` command, the plaintext-key/0600 note, and that `EARS_*` env overrides do not reach keybind-launched `ears toggle`.
 

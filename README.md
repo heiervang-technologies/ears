@@ -1,23 +1,28 @@
 # ears
 
-A production-grade speech recognition daemon for Linux that integrates with whisper.cpp (or any OpenAI-compatible ASR server) and your desktop workflow.
+**Voice-to-text for your Linux desktop.** Press a hotkey, speak, and your words appear wherever the cursor is. Or leave VAD mode on and let it transcribe continuously, hands-free.
+
+Backend-agnostic — works with local [whisper.cpp](https://github.com/ggerganov/whisper.cpp), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), or any OpenAI-compatible ASR endpoint (Groq, OpenAI, your own server).
 
 ![ears TUI demo](demo.gif)
 
 ## Features
 
-- **Interactive TUI**: Terminal UI with real-time status, VAD mode, live transcription, and configuration (default mode)
-- **Push-to-talk**: Bind `ears toggle` to a keyboard shortcut for quick dictation
-- **VAD mode**: Voice Activity Detection for hands-free continuous transcription (`ears vad`)
-- **Streaming transcription**: Real-time text output using LocalAgreement policy for stable text
-- **Text filters**: Optional lowercase conversion and punctuation removal
-- **Bash mode**: Constrain dictation to valid shell syntax via grammar-guided decoding — speak commands, get code
-- **Language detection**: Automatic language selection from keyboard layout (Hyprland + GNOME)
-- **Smart text input**: Uses `wtype` on Hyprland/Wayland, clipboard paste via `ydotool` elsewhere
-- **PipeWire audio**: Native support for modern Linux audio stack
-- **Audio feedback**: Embedded beep sounds with custom sound override support
-- **State management**: File-based locking and state with automatic crash recovery
-- **Post-transcribe hooks**: Run custom scripts after each transcription
+- **Interactive TUI** — Terminal UI with real-time status, VAD mode, live transcription, and configuration (default mode)
+- **Push-to-talk** — bind `ears toggle` to a keyboard shortcut for quick dictation
+- **VAD mode** — hands-free voice activity detection with auto-transcription (`ears vad`)
+- **Streaming transcription** — real-time text output with LocalAgreement for stable progressive output
+- **Volume ducking** — optionally lowers system volume while you're speaking
+- **Bash mode** — constrain dictation to valid shell syntax via grammar-guided decoding (speak commands, get code)
+- **Profiles** — switch between local whisper and cloud APIs (Groq, OpenAI, etc.) per-invocation
+- **Text filters** — optional lowercase conversion and punctuation removal
+- **Language detection** — auto-detects from keyboard layout (Hyprland + GNOME)
+- **Smart text input** — uses `wtype` on Hyprland/Wayland, clipboard paste via `ydotool` elsewhere
+- **PipeWire audio** — native support for the modern Linux audio stack
+- **Post-transcribe hooks** — run custom scripts after each transcription
+- **Audio feedback** — embedded cue sounds, customizable with custom sound override support
+- **State management** — file-based locking and state with automatic crash recovery
+- **No telemetry** — audio goes only to the server you configure
 
 ## Prerequisites
 
@@ -339,27 +344,28 @@ ears/
 │   ├── lock.rs              # File locking (single instance)
 │   ├── process.rs           # Child process management
 │   ├── audio.rs             # Audio device discovery
-│   ├── recording.rs         # Recording orchestration
 │   ├── whisper.rs           # Whisper HTTP client
-│   ├── desktop.rs           # Notifications, audio feedback, text input, keyboard detection
+│   ├── desktop.rs           # Notifications, feedback, text input, keyboard detection
+│   ├── ducker.rs            # System volume ducking during speech
 │   ├── text_filters.rs      # Text transformation filters
 │   ├── streaming.rs         # Streaming transcription + LocalAgreement
 │   ├── streaming_engine.rs  # Streaming engine coordinator
-│   ├── vad.rs               # Voice activity detection
+│   ├── vad.rs               # Voice activity detection (Silero)
 │   ├── continuous_capture.rs# Continuous audio capture
 │   ├── progressive_typing.rs# Progressive text output
+│   ├── ipc.rs               # Unix domain socket IPC server
+│   ├── ws_input.rs          # WebSocket audio input mode
 │   └── tui/
 │       ├── mod.rs           # TUI module exports
 │       ├── app.rs           # TUI application state
 │       ├── ui.rs            # TUI rendering
 │       └── event.rs         # TUI event handling
-├── sounds/                  # Embedded sound files
-├── docs/                    # Documentation
-├── tests/                   # Integration tests
+├── sounds/                  # Embedded cue sounds
+├── docs/                    # Architecture and design docs
+├── tests/                   # Integration and snapshot tests
 ├── install.sh               # Installation script
 ├── Cargo.toml               # Rust package manifest
-├── README.md                # This file
-└── CLAUDE.md                # Agent instructions
+└── README.md                # This file
 ```
 
 ### Build & Test

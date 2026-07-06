@@ -40,7 +40,7 @@ fn test_render_initial_state() {
     println!("\n{}", output);
 
     // Basic assertions about what should be visible
-    assert!(output.contains("ears"));
+    assert!(output.contains("EARS"));
     assert!(output.contains("Configuration"));
     assert!(output.contains("Logs"));
     // Should show either idle (○) or external VAD active (◉)
@@ -117,7 +117,7 @@ fn test_render_different_terminal_sizes() {
     assert!(!output_large.is_empty());
 
     // Large terminal should contain the app name
-    assert!(output_large.contains("ears"));
+    assert!(output_large.contains("EARS"));
 
     // Small terminal might truncate text, so just verify it renders something
     // without panicking

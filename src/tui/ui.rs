@@ -64,32 +64,49 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         ('○', Color::Gray, "Idle".to_string())
     };
 
-    let title = Line::from(vec![
-        Span::styled(
-            "ears ",
-            Style::default()
-                .fg(theme.title)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            concat!("v", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(theme.dim),
-        ),
-        Span::raw(" │ Status: "),
-        Span::styled(status_char.to_string(), Style::default().fg(status_color)),
-        Span::raw(" "),
-        Span::styled(status_text, Style::default().fg(status_color)),
-    ]);
-
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_header));
 
-    let paragraph = Paragraph::new(title)
-        .block(block)
-        .alignment(Alignment::Left);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    frame.render_widget(paragraph, area);
+    let brand = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "EARS",
+            Style::default()
+                .fg(theme.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            concat!("v", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(theme.dim),
+        ),
+        Span::raw("  "),
+        Span::styled("·", Style::default().fg(theme.dim)),
+        Span::raw("  "),
+        Span::styled(
+            "speech recognition for linux",
+            Style::default().fg(theme.dim),
+        ),
+    ]);
+
+    let status = Line::from(vec![
+        Span::styled(status_char.to_string(), Style::default().fg(status_color)),
+        Span::raw("  "),
+        Span::styled(
+            status_text,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+
+    frame.render_widget(Paragraph::new(brand).alignment(Alignment::Left), inner);
+    frame.render_widget(Paragraph::new(status).alignment(Alignment::Right), inner);
 }
 
 /// Render the tab bar
@@ -394,6 +411,39 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::styled(" [+/-]", Style::default().fg(Color::DarkGray)),
     ]));
+
+    // Volume Ducking section
+    text.push(Line::from(""));
+    text.push(Line::from(vec![Span::styled(
+        "Volume Ducking:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    let duck_toggle_line = text.len();
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.duck_enabled { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Enabled"),
+        Span::styled(" [Shift+D]", Style::default().fg(Color::DarkGray)),
+    ]));
+    let duck_slider_line = text.len();
+    const DUCK_BAR_WIDTH: usize = 20;
+    let filled = (app.duck_percent as usize * DUCK_BAR_WIDTH).div_ceil(100);
+    let bar: String = (0..DUCK_BAR_WIDTH)
+        .map(|i| if i < filled { '█' } else { '░' })
+        .collect();
+    text.push(Line::from(vec![
+        Span::raw("  ["),
+        Span::styled(bar, Style::default().fg(theme.accent)),
+        Span::raw("] "),
+        Span::styled(
+            format!("{}%", app.duck_percent),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(" [ / ]", Style::default().fg(Color::DarkGray)),
+    ]));
     text.push(Line::from(""));
 
     // Show appropriate help text
@@ -415,7 +465,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] Bash  [+/-] Vol",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] Bash  [+/-] Vol  [Shift+D] Duck  [ / ] Duck%",
             Style::default().fg(theme.dim),
         )));
     }
@@ -509,6 +559,25 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         Rect::new(inner_x, inner_y + typing_mode_line as u16, inner_width, 1),
         ClickAction::CycleTypingMode,
     );
+
+    // Duck toggle row
+    app.add_clickable_region(
+        Rect::new(inner_x, inner_y + duck_toggle_line as u16, inner_width, 1),
+        ClickAction::ToggleDuck,
+    );
+
+    // Duck slider — register one cell per character of the bar.
+    // Layout: "  [<bar>] NN%". Bar starts at column 3 (two spaces + '[').
+    let bar_x = inner_x.saturating_add(3);
+    let bar_y = inner_y + duck_slider_line as u16;
+    for i in 0..DUCK_BAR_WIDTH as u16 {
+        // Map cell index → percent. Treat right edge as 100%, left as 0%.
+        let pct = ((i as u32 + 1) * 100 / DUCK_BAR_WIDTH as u32) as u8;
+        app.add_clickable_region(
+            Rect::new(bar_x + i, bar_y, 1, 1),
+            ClickAction::SetDuckPercent(pct),
+        );
+    }
 
     // Device picker clickable regions
     if app.device_picker_open && app.device_picker_error.is_none() {
@@ -753,6 +822,7 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
         "Inactive"
     };
 
+    let duck_box = if app.duck_enabled { "[x]" } else { "[ ]" };
     let mut text = vec![
         Line::from(""),
         Line::from(vec![
@@ -763,6 +833,11 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
             ),
             Span::raw(" "),
             Span::styled(vad_status_text, Style::default().fg(vad_status_color)),
+            Span::raw("    "),
+            Span::styled("Duck: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(duck_box, Style::default().fg(theme.accent)),
+            Span::raw(format!(" {}%", app.duck_percent)),
+            Span::styled(" [Shift+D]", Style::default().fg(theme.dim)),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -907,6 +982,19 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
     let inner_x = area.x + 1;
     let inner_width = area.width.saturating_sub(2);
 
+    // Duck toggle sits on the same line as VAD Mode — register it FIRST
+    // so the narrower duck rect wins over the full-line VAD rect on overlap.
+    // Layout: "VAD Mode: <char> <status_text>    Duck: [x] NN% [Shift+D]"
+    let duck_prefix_cols = 10 + 1 + 1 + vad_status_text.len() + 4; // up to "Duck: "
+    let duck_label = format!(" Duck: [x] {}% [Shift+D]", app.duck_percent);
+    let duck_width = duck_label.len() as u16;
+    let duck_x = inner_x.saturating_add(duck_prefix_cols as u16);
+    let duck_rect_width = duck_width.min(inner_width.saturating_sub(duck_prefix_cols as u16));
+    app.add_clickable_region(
+        Rect::new(duck_x, inner_y + vad_line as u16, duck_rect_width, 1),
+        ClickAction::ToggleDuck,
+    );
+
     // VAD Mode line (line index 1, after empty line at 0)
     app.add_clickable_region(
         Rect::new(inner_x, inner_y + vad_line as u16, inner_width, 1),
@@ -965,6 +1053,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  Tab/h/l     Switch panels"),
         Line::from("  j/k         Scroll"),
         Line::from("  v/Space     Toggle VAD"),
+        Line::from("  Shift+D     Toggle volume ducking"),
         Line::from("  :           Command mode"),
         Line::from("  ?           This help"),
         Line::from(""),
@@ -980,6 +1069,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  p           Toggle punctuation filter"),
         Line::from("  s           Toggle strict alphabet filter"),
         Line::from("  n           Toggle auto-enter"),
+        Line::from("  [ / ]       Adjust duck percent ±5%"),
         Line::from(""),
         Line::from(Span::styled(
             "Live Panel:",

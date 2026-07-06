@@ -283,6 +283,8 @@ fn test_vad_settings_toml_roundtrip() {
         min_speech_duration_ms: 200,
         max_silence_duration_ms: 500,
         pre_speech_buffer_ms: 300,
+        duck_enabled: true,
+        duck_percent: 60,
     };
 
     let toml_str = toml::to_string_pretty(&settings).unwrap();

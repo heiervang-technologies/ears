@@ -26,44 +26,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev
 
-      - name: Calculate next version
+      - name: Read version from Cargo.toml
         id: version
         run: |
-          # Get latest version tag
-          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-          if [[ -z "$LATEST_TAG" ]]; then
-            LATEST_TAG="v0.0.0"
+          # Source of truth: Cargo.toml. Releases happen on intentional bumps.
+          VERSION_NUM=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [[ -z "$VERSION_NUM" ]]; then
+            echo "Could not parse version from Cargo.toml" >&2
+            exit 1
           fi
+          NEW_VERSION="v${VERSION_NUM}"
 
-          # Count commits since last tag
-          COMMITS_SINCE=$(git rev-list ${LATEST_TAG}..HEAD --count 2>/dev/null || echo "1")
-
-          # If no new commits, skip release
-          if [[ "$COMMITS_SINCE" == "0" ]]; then
+          # Skip if a release tag for this version already exists
+          if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
             echo "SKIP=true" >> $GITHUB_OUTPUT
-            echo "No new commits since $LATEST_TAG, skipping release"
+            echo "Tag $NEW_VERSION already exists, skipping release"
             exit 0
           fi
 
-          # Extract version parts and bump patch
-          BASE_VERSION=${LATEST_TAG#v}
-          MAJOR=$(echo $BASE_VERSION | cut -d. -f1)
-          MINOR=$(echo $BASE_VERSION | cut -d. -f2)
-          PATCH=$(echo $BASE_VERSION | cut -d. -f3)
-          NEW_PATCH=$((PATCH + COMMITS_SINCE))
-
-          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_NUM=${NEW_VERSION#v}" >> $GITHUB_OUTPUT
+          echo "VERSION_NUM=$VERSION_NUM" >> $GITHUB_OUTPUT
           echo "SKIP=false" >> $GITHUB_OUTPUT
-          echo "New version: $NEW_VERSION"
-
-      - name: Update Cargo.toml version
-        if: steps.version.outputs.SKIP != 'true'
-        run: |
-          VERSION_NUM=${{ steps.version.outputs.VERSION_NUM }}
-          sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
-          echo "Updated Cargo.toml to version ${VERSION_NUM}"
+          echo "Releasing $NEW_VERSION"
 
       - name: Build release
         if: steps.version.outputs.SKIP != 'true'
@@ -98,14 +82,3 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Sync version to repo
-        if: steps.version.outputs.SKIP != 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          VERSION_NUM=${{ steps.version.outputs.VERSION_NUM }}
-          sed -i "0,/^version = .*/s//version = \"${VERSION_NUM}\"/" Cargo.toml
-          git add Cargo.toml
-          git diff --cached --quiet || git commit -m "chore: bump version to ${VERSION_NUM} [skip ci]"
-          git push origin HEAD:main || true

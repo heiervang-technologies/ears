@@ -137,9 +137,9 @@ fn bug_hunt_all_states_have_app_name() {
     let mut bugs = Vec::new();
 
     for (state, _app, output) in &states {
-        if !output.contains("ears") {
+        if !output.contains("EARS") {
             bugs.push(Bug {
-                description: "App name 'ears' missing from output".to_string(),
+                description: "App name 'EARS' missing from output".to_string(),
                 state: state.clone(),
                 visual_sample: output.lines().take(5).collect::<Vec<_>>().join("\n"),
             });
@@ -388,7 +388,7 @@ fn bug_hunt_summary_report() {
 
     // Check 1: App name
     for (state, _, output) in &states {
-        if !output.contains("ears") {
+        if !output.contains("EARS") {
             all_bugs.push(Bug {
                 description: "[CRITICAL] App name missing".to_string(),
                 state: state.clone(),

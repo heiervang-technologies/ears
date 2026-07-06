@@ -494,18 +494,22 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let mut auto_enter = config.auto_enter;
 
     let save_to_clipboard = config.save_to_clipboard;
+    let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
+    let event_ducker = ducker.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
             match event {
                 ears::streaming_engine::StreamingEvent::SpeechProbable => {
                     AudioFeedback::beep_vad_speech_start().ok();
+                    event_ducker.on_speech_probable();
                 }
                 ears::streaming_engine::StreamingEvent::SpeechStarted => {
                     AudioFeedback::beep_vad_speech_confirm().ok();
                 }
                 ears::streaming_engine::StreamingEvent::SpeechEnded => {
                     AudioFeedback::beep_vad_end().ok();
+                    event_ducker.on_speech_ended();
                 }
                 ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
@@ -551,6 +555,9 @@ async fn handle_vad(config: &Config) -> Result<()> {
 
     let _ = shutdown_tx.send(true);
     let _ = pipeline_handle.await;
+    // Restore audio volume if we shut down mid-speech.
+    ducker.on_speech_ended();
+    drop(ducker);
     ears::ipc::cleanup_socket();
     ears::ipc::cleanup_cmd_socket();
     if let Err(e) = std::fs::remove_file(&vad_pid_file) {
