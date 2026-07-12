@@ -35,18 +35,19 @@ jobs:
             echo "Could not parse version from Cargo.toml" >&2
             exit 1
           fi
+          exec 3>>"$GITHUB_OUTPUT"
           NEW_VERSION="v${VERSION_NUM}"
 
           # Skip if a release tag for this version already exists
           if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
-            echo "SKIP=true" >> $GITHUB_OUTPUT
+            echo "SKIP=true" >&3
             echo "Tag $NEW_VERSION already exists, skipping release"
             exit 0
           fi
 
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_NUM=$VERSION_NUM" >> $GITHUB_OUTPUT
-          echo "SKIP=false" >> $GITHUB_OUTPUT
+          echo "VERSION=$NEW_VERSION" >&3
+          echo "VERSION_NUM=$VERSION_NUM" >&3
+          echo "SKIP=false" >&3
           echo "Releasing $NEW_VERSION"
 
       - name: Build release
@@ -60,19 +61,19 @@ jobs:
           cp target/release/ears release/
           cp README.md release/ 2>/dev/null || true
           cp LICENSE release/ 2>/dev/null || true
-          cd release && tar -czvf ../ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz *
+          cd release && tar -czvf "../ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz" -- ./*
 
       - name: Create git tag
         if: steps.version.outputs.SKIP != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.version.outputs.VERSION }}
-          git push origin ${{ steps.version.outputs.VERSION }}
+          git tag "${{ steps.version.outputs.VERSION }}"
+          git push origin "${{ steps.version.outputs.VERSION }}"
 
       - name: Create GitHub release
         if: steps.version.outputs.SKIP != 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: ${{ steps.version.outputs.VERSION }}

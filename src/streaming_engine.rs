@@ -279,15 +279,14 @@ impl StreamingEngine {
             return Ok(());
         }
 
+        if self.guided_grammar.is_some() {
+            return self.process_command_segment(transcript, segment, start_time);
+        }
+
         // Apply text filters (lowercase, remove punctuation, strict alphabet).
-        // Bash mode bypasses them: the grammar already guarantees valid shell
-        // syntax, and the filters would mangle it (lowercase/strip punctuation).
-        let transcript = if self.guided_grammar.is_some() {
-            transcript
-        } else {
-            self.text_filters
-                .apply(&transcript, self.language.as_deref())
-        };
+        let transcript = self
+            .text_filters
+            .apply(&transcript, self.language.as_deref());
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
             return Ok(());
@@ -369,6 +368,82 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Process a grammar-constrained segment as one discrete command.
+    fn process_command_segment(
+        &mut self,
+        command: String,
+        segment: SpeechSegment,
+        start_time: Instant,
+    ) -> Result<(), StreamingEngineError> {
+        info!("Transcribed command: {}", command);
+
+        self.local_agreement.reset();
+        self.progressive_typing.reset();
+        self.accumulated_text = command.clone();
+
+        let typing_start = Instant::now();
+        match TextInput::type_text(&command, self.typing_mode) {
+            Ok(()) => {
+                info!(
+                    "Typed command ({} chars) in {:?}",
+                    command.chars().count(),
+                    typing_start.elapsed()
+                );
+                self.stats.chars_typed += command.chars().count();
+            }
+            Err(e) => {
+                warn!(
+                    "Command typing error after {:?}: {}",
+                    typing_start.elapsed(),
+                    e
+                );
+                self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
+            }
+        }
+
+        if self.auto_enter {
+            if let Err(e) = TextInput::send_enter() {
+                warn!("Failed to send Enter key: {}", e);
+            }
+        }
+
+        self.finish_segment(command, segment, start_time);
+        Ok(())
+    }
+
+    /// Update stats and emit transcript/stat events for a completed segment.
+    fn finish_segment(&mut self, text: String, segment: SpeechSegment, start_time: Instant) {
+        let latency_ms = start_time.elapsed().as_millis() as u64;
+        self.stats.segments_processed += 1;
+        self.stats.total_latency_ms += latency_ms;
+        if self.stats.segments_processed > 0 {
+            self.stats.avg_latency_ms =
+                self.stats.total_latency_ms / self.stats.segments_processed as u64;
+        }
+
+        self.send_event(StreamingEvent::TranscriptUpdate {
+            committed: self.accumulated_text.clone(),
+            uncommitted: String::new(),
+        });
+
+        self.send_event(StreamingEvent::SegmentCompleted {
+            text,
+            duration_ms: segment.end_ms - segment.start_ms,
+        });
+
+        self.send_event(StreamingEvent::StatsUpdate {
+            segments_processed: self.stats.segments_processed,
+            avg_latency_ms: self.stats.avg_latency_ms,
+        });
+
+        info!(
+            "Segment #{} total: {:?} (avg latency: {}ms)",
+            self.stats.segments_processed,
+            start_time.elapsed(),
+            self.stats.avg_latency_ms
+        );
     }
 
     /// Save audio samples to WAV file
@@ -494,6 +569,9 @@ impl StreamingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_streaming_stats_default() {
@@ -501,5 +579,101 @@ mod tests {
         assert_eq!(stats.segments_processed, 0);
         assert_eq!(stats.avg_latency_ms, 0);
         assert_eq!(stats.chars_typed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_guided_grammar_segments_are_discrete_commands() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": "language English<asr_text>git status."
+                    }
+                }]
+            })))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": "language English<asr_text>pwd."
+                    }
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let whisper_client = Arc::new(
+            WhisperClient::new(mock_server.uri()).with_model(Some("test-asr".to_string())),
+        );
+        let mut engine = StreamingEngine::new(
+            whisper_client,
+            StreamingConfig {
+                progressive_typing: false,
+                ..StreamingConfig::default()
+            },
+            VadConfig::default(),
+            ProgressiveTypingConfig {
+                enabled: false,
+                auto_correction: false,
+                typing_mode: TypingMode::None,
+            },
+            temp_dir.path().to_path_buf(),
+        )
+        .unwrap();
+        engine.set_guided_grammar(Some("root ::= \"git status\" | \"pwd\"".to_string()));
+        engine.set_typing_enabled(false, false, TypingMode::None, false);
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        engine.set_event_sender(event_tx);
+
+        engine
+            .process_segment(SpeechSegment {
+                start_ms: 0,
+                end_ms: 400,
+                samples: vec![0.1; 1600],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(engine.committed_text(), "git status");
+        assert_eq!(engine.stats().segments_processed, 1);
+        assert_eq!(engine.stats().chars_typed, "git status".chars().count());
+
+        engine
+            .process_segment(SpeechSegment {
+                start_ms: 500,
+                end_ms: 800,
+                samples: vec![0.1; 1600],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(engine.committed_text(), "pwd");
+        assert_eq!(engine.stats().segments_processed, 2);
+        assert_eq!(
+            engine.stats().chars_typed,
+            "git status".chars().count() + "pwd".chars().count()
+        );
+
+        let mut committed_updates = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            if let StreamingEvent::TranscriptUpdate { committed, .. } = event {
+                committed_updates.push(committed);
+            }
+        }
+
+        assert_eq!(
+            committed_updates,
+            vec!["git status".to_string(), "pwd".to_string()]
+        );
     }
 }
