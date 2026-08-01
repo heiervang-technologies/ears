@@ -2,6 +2,7 @@
 name = "ears"
 version = "1.0.0"
 edition = "2021"
+rust-version = "1.88"
 authors = ["Mark Sverdhei <mark.sverdhei@heiervang.com>"]
 description = "A production-grade speech recognition daemon for Linux"
 license = "MIT"
@@ -38,8 +39,8 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 
 # TUI framework (Iteration 7)
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
+crossterm = "0.29"
 
 [dev-dependencies]
 tempfile = "3.16"
