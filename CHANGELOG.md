@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StreamingEvent::SpeechRejected` and `StreamingEvent::CaptureStopped { reason }` (additive; existing variants and payloads unchanged).
 - Deterministic probability-sequence tests for the VAD state machine and engine events (candidate rejection, confirmation, silence termination, second/third utterances) and fake-backend ducking tests including the late-duck race.
 
+### Changed
+- Upgraded Ratatui to 0.30.2 and Crossterm to 0.29.0, removing the transitive `lru` 0.12.5 and `paste` 1.0.15 RustSec findings.
+- Declared and continuously checks Rust 1.88 as the minimum supported Rust version.
+
 ## [1.0.0] - 2026-05-09
 
 First public release. Ears is now considered stable and ready for general use.
