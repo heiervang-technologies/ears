@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Upgraded Ratatui to 0.30.2 and Crossterm to 0.29.0, removing the transitive `lru` 0.12.5 and `paste` 1.0.15 RustSec findings.
 - Declared and continuously checks Rust 1.88 as the minimum supported Rust version.
+- Default `vad.max_silence_duration_ms` raised from 700 ms to 1200 ms so natural mid-sentence pauses no longer split one request into several utterances. Explicit values in existing configs are unchanged; lower it for faster dispatch.
 
 ## [1.0.0] - 2026-05-09
 
