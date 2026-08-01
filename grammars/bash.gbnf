@@ -21,6 +21,9 @@
 # Bounded {m,n} repetition is deliberate: it prevents runaway token loops
 # (e.g. "dirdirdir...") on hard-to-parse audio.
 #
+# Lowercase-only: flag/word/path character classes exclude uppercase so
+# dictated commands can never land as "Ls"/"GIT". Quoted strings remain free.
+#
 # Scope: an allow-list of common commands plus generic arg/flag/path/pipe/
 # redirect structure. NOT full POSIX (no subshells, command substitution,
 # heredocs, arithmetic, brace expansion).
@@ -68,8 +71,8 @@ seq ::= ws ("&&" | "||" | ";") ws
 
 ws ::= " "
 
-flagchar ::= [a-zA-Z0-9]
-wordchar ::= [a-zA-Z0-9._+=@:,%/-]
-pathchar ::= [a-zA-Z0-9._/~-]
+flagchar ::= [a-z0-9]
+wordchar ::= [a-z0-9._+=@:,%/-]
+pathchar ::= [a-z0-9._/~-]
 dqchar   ::= [^"\\]
 sqchar   ::= [^']
