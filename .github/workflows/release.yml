@@ -29,13 +29,17 @@ jobs:
       - name: Read version from Cargo.toml
         id: version
         run: |
+          set -euo pipefail
           # Source of truth: Cargo.toml. Releases happen on intentional bumps.
-          VERSION_NUM=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          PACKAGE_ID=$(cargo pkgid)
+          VERSION_NUM="${PACKAGE_ID##*#}"
+          VERSION_NUM="${VERSION_NUM##*@}"
           if [[ -z "$VERSION_NUM" ]]; then
             echo "Could not parse version from Cargo.toml" >&2
             exit 1
           fi
           NEW_VERSION="v${VERSION_NUM}"
+          ./scripts/check-version.sh "$NEW_VERSION"
 
           # Skip if a release tag for this version already exists
           if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
@@ -52,6 +56,16 @@ jobs:
       - name: Build release
         if: steps.version.outputs.SKIP != 'true'
         run: cargo build --release --verbose
+
+      - name: Verify binary version
+        if: steps.version.outputs.SKIP != 'true'
+        run: |
+          expected="ears ${{ steps.version.outputs.VERSION_NUM }}"
+          actual=$(target/release/ears --version)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Binary version mismatch: expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
 
       - name: Create tarball
         if: steps.version.outputs.SKIP != 'true'
