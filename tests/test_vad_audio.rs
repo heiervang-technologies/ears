@@ -273,7 +273,7 @@ fn test_vad_settings_default_in_config() {
     let config: ears::config::VadSettings = Default::default();
     assert!((config.speech_threshold - 0.5).abs() < f32::EPSILON);
     assert_eq!(config.min_speech_duration_ms, 300);
-    assert_eq!(config.max_silence_duration_ms, 700);
+    assert_eq!(config.max_silence_duration_ms, 1200);
 }
 
 #[test]
@@ -324,5 +324,5 @@ device = "test-mic"
     let config: ears::Config = toml::from_str(toml_str).unwrap();
     assert!((config.vad.speech_threshold - 0.5).abs() < f32::EPSILON);
     assert_eq!(config.vad.min_speech_duration_ms, 300);
-    assert_eq!(config.vad.max_silence_duration_ms, 700);
+    assert_eq!(config.vad.max_silence_duration_ms, 1200);
 }

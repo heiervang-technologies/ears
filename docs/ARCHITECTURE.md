@@ -154,7 +154,7 @@ Uses the Silero VAD v5 neural network model via ONNX Runtime (`voice_activity_de
 |-----------|---------|-------------|
 | `speech_threshold` | 0.5 | Probability threshold for speech detection (0.0-1.0) |
 | `min_speech_duration_ms` | 300 | Minimum speech duration before a segment starts |
-| `max_silence_duration_ms` | 700 | Silence duration that ends a segment |
+| `max_silence_duration_ms` | 1200 | Silence duration that ends a segment |
 | `pre_speech_buffer_ms` | 500 | Ring buffer of recent audio prepended to segments to avoid clipping utterance onsets |
 
 The model operates on fixed 512-sample frames (32ms at 16kHz). `VadSegmentDetector` handles reframing: incoming 1600-sample chunks from `ContinuousCapture` are buffered and processed in exact 512-sample frames. Any remainder is kept for the next call.
@@ -356,7 +356,7 @@ alphabet_threshold = 0.5             # Foreign character proportion threshold (0
 [vad]
 speech_threshold = 0.5               # VAD speech probability threshold (0.0-1.0)
 min_speech_duration_ms = 300         # Minimum speech duration before segment starts
-max_silence_duration_ms = 700        # Silence duration that ends a segment
+max_silence_duration_ms = 1200       # Silence duration that ends a segment
 pre_speech_buffer_ms = 500           # Pre-speech replay buffer duration
 ```
 

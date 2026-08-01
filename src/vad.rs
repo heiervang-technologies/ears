@@ -47,7 +47,7 @@ pub struct VadConfig {
     pub speech_threshold: f32,
     /// Minimum speech duration in milliseconds (default: 300ms)
     pub min_speech_duration_ms: u64,
-    /// Maximum silence duration before ending segment (default: 700ms)
+    /// Maximum silence duration before ending segment (default: 1200ms)
     pub max_silence_duration_ms: u64,
     /// Pre-speech replay buffer duration in milliseconds (default: 500ms)
     /// Audio before VAD triggers is kept in a ring buffer and prepended to the
@@ -61,7 +61,7 @@ impl Default for VadConfig {
             sample_rate: SILERO_SAMPLE_RATE,
             speech_threshold: 0.5,
             min_speech_duration_ms: 300,
-            max_silence_duration_ms: 700,
+            max_silence_duration_ms: 1200,
             pre_speech_buffer_ms: 500,
         }
     }
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(config.sample_rate, 16000);
         assert!((config.speech_threshold - 0.5).abs() < f32::EPSILON);
         assert_eq!(config.min_speech_duration_ms, 300);
-        assert_eq!(config.max_silence_duration_ms, 700);
+        assert_eq!(config.max_silence_duration_ms, 1200);
         assert_eq!(config.pre_speech_buffer_ms, 500);
     }
 
@@ -588,5 +588,37 @@ mod tests {
                 "One frame of silence should not end speech"
             );
         }
+    }
+
+    #[test]
+    fn test_default_hysteresis_tolerates_one_second_pause() {
+        let mut vad = SileroVad::new(VadConfig::default()).unwrap();
+        let silence_frame = generate_silence(32, SILERO_SAMPLE_RATE);
+
+        // Start from a confirmed utterance so this test isolates endpointing
+        // hysteresis from the model's speech-classification behavior.
+        vad.in_speech = true;
+
+        // A natural one-second hesitation must remain part of the utterance.
+        for _ in 0..31 {
+            assert_eq!(
+                vad.process_frame(&silence_frame).unwrap(),
+                VadResult::Speech
+            );
+        }
+        assert!(vad.is_speaking());
+
+        // The 1.2-second default is crossed on the 38th 32ms frame.
+        for _ in 0..6 {
+            assert_eq!(
+                vad.process_frame(&silence_frame).unwrap(),
+                VadResult::Speech
+            );
+        }
+        assert_eq!(
+            vad.process_frame(&silence_frame).unwrap(),
+            VadResult::Silence
+        );
+        assert!(!vad.is_speaking());
     }
 }
