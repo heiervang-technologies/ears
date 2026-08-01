@@ -379,6 +379,9 @@ cargo fmt                      # Format
 RUST_LOG=debug cargo run       # Run with debug logging
 ```
 
+Release maintainers should follow [docs/RELEASING.md](docs/RELEASING.md). The
+package version in `Cargo.toml` is the canonical version.
+
 ## Security
 
 - Audio is sent to the configured whisper server only (defaults to localhost)
