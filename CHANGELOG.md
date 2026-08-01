@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-01
+
+### Changed
+- Reconciled the Cargo package, CLI, Git tag, and GitHub release version at `1.2.0` after the historical generated-build `v1.1.x` series.
+- Releases now use intentional Semantic Versioning bumps, validate tag and package agreement, and verify the built binary reports the published version.
+
 ## [1.0.0] - 2026-05-09
 
 First public release. Ears is now considered stable and ready for general use.
