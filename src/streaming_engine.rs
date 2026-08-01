@@ -295,23 +295,32 @@ impl StreamingEngine {
 
         info!("Transcribed: {}", transcript);
 
-        // Each VAD segment is a discrete utterance. Reset agreement state so
-        // the previous segment's text doesn't interfere, then feed the
-        // transcript twice to force LocalAgreement to commit it immediately.
-        self.local_agreement.reset();
-        self.local_agreement.process(transcript.clone());
-        let (newly_committed, _uncommitted) = self.local_agreement.process(transcript.clone());
+        let guided_command = self.guided_grammar.is_some();
+        let newly_committed = self.commit_transcript(&transcript);
 
-        // Accumulate committed text across segments (space-separated)
-        if !newly_committed.is_empty() {
-            if !self.accumulated_text.is_empty() {
-                self.accumulated_text.push(' ');
+        // Guided output represents one complete command per VAD segment. Type
+        // it directly even when progressive typing is disabled, while keeping
+        // TypingMode::None as the explicit no-input mode used by ws-listen.
+        if guided_command && self.typing_mode != TypingMode::None && !newly_committed.is_empty() {
+            let typing_start = Instant::now();
+            match TextInput::type_text(&newly_committed, self.typing_mode) {
+                Ok(()) => {
+                    let chars = newly_committed.chars().count();
+                    info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
+                    self.stats.chars_typed += chars;
+
+                    if self.auto_enter {
+                        if let Err(e) = TextInput::send_enter() {
+                            warn!("Failed to send Enter key: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Typing error after {:?}: {}", typing_start.elapsed(), e);
+                    self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
+                }
             }
-            self.accumulated_text.push_str(&newly_committed);
-        }
-
-        // Update progressive typing with the full accumulated text
-        if self.config.progressive_typing && !newly_committed.is_empty() {
+        } else if !guided_command && self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
             match self.progressive_typing.update(&self.accumulated_text) {
                 Ok(chars) => {
@@ -369,6 +378,34 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Commit a completed VAD transcript according to the active mode.
+    ///
+    /// Dictation mode preserves the historical space-separated accumulation
+    /// used by progressive typing. Guided mode treats each segment as a fresh
+    /// command and never carries text or typing agreement across segments.
+    fn commit_transcript(&mut self, transcript: &str) -> String {
+        if self.guided_grammar.is_some() {
+            self.local_agreement.reset();
+            self.progressive_typing.reset();
+            self.accumulated_text.clear();
+            self.accumulated_text.push_str(transcript);
+            return transcript.to_string();
+        }
+
+        self.local_agreement.reset();
+        self.local_agreement.process(transcript.to_string());
+        let (newly_committed, _uncommitted) = self.local_agreement.process(transcript.to_string());
+
+        if !newly_committed.is_empty() {
+            if !self.accumulated_text.is_empty() {
+                self.accumulated_text.push(' ');
+            }
+            self.accumulated_text.push_str(&newly_committed);
+        }
+
+        newly_committed
     }
 
     /// Save audio samples to WAV file
@@ -482,6 +519,11 @@ impl StreamingEngine {
     /// Update the active guided grammar (bash mode). `None` disables constrained
     /// decoding and returns to the plain transcription endpoint.
     pub fn set_guided_grammar(&mut self, grammar: Option<String>) {
+        if self.guided_grammar.is_some() != grammar.is_some() {
+            self.local_agreement.reset();
+            self.progressive_typing.reset();
+            self.accumulated_text.clear();
+        }
         self.guided_grammar = grammar;
     }
 
@@ -495,11 +537,48 @@ impl StreamingEngine {
 mod tests {
     use super::*;
 
+    fn test_engine() -> StreamingEngine {
+        StreamingEngine::new(
+            Arc::new(WhisperClient::new("http://localhost:8178")),
+            StreamingConfig::default(),
+            VadConfig::default(),
+            ProgressiveTypingConfig::default(),
+            PathBuf::new(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn test_streaming_stats_default() {
         let stats = StreamingStats::default();
         assert_eq!(stats.segments_processed, 0);
         assert_eq!(stats.avg_latency_ms, 0);
         assert_eq!(stats.chars_typed, 0);
+    }
+
+    #[test]
+    fn test_guided_segments_are_discrete_without_progressive_typing() {
+        let mut engine = test_engine();
+        assert!(!engine.config.progressive_typing);
+        engine.set_guided_grammar(Some("root ::= command".to_string()));
+
+        assert_eq!(engine.commit_transcript("git status"), "git status");
+        assert_eq!(engine.committed_text(), "git status");
+
+        assert_eq!(engine.commit_transcript("cargo test"), "cargo test");
+        assert_eq!(engine.committed_text(), "cargo test");
+    }
+
+    #[test]
+    fn test_switching_guided_mode_clears_typing_state() {
+        let mut engine = test_engine();
+        engine.accumulated_text = "previous dictation".to_string();
+
+        engine.set_guided_grammar(Some("root ::= command".to_string()));
+        assert!(engine.committed_text().is_empty());
+
+        engine.commit_transcript("pwd");
+        engine.set_guided_grammar(None);
+        assert!(engine.committed_text().is_empty());
     }
 }
