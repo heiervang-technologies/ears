@@ -3,6 +3,7 @@ name: Rust CI
 on:
   push:
     branches: [ main ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ main ]
 
@@ -25,6 +26,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - name: Verify version metadata
+        run: |
+          release_tag=""
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          fi
+          ./scripts/check-version.sh "$release_tag"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
