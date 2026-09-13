@@ -25,7 +25,7 @@ fn default_min_speech_duration_ms() -> u64 {
 }
 
 fn default_max_silence_duration_ms() -> u64 {
-    700
+    1200
 }
 
 fn default_pre_speech_buffer_ms() -> u64 {
@@ -75,7 +75,7 @@ pub struct VadSettings {
     /// Minimum speech duration in ms before segment starts (default: 300)
     #[serde(default = "default_min_speech_duration_ms")]
     pub min_speech_duration_ms: u64,
-    /// Maximum silence duration in ms before segment ends (default: 700)
+    /// Maximum silence duration in ms before segment ends (default: 1200)
     #[serde(default = "default_max_silence_duration_ms")]
     pub max_silence_duration_ms: u64,
     /// Pre-speech replay buffer in ms (default: 500)
@@ -772,7 +772,7 @@ another_unknown = 42
         let vad = VadSettings::default();
         assert_eq!(vad.speech_threshold, 0.5);
         assert_eq!(vad.min_speech_duration_ms, 300);
-        assert_eq!(vad.max_silence_duration_ms, 700);
+        assert_eq!(vad.max_silence_duration_ms, 1200);
         assert_eq!(vad.pre_speech_buffer_ms, 500);
     }
 

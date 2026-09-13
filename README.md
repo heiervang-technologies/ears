@@ -115,6 +115,10 @@ device = "alsa_input.usb-..."
 [text_filters]
 lowercase = false
 remove_punctuation = false
+
+[vad]
+# Increase this for longer mid-sentence pauses; decrease it for faster dispatch.
+max_silence_duration_ms = 1200
 ```
 
 > **Server URL:** ears sends requests to `{server}/v1/audio/transcriptions`,
