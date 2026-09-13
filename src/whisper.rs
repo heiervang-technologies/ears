@@ -31,6 +31,9 @@ pub enum WhisperError {
     #[error("Invalid audio file: {0}")]
     InvalidAudioFile(String),
 
+    #[error("Invalid client configuration: {0}")]
+    ConfigurationError(String),
+
     #[error("Server returned empty transcription")]
     EmptyTranscription,
 
@@ -320,7 +323,10 @@ impl WhisperClient {
             };
             result.map_err(|e| {
                 warn!("Transcription attempt failed: {}", e);
-                backoff::Error::transient(e)
+                match e {
+                    WhisperError::ConfigurationError(_) => backoff::Error::permanent(e),
+                    _ => backoff::Error::transient(e),
+                }
             })
         })
         .await?;
@@ -452,7 +458,7 @@ impl WhisperClient {
 
         // Chat completions requires a model name; bash mode can't work without one.
         let model = self.model.as_deref().ok_or_else(|| {
-            WhisperError::TranscriptionError(
+            WhisperError::ConfigurationError(
                 "grammar-constrained (bash) mode requires a configured model".to_string(),
             )
         })?;
@@ -758,6 +764,27 @@ mod tests {
                 assert!(msg.contains("does not exist"));
             }
             _ => panic!("Expected InvalidAudioFile error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_missing_grammar_model_fails_without_retrying() {
+        let audio = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(audio.path(), vec![0; (WAV_HEADER_SIZE + 1) as usize]).unwrap();
+        let client = WhisperClient::with_retry_config("http://localhost:8178", 3, 1_000, 1_000);
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            client.transcribe_with_grammar(audio.path(), Some("root ::= \"ls\"")),
+        )
+        .await
+        .expect("configuration errors should bypass retry backoff");
+
+        match result {
+            Err(WhisperError::ConfigurationError(message)) => {
+                assert!(message.contains("requires a configured model"));
+            }
+            other => panic!("expected ConfigurationError, got {:?}", other),
         }
     }
 }

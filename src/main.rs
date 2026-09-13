@@ -641,7 +641,7 @@ async fn handle_ws_listen(
             tokio::sync::watch::channel(ears::tui::TypingSettings {
                 progressive_typing: false,
                 auto_correction: false,
-                typing_mode: config.typing_mode,
+                typing_mode: ears::TypingMode::None,
                 auto_enter: false,
                 text_filters: config.text_filters.clone(),
                 language: config.language.clone(),

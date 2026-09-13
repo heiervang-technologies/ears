@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Bash-mode VAD now types each speech segment as a discrete command without accumulating prior commands or requiring progressive typing.
+- Bash mode without a configured model fails immediately instead of retrying a permanent configuration error.
+
 ## [1.0.0] - 2026-05-09
 
 First public release. Ears is now considered stable and ready for general use.
