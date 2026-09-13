@@ -4,7 +4,6 @@
 //! It handles health checks, transcription requests, and includes retry logic
 //! with exponential backoff.
 
-use backoff::{future::retry, ExponentialBackoff};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
@@ -83,7 +82,6 @@ pub struct WhisperClient {
     /// Prompt for context biasing (None = no prompt)
     prompt: Option<String>,
     /// Maximum number of retry attempts
-    #[allow(dead_code)]
     max_retries: u32,
     /// Initial backoff delay in milliseconds
     initial_backoff_ms: u64,
@@ -305,25 +303,44 @@ impl WhisperClient {
         // Validate audio file exists and has content
         self.validate_audio_file(path).await?;
 
+        if grammar.is_some() && self.model.is_none() {
+            return Err(WhisperError::TranscriptionError(
+                "grammar-constrained (bash) mode requires a configured model".to_string(),
+            ));
+        }
+
         info!(
             "Transcribing audio file: {} (grammar: {})",
             path.display(),
             grammar.is_some()
         );
 
-        // Perform transcription with retry logic
-        let backoff = self.create_backoff();
-        let text = retry(backoff, || async {
+        // Perform transcription with bounded exponential backoff. Keeping this
+        // loop local makes max_retries authoritative and avoids depending on
+        // the unmaintained `backoff` crate.
+        let mut retries = 0;
+        let mut delay = Duration::from_millis(self.initial_backoff_ms);
+        let max_delay = Duration::from_millis(self.max_backoff_ms);
+        let text = loop {
             let result = match grammar {
                 Some(g) => self.transcribe_chat_internal(path, g).await,
                 None => self.transcribe_internal(path).await,
             };
-            result.map_err(|e| {
-                warn!("Transcription attempt failed: {}", e);
-                backoff::Error::transient(e)
-            })
-        })
-        .await?;
+
+            match result {
+                Ok(text) => break text,
+                Err(error) if retries >= self.max_retries => return Err(error),
+                Err(error) => {
+                    retries += 1;
+                    warn!(
+                        "Transcription attempt failed (retry {}/{} in {:?}): {}",
+                        retries, self.max_retries, delay, error
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = delay.saturating_mul(2).min(max_delay);
+                }
+            }
+        };
 
         // Filter silence artifacts
         let filtered = self.filter_silence_artifacts(&text);
@@ -607,27 +624,6 @@ impl WhisperClient {
 
         has_filler && all_allowed
     }
-
-    /// Creates an exponential backoff configuration
-    fn create_backoff(&self) -> ExponentialBackoff {
-        // Calculate a reasonable max_elapsed_time based on backoff settings
-        // For test scenarios with very small backoffs (< 100ms), fail faster
-        // For normal/production use, allow 30 seconds
-        let max_elapsed = if self.max_backoff_ms < 100 {
-            // Very short timeout for error case tests
-            Duration::from_millis(500)
-        } else {
-            // Normal timeout for success and retry tests
-            Duration::from_secs(30)
-        };
-
-        ExponentialBackoff {
-            initial_interval: Duration::from_millis(self.initial_backoff_ms),
-            max_interval: Duration::from_millis(self.max_backoff_ms),
-            max_elapsed_time: Some(max_elapsed),
-            ..Default::default()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -758,6 +754,29 @@ mod tests {
                 assert!(msg.contains("does not exist"));
             }
             _ => panic!("Expected InvalidAudioFile error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grammar_mode_without_model_fails_before_retry() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        tokio::fs::write(
+            temp_file.path(),
+            vec![0u8; (crate::WAV_HEADER_SIZE + 1) as usize],
+        )
+        .await
+        .unwrap();
+
+        let client = WhisperClient::new("http://127.0.0.1:1");
+        let result = client
+            .transcribe_with_grammar(temp_file.path(), Some("root ::= \"ls\""))
+            .await;
+
+        match result {
+            Err(WhisperError::TranscriptionError(msg)) => {
+                assert!(msg.contains("requires a configured model"));
+            }
+            other => panic!("Expected missing-model TranscriptionError, got {other:?}"),
         }
     }
 }

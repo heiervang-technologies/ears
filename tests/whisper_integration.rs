@@ -24,12 +24,11 @@ fn create_test_audio_file() -> PathBuf {
         unique_id
     ));
 
-    // Create a minimal WAV file (44 bytes header + some data)
-    // This is a valid WAV file structure, though the audio data is just zeros
+    // Create a minimal WAV file (44-byte header + one 16-bit sample).
     let wav_data = vec![
         // RIFF header
         0x52, 0x49, 0x46, 0x46, // "RIFF"
-        0x24, 0x00, 0x00, 0x00, // File size - 8
+        0x26, 0x00, 0x00, 0x00, // File size - 8
         0x57, 0x41, 0x56, 0x45, // "WAVE"
         // fmt chunk
         0x66, 0x6D, 0x74, 0x20, // "fmt "
@@ -42,7 +41,8 @@ fn create_test_audio_file() -> PathBuf {
         0x10, 0x00, // Bits per sample (16)
         // data chunk
         0x64, 0x61, 0x74, 0x61, // "data"
-        0x00, 0x00, 0x00, 0x00, // Data size (0)
+        0x02, 0x00, 0x00, 0x00, // Data size (2)
+        0x00, 0x00, // One silent sample
     ];
 
     fs::write(&audio_path, wav_data).expect("Failed to create test audio file");
@@ -119,7 +119,6 @@ async fn test_health_check_server_error() {
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_success() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -127,7 +126,7 @@ async fn test_transcribe_success() {
     // Set up mock response for transcription
     let response_body = r#"{"text": "Hello world"}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;
@@ -147,7 +146,6 @@ async fn test_transcribe_success() {
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_filters_thank_you() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -155,7 +153,7 @@ async fn test_transcribe_filters_thank_you() {
     // Set up mock response with silence artifact
     let response_body = r#"{"text": "Thank you."}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;
@@ -225,7 +223,7 @@ async fn test_transcribe_server_error() {
 
     // Set up mock response with error
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -240,26 +238,25 @@ async fn test_transcribe_server_error() {
     // Cleanup
     cleanup_test_audio_file(&audio_path);
 
-    // backoff library will eventually return the error after retries
+    // The bounded retry loop eventually returns the server error.
     assert!(result.is_err());
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_with_retry_eventually_succeeds() {
     // Start mock server
     let mock_server = MockServer::start().await;
 
     // First two requests fail, third succeeds
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(500).append_header("X-Retry", "1"))
         .up_to_n_times(2)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(r#"{"text": "Success after retry"}"#),
         )
@@ -290,7 +287,6 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_trims_whitespace() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -298,7 +294,7 @@ async fn test_transcribe_trims_whitespace() {
     // Response with extra whitespace
     let response_body = r#"{"text": "  Hello world  "}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;

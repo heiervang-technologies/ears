@@ -232,10 +232,16 @@ auto_enter = false           # recommended: type the command but DON'T run it
 # guided_grammar = "..."     # optional: override the built-in grammar (GBNF)
 ```
 
-Then use **push-to-talk** — it's the right fit for discrete commands:
+Use it with push-to-talk for manual command capture:
 
 ```bash
 ears -p bash toggle    # speak a command, toggle again → it's typed (not run)
+```
+
+Or use the same bash profile with VAD for hands-free command capture:
+
+```bash
+ears -p bash vad       # each detected speech segment is typed as one command
 ```
 
 Notes:
@@ -245,8 +251,8 @@ Notes:
   does not support it. Normal (non-bash) profiles are unaffected.
 - A configured `model` is required in bash mode.
 - The command allow-list lives in `grammars/bash.gbnf` — extend it as needed.
-- Best with push-to-talk. The streaming/VAD path accumulates text across
-  utterances and isn't suited to discrete commands yet.
+- In VAD mode, each detected speech segment is treated as a discrete command and
+  typed directly, even when progressive typing is disabled.
 
 ### VAD Mode (headless)
 
