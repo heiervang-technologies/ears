@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Upgraded Ratatui to 0.30.2 and Crossterm to 0.29.0, removing the transitive `lru` 0.12.5 and `paste` 1.0.15 RustSec findings.
+- Declared and continuously checks Rust 1.88 as the minimum supported Rust version.
+
 ## [1.0.0] - 2026-05-09
 
 First public release. Ears is now considered stable and ready for general use.

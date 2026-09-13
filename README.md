@@ -85,6 +85,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### From Source
 
+Building from source requires Rust 1.88 or newer.
+
 ```bash
 git clone https://github.com/heiervang-technologies/ears
 cd ears
