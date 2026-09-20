@@ -510,6 +510,32 @@ pub(crate) fn wait_bounded(
     }
 }
 
+/// Spawn `cmd` with piped stdout, collect its output, and enforce a deadline.
+///
+/// The pipe is drained on a helper thread so a chatty child cannot deadlock
+/// against a full pipe while we poll for exit. On expiry the child is killed
+/// and reaped, which closes the pipe and releases the drain thread.
+pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+    use std::io::Read;
+
+    cmd.stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("Failed to spawn child process")?;
+    let mut stdout = child.stdout.take().context("child stdout unavailable")?;
+    let drain = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let status = wait_bounded(&mut child, timeout);
+    let stdout = drain.join().unwrap_or_default();
+    let status = status?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
+}
+
 /// Text input automation
 pub struct TextInput;
 
@@ -650,19 +676,18 @@ impl TextInput {
         use std::process::Stdio;
 
         // Save current clipboard contents
-        let original_clipboard = Command::new("wl-paste")
+        let mut read_clip = Command::new("wl-paste");
+        read_clip
             .arg("--no-newline")
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(o.stdout)
-                } else {
-                    None
-                }
-            });
+            .stderr(Stdio::null());
+        let original_clipboard = output_bounded(read_clip, KEY_TIMEOUT).ok().and_then(|o| {
+            if o.status.success() {
+                Some(o.stdout)
+            } else {
+                None
+            }
+        });
 
         // Copy text to clipboard using wl-copy
         let mut child = Command::new("wl-copy")
@@ -789,9 +814,29 @@ mod tests {
         let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
         assert!(status.success());
 
-        let mut cmd = Command::new("false");
+        let cmd = Command::new("false");
         let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
         assert!(!status.success());
+    }
+
+    #[test]
+    fn test_output_bounded_collects_stdout() {
+        let mut cmd = Command::new("printf");
+        cmd.arg("Volume: 0.42");
+        let out = output_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "Volume: 0.42");
+    }
+
+    #[test]
+    fn test_output_bounded_kills_hung_child_holding_pipe() {
+        // Child writes then hangs with the pipe open: must be killed, not awaited.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf partial; sleep 30");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(err.to_string().contains("timed out"), "{}", err);
     }
 
     #[test]

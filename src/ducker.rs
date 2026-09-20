@@ -37,18 +37,25 @@ pub trait VolumeBackend: Send + Sync + 'static {
 /// `wpctl @DEFAULT_AUDIO_SINK@` backend.
 pub struct WpctlBackend;
 
+/// Deadline for one `wpctl` call. WirePlumber answers in milliseconds; a
+/// wedged session bus must not pin a ducker task (or runtime shutdown) forever.
+const WPCTL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 impl VolumeBackend for WpctlBackend {
     fn get_volume(&self) -> Option<f32> {
-        let output = Command::new("wpctl")
-            .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        let mut cmd = Command::new("wpctl");
+        cmd.args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
             .stdin(Stdio::null())
-            .output()
-            .ok()?;
+            .stderr(Stdio::null());
+        let output = match crate::desktop::output_bounded(cmd, WPCTL_TIMEOUT) {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!("wpctl get-volume failed: {}", e);
+                return None;
+            }
+        };
         if !output.status.success() {
-            tracing::warn!(
-                "wpctl get-volume failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            tracing::warn!("wpctl get-volume failed with status {}", output.status);
             return None;
         }
         parse_volume(&String::from_utf8_lossy(&output.stdout))
@@ -57,13 +64,12 @@ impl VolumeBackend for WpctlBackend {
     fn set_volume(&self, volume: f32) {
         let v = volume.clamp(0.0, 1.5); // Cap at 150% to avoid runaway boost.
         let arg = format!("{:.4}", v);
-        let result = Command::new("wpctl")
-            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &arg])
+        let mut cmd = Command::new("wpctl");
+        cmd.args(["set-volume", "@DEFAULT_AUDIO_SINK@", &arg])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if let Err(e) = result {
+            .stderr(Stdio::null());
+        if let Err(e) = crate::desktop::run_bounded(cmd, WPCTL_TIMEOUT) {
             tracing::warn!("wpctl set-volume failed: {}", e);
         }
     }
