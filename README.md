@@ -334,6 +334,9 @@ RUST_LOG=info,ears::health=debug ears vad
 
 `ears vad` is a toggle: stop an existing VAD session before starting this way.
 The health snapshot is always available; debug logging is selected at startup.
+Only one desktop VAD health owner may run per state directory. Starting another
+returns `desktop VAD health owner already active`; stop the existing desktop
+session first. The operating system releases this ownership lock after a crash.
 The updated HAIos ears bridge uses this snapshot to prevent Friend from showing
 healthy listening for a stalled or unrelated Ears process. Existing audio cues
 and existing IPC events keep their meanings.

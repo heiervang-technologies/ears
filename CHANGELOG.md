@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop capability detection (`hyprctl` + `which wtype`) is probed once per session with bounded probes instead of on every segment; `TextInput::refresh_capabilities()` forces a re-probe after a typing backend failure.
 
 ### Added
+- Independent desktop VAD health supervision with atomic `vad-health.json` snapshots: exact owner identity, microphone and detector progress, probability/rejection measurements, processing stage, backlog, and typing suspension. Opt-in periodic debug summaries help distinguish capture loss, rejected speech, and stalled downstream work without recording audio or transcripts. Only one desktop health owner per state directory may start.
+- Typing or Enter failure pauses further keyboard input while transcription continues; check the target and restart listening to resume. Clipboard preservation failures abort paste before mutation.
 - `StreamingEvent::SpeechRejected` and `StreamingEvent::CaptureStopped { reason }` (additive; existing variants and payloads unchanged).
 - Deterministic probability-sequence tests for the VAD state machine and engine events (candidate rejection, confirmation, silence termination, second/third utterances) and fake-backend ducking tests including the late-duck race.
 
