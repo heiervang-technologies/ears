@@ -430,6 +430,16 @@ mod tests {
     }
 
     #[test]
+    fn observer_recovers_after_poisoned_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        let _ = std::panic::catch_unwind(|| health.update(|_| panic!("injected observer panic")));
+        health.captured(&[0.0; 512]);
+        assert_eq!(health.snapshot().captured_samples, 512);
+    }
+
+    #[test]
     fn competing_monitor_cannot_overwrite_owner() {
         let dir = tempfile::tempdir().unwrap();
         let first = HealthMonitor::start(dir.path()).unwrap();
