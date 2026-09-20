@@ -637,6 +637,17 @@ pub(crate) fn feed_stdin_bounded(
     let mut backoff = Duration::from_millis(2);
     let mut written = 0usize;
     while written < data.len() {
+        if start.elapsed() >= timeout {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "child stopped reading stdin; timed out after {:?} with {} of {} bytes written; killed and reaped",
+                timeout,
+                written,
+                data.len()
+            );
+        }
         match stdin.write(&data[written..]) {
             Ok(0) => break, // read end closed: nothing more will be accepted
             Ok(n) => {
@@ -658,17 +669,6 @@ pub(crate) fn feed_stdin_bounded(
             anyhow::bail!(
                 "child exited ({}) before accepting all input ({} of {} bytes)",
                 status,
-                written,
-                data.len()
-            );
-        }
-        if start.elapsed() >= timeout {
-            drop(stdin);
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!(
-                "child stopped reading stdin; timed out after {:?} with {} of {} bytes written; killed and reaped",
-                timeout,
                 written,
                 data.len()
             );
