@@ -1,8 +1,16 @@
 # VAD reliability and daily use
 
-Status: investigation and proposed implementation order, 2026-09-20.
-No runtime changes are included in this plan. The reported intermittent missed
-speech has not been reproduced or attributed to a confirmed cause.
+Status: implementation underway on isolated review branches, 2026-09-20.
+The reported intermittent missed speech has not been reproduced or attributed
+to a confirmed cause. The running installation has not been replaced.
+
+Current patches implement independent health supervision, versioned desktop
+ownership/progress snapshots, bridge validation for Friend, capture lifecycle
+repair, bounded desktop helpers, and rejected-candidate volume restoration.
+Diagnostics preserve VAD segmentation in replay tests. The snapshot reports
+latest levels/probability and cumulative rejection counts; it is not an audio
+recording or a complete per-frame trace. Explicit audio incident capture,
+restart controls, queue decoupling, and sensitivity changes remain future work.
 Reviewed collaboratively by Ears Astra and Ears Fable through Director.
 
 ## Evidence from the current implementation

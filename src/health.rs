@@ -58,6 +58,8 @@ pub struct HealthSnapshot {
     pub threshold: f32,
     pub candidate_frames: usize,
     pub rejected_candidates: u64,
+    pub last_rejected_frames: usize,
+    pub last_rejection_probability: f32,
     pub speaking: bool,
     pub capture_error: Option<String>,
 }
@@ -78,7 +80,13 @@ impl HealthSnapshot {
         {
             return Some("no audio arriving");
         }
-        if self.stage != Stage::Listening && now.saturating_sub(self.stage_since_ms) > 5000 {
+        let slow_after_ms = if self.stage == Stage::Transcribing {
+            20_000
+        } else {
+            5_000
+        };
+        if self.stage != Stage::Listening && now.saturating_sub(self.stage_since_ms) > slow_after_ms
+        {
             return Some("slow pipeline stage");
         }
         if self.stage == Stage::Listening
@@ -86,7 +94,8 @@ impl HealthSnapshot {
         {
             return Some("voice detection stalled");
         }
-        if self.audio_backlog_ms > 2000 {
+        if matches!(self.stage, Stage::Listening | Stage::Detecting) && self.audio_backlog_ms > 2000
+        {
             return Some("audio backlog");
         }
         None
@@ -134,6 +143,10 @@ impl PipelineHealth {
         rejected: bool,
     ) {
         self.update(|s| {
+            if rejected {
+                s.last_rejected_frames = s.candidate_frames;
+                s.last_rejection_probability = probability;
+            }
             s.detector_last_ms = Some(monotonic_ms());
             s.processed_frames += 1;
             s.probability = probability;
@@ -257,6 +270,8 @@ impl HealthMonitor {
             threshold: 0.0,
             candidate_frames: 0,
             rejected_candidates: 0,
+            last_rejected_frames: 0,
+            last_rejection_probability: 0.0,
             speaking: false,
             capture_error: None,
         })));
@@ -374,6 +389,8 @@ mod tests {
         let snap = health.snapshot();
         assert_eq!(snap.processed_frames, 2);
         assert_eq!(snap.rejected_candidates, 1);
+        assert_eq!(snap.last_rejected_frames, 1);
+        assert_eq!(snap.last_rejection_probability, 0.2);
         assert_eq!(snap.probability, 0.2);
     }
 
@@ -395,6 +412,21 @@ mod tests {
             health.frame(0.0, 0.5, 0, false, false);
         }
         assert_eq!(health.snapshot().audio_backlog_ms, 4);
+    }
+
+    #[test]
+    fn ordinary_transcription_latency_is_not_a_stall() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        let _stage = health.enter(Stage::Transcribing);
+        let mut snap = health.snapshot();
+        let now = snap.stage_since_ms + 9000;
+        snap.capture_last_ms = Some(now);
+        snap.audio_backlog_ms = 9000;
+        assert_eq!(snap.problem(now), None);
+        snap.capture_last_ms = Some(now + 15000);
+        assert_eq!(snap.problem(now + 15000), Some("slow pipeline stage"));
     }
 
     #[test]
