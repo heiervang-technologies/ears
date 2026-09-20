@@ -41,7 +41,9 @@ fn read_wav_samples(path: &Path) -> Vec<f32> {
     // Convert i16 samples to f32
     let sample_data = &data[data_start..data_start + data_size];
     sample_data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|bytes| {
             let sample_i16 = i16::from_le_bytes([bytes[0], bytes[1]]);
             sample_i16 as f32 / 32768.0

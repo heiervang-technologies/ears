@@ -246,7 +246,9 @@ impl ContinuousCapture {
                     Ok(_) => {
                         // Convert i16 samples to f32
                         let samples: Vec<f32> = buffer
-                            .chunks_exact(2)
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
                             .map(|bytes| {
                                 let sample_i16 = i16::from_le_bytes([bytes[0], bytes[1]]);
                                 sample_i16 as f32 / 32768.0 // Normalize to -1.0..1.0
