@@ -1433,6 +1433,20 @@ impl App {
                 crate::desktop::AudioFeedback::beep_vad_end().ok();
                 self.ducker.on_speech_ended();
             }
+            StreamingEvent::SpeechRejected => {
+                // Candidate never confirmed: undo the probable-speech duck.
+                // Deliberately no audio cue — nothing was heard.
+                self.ducker.on_speech_rejected();
+            }
+            StreamingEvent::CaptureStopped { reason } => {
+                // The microphone went away underneath us. Stop claiming to
+                // listen; the run loop tears the pipeline down and plays the
+                // regular close cue so the state change is audible.
+                self.add_log(&format!("Microphone capture stopped: {}", reason));
+                self.is_speaking = false;
+                self.ducker.on_speech_ended();
+                self.vad_active = false;
+            }
             StreamingEvent::TranscriptUpdate {
                 committed,
                 uncommitted,

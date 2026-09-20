@@ -496,6 +496,10 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let save_to_clipboard = config.save_to_clipboard;
     let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
     let event_ducker = ducker.clone();
+    // Raised when capture dies underneath us so the main loop can exit and
+    // leave a truthful (Idle) state instead of a stale VadActive.
+    let capture_dead = std::sync::Arc::new(tokio::sync::Notify::new());
+    let capture_dead_tx = capture_dead.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let _ = ipc_tx.send(event.clone());
@@ -510,6 +514,15 @@ async fn handle_vad(config: &Config) -> Result<()> {
                 ears::streaming_engine::StreamingEvent::SpeechEnded => {
                     AudioFeedback::beep_vad_end().ok();
                     event_ducker.on_speech_ended();
+                }
+                ears::streaming_engine::StreamingEvent::SpeechRejected => {
+                    event_ducker.on_speech_rejected();
+                }
+                ears::streaming_engine::StreamingEvent::CaptureStopped { reason } => {
+                    tracing::warn!("Microphone capture stopped: {}", reason);
+                    eprintln!("Microphone capture stopped: {}", reason);
+                    event_ducker.on_speech_ended();
+                    capture_dead_tx.notify_one();
                 }
                 ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
@@ -533,6 +546,11 @@ async fn handle_vad(config: &Config) -> Result<()> {
         tokio::select! {
             _ = sigterm.recv() => break,
             _ = sigint.recv() => break,
+            _ = capture_dead.notified() => {
+                AudioFeedback::beep_vad_close().ok();
+                eprintln!("VAD stopped: no audio input");
+                break;
+            }
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     ears::ipc::EarsCommand::ToggleAutoEnter { respond } => {

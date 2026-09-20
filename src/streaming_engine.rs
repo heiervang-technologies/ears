@@ -51,6 +51,17 @@ pub enum StreamingEvent {
     /// VAD detected end of speech
     SpeechEnded,
 
+    /// A probable-speech candidate (after `SpeechProbable`) dropped below the
+    /// threshold before it was confirmed. No segment is produced. Consumers
+    /// that reacted to `SpeechProbable` (e.g. volume ducking) should undo
+    /// that reaction here. Carries no audio cue.
+    SpeechRejected,
+
+    /// Audio capture ended without being asked to (device unplugged,
+    /// PipeWire restart, pw-record exit). No further audio will arrive; the
+    /// owner must stop claiming to listen.
+    CaptureStopped { reason: String },
+
     /// New transcript chunk received
     TranscriptUpdate {
         committed: String,
@@ -83,6 +94,24 @@ pub struct StreamingStats {
     pub chars_typed: usize,
     /// Number of corrections made
     pub corrections_made: usize,
+}
+
+/// Run a blocking, subprocess-driving closure without stalling the async
+/// runtime's worker thread.
+///
+/// Typing helpers (`wtype`, `ydotool`) block on child processes. On the
+/// multi-threaded runtime this hands the current worker to the closure via
+/// `block_in_place`, so other tasks (capture reader, event loop, IPC) keep
+/// running. On a current-thread runtime (tests) it just runs inline.
+/// The children themselves are bounded by `desktop::run_bounded`, so the
+/// closure is guaranteed to return.
+fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
 }
 
 /// Main streaming transcription engine
@@ -191,36 +220,61 @@ impl StreamingEngine {
         self.audio_buffer.write(samples);
 
         // Process with VAD to detect speech segments
-        match self.vad_detector.process(samples) {
-            Ok(Some(segment)) => {
-                // Complete speech segment detected
-                self.was_speaking = false;
-                self.was_probably_speaking = false;
-                self.send_event(StreamingEvent::SpeechEnded);
-                self.process_segment(segment).await?;
-            }
-            Ok(None) => {
-                // Fire SpeechProbable on first speech frames (before min duration met)
-                let is_probable = self.vad_detector.is_probably_speaking();
-                if is_probable && !self.was_probably_speaking {
-                    self.send_event(StreamingEvent::SpeechProbable);
-                }
-                self.was_probably_speaking = is_probable;
-
-                // Fire SpeechStarted only on the false→true transition (confirmed)
-                let is_speaking = self.vad_detector.is_speaking();
-                if is_speaking && !self.was_speaking {
-                    self.send_event(StreamingEvent::SpeechStarted);
-                }
-                self.was_speaking = is_speaking;
-            }
+        let outcome = match self.vad_detector.process(samples) {
+            Ok(outcome) => outcome,
             Err(e) => {
                 warn!("VAD error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("VAD error: {}", e)));
+                return Ok(());
             }
+        };
+
+        if let Some(segment) = self.handle_vad_outcome(outcome) {
+            self.process_segment(segment).await?;
         }
 
         Ok(())
+    }
+
+    /// Translate the detector's state after a chunk into transition events.
+    ///
+    /// Returns the completed segment (if any) for downstream processing.
+    /// Emits exactly one of the speech transition events per edge:
+    /// `SpeechProbable` (candidate started), `SpeechStarted` (confirmed),
+    /// `SpeechEnded` (segment complete) or `SpeechRejected` (candidate
+    /// dropped before confirmation).
+    fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
+        if let Some(segment) = outcome {
+            // Complete speech segment detected
+            self.was_speaking = false;
+            self.was_probably_speaking = false;
+            self.send_event(StreamingEvent::SpeechEnded);
+            return Some(segment);
+        }
+
+        let is_probable = self.vad_detector.is_probably_speaking();
+        let is_speaking = self.vad_detector.is_speaking();
+
+        // Fire SpeechProbable on first speech frames (before min duration met)
+        if is_probable && !self.was_probably_speaking {
+            self.send_event(StreamingEvent::SpeechProbable);
+        }
+
+        // Fire SpeechStarted only on the false→true transition (confirmed)
+        if is_speaking && !self.was_speaking {
+            self.send_event(StreamingEvent::SpeechStarted);
+        }
+
+        // A candidate we announced fell back to silence without ever being
+        // confirmed: tell listeners so they can undo the probable reaction.
+        if self.was_probably_speaking && !is_probable && !is_speaking && !self.was_speaking {
+            debug!("Speech candidate rejected before confirmation");
+            self.send_event(StreamingEvent::SpeechRejected);
+        }
+
+        self.was_probably_speaking = is_probable;
+        self.was_speaking = is_speaking;
+        None
     }
 
     /// Process a complete speech segment
@@ -313,7 +367,9 @@ impl StreamingEngine {
         // Update progressive typing with the full accumulated text
         if self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
-            match self.progressive_typing.update(&self.accumulated_text) {
+            let progressive_typing = &mut self.progressive_typing;
+            let accumulated = &self.accumulated_text;
+            match run_blocking(|| progressive_typing.update(accumulated)) {
                 Ok(chars) => {
                     info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
                     self.stats.chars_typed += chars;
@@ -330,7 +386,7 @@ impl StreamingEngine {
 
             // Send Enter key after typing if auto_enter is enabled
             if self.auto_enter {
-                if let Err(e) = TextInput::send_enter() {
+                if let Err(e) = run_blocking(TextInput::send_enter) {
                     warn!("Failed to send Enter key: {}", e);
                 }
             }
@@ -441,6 +497,7 @@ impl StreamingEngine {
         self.accumulated_text.clear();
         self.stats = StreamingStats::default();
         self.was_speaking = false;
+        self.was_probably_speaking = false;
         self.auto_enter = false;
     }
 
@@ -494,6 +551,86 @@ impl StreamingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<StreamingEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            out.push(format!("{:?}", ev));
+        }
+        out
+    }
+
+    /// Engine wired to a detector with short (3-frame) thresholds and an
+    /// event receiver, driven by injected probabilities.
+    fn seq_engine() -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
+        let mut engine = StreamingEngine::new(
+            Arc::new(WhisperClient::new("http://localhost:8178")),
+            StreamingConfig::default(),
+            VadConfig {
+                min_speech_duration_ms: 96,
+                max_silence_duration_ms: 96,
+                pre_speech_buffer_ms: 64,
+                ..VadConfig::default()
+            },
+            ProgressiveTypingConfig::default(),
+            PathBuf::new(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        engine.set_event_sender(tx);
+        (engine, rx)
+    }
+
+    fn feed(engine: &mut StreamingEngine, probs: &[f32]) -> Vec<SpeechSegment> {
+        let mut segs = Vec::new();
+        for &p in probs {
+            let outcome = engine.vad_detector.inject_probability(p);
+            if let Some(seg) = engine.handle_vad_outcome(outcome) {
+                segs.push(seg);
+            }
+        }
+        segs
+    }
+
+    #[test]
+    fn test_rejected_candidate_emits_speech_rejected() {
+        let (mut engine, mut rx) = seq_engine();
+        feed(&mut engine, &[0.9]);
+        assert_eq!(drain(&mut rx), vec!["SpeechProbable"]);
+
+        // Dip before confirmation: the candidate is rejected.
+        feed(&mut engine, &[0.0]);
+        assert_eq!(drain(&mut rx), vec!["SpeechRejected"]);
+
+        // Nothing further while silent.
+        feed(&mut engine, &[0.0, 0.0]);
+        assert!(drain(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_confirmed_speech_emits_started_and_ended_not_rejected() {
+        let (mut engine, mut rx) = seq_engine();
+        let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(
+            drain(&mut rx),
+            vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
+        );
+    }
+
+    #[test]
+    fn test_rejected_then_confirmed_sequence() {
+        let (mut engine, mut rx) = seq_engine();
+        feed(&mut engine, &[0.9, 0.9, 0.0, 0.0]);
+        assert_eq!(drain(&mut rx), vec!["SpeechProbable", "SpeechRejected"]);
+
+        let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(
+            drain(&mut rx),
+            vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
+        );
+    }
 
     #[test]
     fn test_streaming_stats_default() {

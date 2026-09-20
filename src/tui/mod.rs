@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use crate::config::Config;
-use crate::continuous_capture::{ContinuousCapture, ContinuousCaptureConfig};
+use crate::continuous_capture::{CaptureStatus, ContinuousCapture, ContinuousCaptureConfig};
 use crate::progressive_typing::ProgressiveTypingConfig;
 use crate::state::{State as EarsState, StateManager};
 use crate::streaming::StreamingConfig;
@@ -122,6 +122,7 @@ pub async fn start_vad_pipeline(
     let mut capture = ContinuousCapture::new(capture_config, temp_dir.clone());
     capture.set_audio_sender(audio_tx);
     capture.start().await?;
+    let mut capture_status = capture.status_rx();
 
     // Create streaming engine with VAD settings from config
     let streaming_config = StreamingConfig::default();
@@ -140,6 +141,7 @@ pub async fn start_vad_pipeline(
         typing_config,
         temp_dir,
     )?;
+    let engine_event_tx = event_tx.clone();
     engine.set_event_sender(event_tx);
 
     // Shutdown channel
@@ -175,6 +177,17 @@ pub async fn start_vad_pipeline(
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
                     break;
+                }
+                changed = capture_status.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let status = capture_status.borrow_and_update().clone();
+                    if let CaptureStatus::Stopped { reason } = status {
+                        tracing::warn!("VAD pipeline ending: capture stopped ({})", reason);
+                        let _ = engine_event_tx.send(StreamingEvent::CaptureStopped { reason });
+                        break;
+                    }
                 }
             }
         }

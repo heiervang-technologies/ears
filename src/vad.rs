@@ -112,6 +112,13 @@ impl SileroVad {
 
         // Get speech probability from Silero model
         let probability = self.vad.predict(samples.iter().copied());
+        Ok(self.apply_probability(probability))
+    }
+
+    /// Advance the hysteresis state machine with one frame's speech
+    /// probability. Separated from [`SileroVad::process_frame`] so the state
+    /// machine can be driven deterministically in tests without the model.
+    pub(crate) fn apply_probability(&mut self, probability: f32) -> VadResult {
         let is_speech = probability >= self.config.speech_threshold;
 
         // Update counters
@@ -152,7 +159,7 @@ impl SileroVad {
             VadResult::Speech
         };
 
-        Ok(result)
+        result
     }
 
     /// Check if currently in a confirmed speech segment
@@ -268,14 +275,37 @@ impl VadSegmentDetector {
         self.reframe_buffer.extend_from_slice(samples);
 
         let frame_size = SILERO_FRAME_SIZE;
-        let ms_per_frame = ((frame_size as u64) * 1000) / (self.sample_rate as u64);
         let mut segment_complete = None;
 
         // Process in exact 512-sample frames
         while self.reframe_buffer.len() >= frame_size {
             let frame: Vec<f32> = self.reframe_buffer.drain(..frame_size).collect();
             let result = self.vad.process_frame(&frame)?;
+            if let Some(segment) = self.apply_result(result, &frame) {
+                segment_complete = Some(segment);
+            }
+        }
 
+        Ok(segment_complete)
+    }
+
+    /// Drive the detector with one frame's probability instead of the
+    /// model's. The frame content is silence; only segment bookkeeping and
+    /// events are exercised. Test-only: production always goes through
+    /// [`VadSegmentDetector::process`].
+    #[cfg(test)]
+    pub(crate) fn inject_probability(&mut self, probability: f32) -> Option<SpeechSegment> {
+        let frame = vec![0.0f32; SILERO_FRAME_SIZE];
+        let result = self.vad.apply_probability(probability);
+        self.apply_result(result, &frame)
+    }
+
+    /// Apply one classified frame to the segment bookkeeping.
+    fn apply_result(&mut self, result: VadResult, frame: &[f32]) -> Option<SpeechSegment> {
+        let frame_size = SILERO_FRAME_SIZE;
+        let ms_per_frame = ((frame_size as u64) * 1000) / (self.sample_rate as u64);
+        let mut segment_complete = None;
+        {
             match result {
                 VadResult::Speech => {
                     if self.current_segment.is_none() {
@@ -298,7 +328,7 @@ impl VadSegmentDetector {
                         );
                     }
                     if let Some(ref mut segment) = self.current_segment {
-                        segment.extend_from_slice(&frame);
+                        segment.extend_from_slice(frame);
                     }
                 }
                 VadResult::Silence => {
@@ -310,14 +340,14 @@ impl VadSegmentDetector {
                         });
                     }
                     // During silence, accumulate into the pre-speech ring buffer
-                    self.push_to_pre_speech_buffer(&frame);
+                    self.push_to_pre_speech_buffer(frame);
                 }
             }
 
             self.total_processed_ms += ms_per_frame;
         }
 
-        Ok(segment_complete)
+        segment_complete
     }
 
     /// Check if currently in a confirmed speech segment
@@ -588,5 +618,109 @@ mod tests {
                 "One frame of silence should not end speech"
             );
         }
+    }
+
+    // ---- Deterministic probability-sequence tests (no model involved) ----
+
+    fn seq_detector() -> VadSegmentDetector {
+        VadSegmentDetector::new(VadConfig {
+            min_speech_duration_ms: 96,  // 3 frames
+            max_silence_duration_ms: 96, // 3 frames
+            pre_speech_buffer_ms: 64,    // 2 frames
+            ..VadConfig::default()
+        })
+        .unwrap()
+    }
+
+    /// Feed `probs` and return the completed segments in order.
+    fn drive(det: &mut VadSegmentDetector, probs: &[f32]) -> Vec<SpeechSegment> {
+        probs
+            .iter()
+            .filter_map(|&p| det.inject_probability(p))
+            .collect()
+    }
+
+    #[test]
+    fn seq_candidate_rejected_by_single_dip_before_confirmation() {
+        let mut det = seq_detector();
+        // Two positives, a dip, two positives: never reaches 3 consecutive.
+        let segs = drive(&mut det, &[0.9, 0.9, 0.1, 0.9, 0.9]);
+        assert!(segs.is_empty());
+        assert!(!det.is_speaking());
+        // After the dip the counter restarted; two positives = still probable.
+        assert!(det.is_probably_speaking());
+        // One more silence frame clears the candidate entirely.
+        drive(&mut det, &[0.0]);
+        assert!(!det.is_probably_speaking());
+    }
+
+    #[test]
+    fn seq_confirmation_then_silence_termination() {
+        let mut det = seq_detector();
+        let segs = drive(&mut det, &[0.9, 0.9]);
+        assert!(segs.is_empty());
+        assert!(det.is_probably_speaking());
+        assert!(!det.is_speaking());
+
+        let segs = drive(&mut det, &[0.9]);
+        assert!(segs.is_empty());
+        assert!(det.is_speaking(), "third positive frame confirms speech");
+
+        // Two silence frames: still speaking (max_silence = 3 frames).
+        let segs = drive(&mut det, &[0.0, 0.0]);
+        assert!(segs.is_empty());
+        assert!(det.is_speaking());
+
+        // Third silence frame ends the segment.
+        let segs = drive(&mut det, &[0.0]);
+        assert_eq!(segs.len(), 1);
+        assert!(!det.is_speaking());
+        assert!(!det.is_probably_speaking());
+        // The two pre-confirmation frames were classified Silence and live in
+        // the replay buffer (capacity 2 frames); they are prepended when the
+        // third frame confirms. Then 2 tolerated silence frames: 5 frames total.
+        // (This is why pre_speech_buffer_ms must cover min_speech_duration_ms.)
+        assert_eq!(segs[0].samples.len(), 5 * SILERO_FRAME_SIZE);
+    }
+
+    #[test]
+    fn seq_second_and_third_utterances_are_detected() {
+        let mut det = seq_detector();
+        let utterance = [0.9, 0.9, 0.9, 0.9, 0.0, 0.0, 0.0];
+        let mut all = Vec::new();
+        for _ in 0..3 {
+            all.extend(drive(&mut det, &utterance));
+            // Some idle time between utterances.
+            all.extend(drive(&mut det, &[0.0, 0.0, 0.0, 0.0]));
+        }
+        assert_eq!(
+            all.len(),
+            3,
+            "each utterance must yield exactly one segment"
+        );
+        // Segments are strictly ordered in time.
+        assert!(all[0].end_ms <= all[1].start_ms);
+        assert!(all[1].end_ms <= all[2].start_ms);
+    }
+
+    #[test]
+    fn seq_rejected_candidate_then_real_utterance_still_works() {
+        let mut det = seq_detector();
+        // Rejected blip.
+        assert!(drive(&mut det, &[0.9, 0.1, 0.0, 0.0]).is_empty());
+        assert!(!det.is_probably_speaking());
+        // Real utterance.
+        let segs = drive(&mut det, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+    }
+
+    #[test]
+    fn seq_brief_dip_inside_confirmed_speech_does_not_split() {
+        let mut det = seq_detector();
+        let segs = drive(
+            &mut det,
+            &[0.9, 0.9, 0.9, 0.0, 0.0, 0.9, 0.9, 0.0, 0.0, 0.0],
+        );
+        assert_eq!(segs.len(), 1, "dip shorter than max_silence must not split");
     }
 }

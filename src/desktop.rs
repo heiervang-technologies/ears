@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Text input method for typing transcribed text
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -451,25 +453,119 @@ impl AudioFeedback {
     }
 }
 
+/// Cached result of the desktop capability probe (`None` = not probed yet).
+static CAPABILITY_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Upper bound for a single desktop capability probe (`hyprctl`, `which`).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Upper bound for a single key/clipboard helper (`ydotool key`, `wl-copy`).
+const KEY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Base allowance for a typing child, before the per-character budget.
+const TYPING_BASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Per-character allowance for a typing child. wtype runs with a 4 ms
+/// inter-key delay, so 20 ms per character is a generous multiple.
+const TYPING_PER_CHAR: Duration = Duration::from_millis(20);
+
+/// Deadline for typing `text`: a base allowance plus a per-character budget.
+pub(crate) fn typing_timeout(text: &str) -> Duration {
+    TYPING_BASE_TIMEOUT + TYPING_PER_CHAR * (text.chars().count() as u32)
+}
+
+/// Spawn `cmd` and wait for it with a deadline.
+///
+/// If the child has not exited by `timeout`, it is killed and reaped and an
+/// error is returned. Callers therefore never leak a wedged child, and a
+/// stuck helper (e.g. `wtype` with no focused surface) cannot block the
+/// caller forever. Note that for typing children a timeout means the text
+/// may have been partially delivered; callers must not blindly retry.
+pub(crate) fn run_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::ExitStatus> {
+    let mut child = cmd.spawn().context("Failed to spawn child process")?;
+    wait_bounded(&mut child, timeout)
+}
+
+/// Wait for an already-spawned child with a deadline; kill and reap on expiry.
+pub(crate) fn wait_bounded(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    loop {
+        if let Some(status) = child.try_wait().context("Failed to poll child process")? {
+            return Ok(status);
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "child process timed out after {:?}; killed and reaped (output may be partially delivered)",
+                timeout
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+}
+
 /// Text input automation
 pub struct TextInput;
 
 impl TextInput {
     /// Detect if running on Omarchy (Arch + Hyprland)
+    ///
+    /// The probe result is cached for the lifetime of the process. Each probe
+    /// is bounded so a wedged compositor cannot stall the caller. Call
+    /// [`TextInput::refresh_capabilities`] to force a re-probe (e.g. after a
+    /// typing backend failure).
     pub(crate) fn is_omarchy() -> bool {
-        // Check if hyprctl exists (Hyprland compositor)
-        if Command::new("hyprctl").arg("version").output().is_ok() {
-            // Check if wtype is available (preferred on Hyprland)
-            if Command::new("which")
-                .arg("wtype")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                return true;
+        if let Ok(guard) = CAPABILITY_CACHE.lock() {
+            if let Some(cached) = *guard {
+                return cached;
             }
         }
-        false
+        let detected = Self::probe_omarchy();
+        if let Ok(mut guard) = CAPABILITY_CACHE.lock() {
+            *guard = Some(detected);
+        }
+        detected
+    }
+
+    /// Forget the cached desktop capability probe so the next call re-probes.
+    pub fn refresh_capabilities() {
+        if let Ok(mut guard) = CAPABILITY_CACHE.lock() {
+            *guard = None;
+        }
+    }
+
+    /// Uncached probe: hyprctl answers and wtype is on PATH.
+    fn probe_omarchy() -> bool {
+        use std::process::Stdio;
+
+        let mut hyprctl = Command::new("hyprctl");
+        hyprctl
+            .arg("version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let hyprland = run_bounded(hyprctl, PROBE_TIMEOUT)
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !hyprland {
+            return false;
+        }
+
+        let mut which = Command::new("which");
+        which
+            .arg("wtype")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        run_bounded(which, PROBE_TIMEOUT)
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 
     /// Send an Enter/Return key press
@@ -483,13 +579,13 @@ impl TextInput {
         // Brief delay to ensure the target app has processed previously typed text
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let status = Command::new("ydotool")
-            .args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+        let mut cmd = Command::new("ydotool");
+        cmd.args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run ydotool for Enter key")?;
+            .stderr(Stdio::null());
+        let status =
+            run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for Enter key")?;
         if !status.success() {
             anyhow::bail!("ydotool Enter failed with status: {}", status);
         }
@@ -506,7 +602,12 @@ impl TextInput {
         match mode {
             TypingMode::Auto => {
                 if Self::is_omarchy() {
-                    Self::type_with_wtype(text)
+                    let result = Self::type_with_wtype(text);
+                    if result.is_err() {
+                        // The backend we auto-selected failed: re-probe next time.
+                        Self::refresh_capabilities();
+                    }
+                    result
                 } else {
                     Self::paste_text(text)
                 }
@@ -525,16 +626,15 @@ impl TextInput {
     fn type_with_wtype(text: &str) -> Result<()> {
         use std::process::Stdio;
 
-        let status = Command::new("wtype")
-            .arg("-d")
+        let mut cmd = Command::new("wtype");
+        cmd.arg("-d")
             .arg("4")
             .arg("--")
             .arg(text)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run wtype")?;
+            .stderr(Stdio::null());
+        let status = run_bounded(cmd, typing_timeout(text)).context("Failed to run wtype")?;
 
         if !status.success() {
             anyhow::bail!("wtype failed with status: {}", status);
@@ -574,19 +674,19 @@ impl TextInput {
             .spawn()
             .context("Failed to run wl-copy")?;
 
-        child.wait().context("wl-copy failed")?;
+        wait_bounded(&mut child, KEY_TIMEOUT).context("wl-copy failed")?;
 
         // Small delay to ensure clipboard is ready
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Simulate Ctrl+V to paste
-        let status = Command::new("ydotool")
+        let mut paste = Command::new("ydotool");
+        paste
             .args(["key", "ctrl+v"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run ydotool key")?;
+            .stderr(Stdio::null());
+        let status = run_bounded(paste, KEY_TIMEOUT).context("Failed to run ydotool key")?;
 
         if !status.success() {
             anyhow::bail!("ydotool key failed with status: {}", status);
@@ -609,7 +709,7 @@ impl TextInput {
                 use std::io::Write;
                 let _ = stdin.write_all(&original);
             }
-            let _ = restore.wait();
+            let _ = wait_bounded(&mut restore, KEY_TIMEOUT);
         }
 
         Ok(())
@@ -652,12 +752,10 @@ impl TextInput {
 
         // Use .status() to wait for completion, preventing concurrent processes
         // from interleaving output (fixes #57)
-        let status = cmd
-            .stdin(std::process::Stdio::null())
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to run ydotool")?;
+            .stderr(std::process::Stdio::null());
+        let status = run_bounded(cmd, typing_timeout(text)).context("Failed to run ydotool")?;
 
         if !status.success() {
             anyhow::bail!("ydotool failed with status: {}", status);
@@ -670,6 +768,46 @@ impl TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_run_bounded_kills_and_reaps_hung_child() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let start = Instant::now();
+        let err = run_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must not wait for sleep"
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_run_bounded_returns_status_of_fast_child() {
+        let mut cmd = Command::new("true");
+        cmd.stdin(std::process::Stdio::null());
+        let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(status.success());
+
+        let mut cmd = Command::new("false");
+        let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn test_typing_timeout_scales_with_length() {
+        assert!(typing_timeout("") < typing_timeout(&"a".repeat(500)));
+        assert_eq!(typing_timeout(""), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_refresh_capabilities_forces_reprobe() {
+        TextInput::refresh_capabilities();
+        assert!(CAPABILITY_CACHE.lock().unwrap().is_none());
+        let first = TextInput::is_omarchy();
+        assert_eq!(*CAPABILITY_CACHE.lock().unwrap(), Some(first));
+        assert_eq!(TextInput::is_omarchy(), first);
+    }
 
     // 5.1 Notifications Tests
     #[test]

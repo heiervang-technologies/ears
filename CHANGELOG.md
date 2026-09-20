@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- VAD pipeline could freeze forever after a transcription: typing helpers (`wtype`, `ydotool`) and desktop probes (`hyprctl`, `which`) were run synchronously on the async worker with no deadline. Every such child is now spawned with a bounded wait that kills and reaps it on expiry, and typing runs via `block_in_place` so the capture reader and event loop keep running. A typing timeout is reported as an error (text may be partially delivered) and is never retried.
+- Volume stayed ducked when a probable-speech candidate was rejected before confirmation. The engine now emits `SpeechRejected` on that edge (no audio cue) and the ducker restores on it. Duck/restore operations are serialized and epoch-guarded so a late duck can never run after a restore.
+- Microphone loss was invisible: `ContinuousCapture::is_running()` reported false immediately after `start()`, `stop()` was a no-op, and a dead `pw-record` left the pipeline idling with a healthy-looking status. The child is now owned in a shared slot (kill + reap from `stop()`/`Drop`), reader liveness is published through `status_rx()`, and the pipeline emits `CaptureStopped { reason }`. The TUI turns listening off and logs the reason; headless `ears vad` exits and resets the state file to idle.
+- Desktop capability detection (`hyprctl` + `which wtype`) is probed once per session with bounded probes instead of on every segment; `TextInput::refresh_capabilities()` forces a re-probe after a typing backend failure.
+
+### Added
+- `StreamingEvent::SpeechRejected` and `StreamingEvent::CaptureStopped { reason }` (additive; existing variants and payloads unchanged).
+- Deterministic probability-sequence tests for the VAD state machine and engine events (candidate rejection, confirmation, silence termination, second/third utterances) and fake-backend ducking tests including the late-duck race.
+
 ## [1.0.0] - 2026-05-09
 
 First public release. Ears is now considered stable and ready for general use.
