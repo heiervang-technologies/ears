@@ -202,6 +202,8 @@ impl ContinuousCapture {
     /// The reader task observes EOF on the pipe and exits; because the stop
     /// was requested, the status becomes `Idle` rather than `Stopped`.
     pub fn stop(&mut self) -> Result<(), ContinuousCaptureError> {
+        // Invalidate this reader before touching state or replacing its child.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         // Announce the intent first so the reader's exit is not misreported.
         if self.status().is_running() {
             info!("Stopping continuous audio capture");
@@ -244,6 +246,9 @@ impl ContinuousCapture {
             let exit_reason: Option<String> = loop {
                 match stdout.read_exact(&mut buffer) {
                     Ok(_) => {
+                        if current_generation.load(Ordering::SeqCst) != generation {
+                            break None;
+                        }
                         // Convert i16 samples to f32
                         let samples: Vec<f32> = buffer
                             .as_chunks::<2>()
@@ -309,14 +314,33 @@ impl ContinuousCapture {
                         Some(status) => format!("{} (pw-record exit: {})", reason, status),
                         None => reason,
                     };
-                    if let Some(ref health) = health {
-                        health.capture_stopped(&reason);
-                    }
-                    warn!("Audio capture stopped: {}", reason);
-                    let _ = status_tx.send(CaptureStatus::Stopped { reason });
+                    // Validate generation while holding the watch value lock:
+                    // a newer Running publication cannot be overwritten between
+                    // a separate generation check and this status update.
+                    status_tx.send_if_modified(|status| {
+                        if current_generation.load(Ordering::SeqCst) != generation
+                            || !status.is_running()
+                        {
+                            return false;
+                        }
+                        if let Some(ref health) = health {
+                            health.capture_stopped(&reason);
+                        }
+                        warn!("Audio capture stopped: {}", reason);
+                        *status = CaptureStatus::Stopped {
+                            reason: reason.clone(),
+                        };
+                        true
+                    });
                 }
                 _ => {
-                    let _ = status_tx.send(CaptureStatus::Idle);
+                    status_tx.send_if_modified(|status| {
+                        if current_generation.load(Ordering::SeqCst) != generation {
+                            return false;
+                        }
+                        *status = CaptureStatus::Idle;
+                        true
+                    });
                 }
             }
 
