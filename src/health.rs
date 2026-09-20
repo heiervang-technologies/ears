@@ -62,6 +62,7 @@ pub struct HealthSnapshot {
     pub last_rejection_probability: f32,
     pub speaking: bool,
     pub capture_error: Option<String>,
+    pub typing_paused: bool,
 }
 
 impl HealthSnapshot {
@@ -155,6 +156,10 @@ impl PipelineHealth {
             s.speaking = speaking;
             s.rejected_candidates += u64::from(rejected);
         });
+    }
+
+    pub fn set_typing_paused(&self, paused: bool) {
+        self.update(|s| s.typing_paused = paused);
     }
 
     pub fn queue(&self, chunks: usize) {
@@ -274,6 +279,7 @@ impl HealthMonitor {
             last_rejection_probability: 0.0,
             speaking: false,
             capture_error: None,
+            typing_paused: false,
         })));
         let path: PathBuf = state_dir.join(HEALTH_FILE);
         publish(&path, &health.snapshot())?;
@@ -437,6 +443,23 @@ mod tests {
         let _ = std::panic::catch_unwind(|| health.update(|_| panic!("injected observer panic")));
         health.captured(&[0.0; 512]);
         assert_eq!(health.snapshot().captured_samples, 512);
+    }
+
+    #[test]
+    fn uncertain_output_remains_visible_while_capture_is_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        health.captured(&[0.0; 512]);
+        health.set_typing_paused(true);
+        let snap = health.snapshot();
+        assert_eq!(
+            snap.problem(snap.updated_monotonic_ms),
+            Some("typing paused after output error")
+        );
+        health.set_typing_paused(false);
+        let snap = health.snapshot();
+        assert_eq!(snap.problem(snap.updated_monotonic_ms), None);
     }
 
     #[test]
