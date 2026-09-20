@@ -81,6 +81,9 @@ impl HealthSnapshot {
         {
             return Some("no audio arriving");
         }
+        if self.typing_paused {
+            return Some("typing paused after output error");
+        }
         let slow_after_ms = if self.stage == Stage::Transcribing {
             20_000
         } else {
