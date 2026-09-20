@@ -721,16 +721,16 @@ impl TextInput {
     pub fn type_text(text: &str, mode: TypingMode) -> Result<()> {
         match mode {
             TypingMode::Auto => {
-                if Self::is_omarchy() {
-                    let result = Self::type_with_wtype(text);
-                    if result.is_err() {
-                        // The backend we auto-selected failed: re-probe next time.
-                        Self::refresh_capabilities();
-                    }
-                    result
+                let result = if Self::is_omarchy() {
+                    Self::type_with_wtype(text)
                 } else {
                     Self::paste_text(text)
+                };
+                if result.is_err() {
+                    // Either auto-selected backend may have become unavailable.
+                    Self::refresh_capabilities();
                 }
+                result
             }
             TypingMode::Wtype => Self::type_with_wtype(text),
             TypingMode::Paste => Self::paste_text(text),
