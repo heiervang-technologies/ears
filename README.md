@@ -336,7 +336,13 @@ RUST_LOG=info,ears::health=debug ears vad
 The health snapshot is always available; debug logging is selected at startup.
 The updated HAIos ears bridge uses this snapshot to prevent Friend from showing
 healthy listening for a stalled or unrelated Ears process. Existing audio cues
-and IPC events keep their meanings.
+and existing IPC events keep their meanings.
+
+If typing or Enter delivery fails, Ears pauses further keyboard input while
+continuing to transcribe. Check the target for partial text, then stop and
+restart VAD to resume typing. Friend reports this pause through the health
+snapshot. A clipboard read timeout or oversized result aborts paste before
+changing the clipboard.
 
 A stopped snapshot is intentionally retained. If rolling back to an older Ears
 binary that does not publish health, stop VAD and remove only

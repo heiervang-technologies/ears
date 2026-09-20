@@ -218,6 +218,7 @@ impl StreamingEngine {
     }
 
     pub fn set_health(&mut self, health: crate::health::PipelineHealth) {
+        health.set_typing_paused(self.typing_suspended);
         self.vad_detector.set_health(health.clone());
         self.health = Some(health);
     }
@@ -414,7 +415,16 @@ impl StreamingEngine {
             // command; submitting it would execute something nobody said.
             if self.auto_enter && delivered {
                 if let Err(e) = run_blocking(TextInput::send_enter) {
-                    warn!("Failed to send Enter key: {}", e);
+                    // A failed Enter leaves target state uncertain too: the
+                    // next utterance must not append to and submit this one.
+                    self.handle_typing_outcome(
+                        Err(
+                            crate::progressive_typing::ProgressiveTypingError::TextInputError(
+                                format!("Enter key failed: {e}"),
+                            ),
+                        ),
+                        typing_start,
+                    );
                 }
             }
         }
@@ -499,6 +509,9 @@ impl StreamingEngine {
     /// is discarded because it is no longer trustworthy.
     fn suspend_typing(&mut self) {
         self.typing_suspended = true;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(true);
+        }
         self.progressive_typing.reset();
     }
 
@@ -512,6 +525,9 @@ impl StreamingEngine {
     /// transcribed is replayed.
     pub fn resume_typing(&mut self) {
         self.typing_suspended = false;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(false);
+        }
         self.progressive_typing.reset();
         self.local_agreement.reset();
         self.accumulated_text.clear();
@@ -590,6 +606,9 @@ impl StreamingEngine {
         self.was_probably_speaking = false;
         self.auto_enter = false;
         self.typing_suspended = false;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(false);
+        }
     }
 
     /// Update configuration
@@ -727,6 +746,10 @@ mod tests {
     fn test_typing_failure_suppresses_enter_and_suspends_typing() {
         use crate::progressive_typing::ProgressiveTypingError;
         let (mut engine, mut rx) = seq_engine();
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = crate::health::HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        engine.set_health(health.clone());
         engine.accumulated_text = "hello world".to_string();
 
         let delivered = engine.handle_typing_outcome(
@@ -741,6 +764,7 @@ mod tests {
             "Enter must not follow a failed/timed-out typing"
         );
         assert!(engine.typing_suspended());
+        assert!(health.snapshot().typing_paused);
         assert_eq!(
             engine.committed_text(),
             "hello world",
@@ -760,6 +784,7 @@ mod tests {
         // Explicit resume starts clean.
         engine.resume_typing();
         assert!(!engine.typing_suspended());
+        assert!(!health.snapshot().typing_paused);
         assert!(engine.committed_text().is_empty());
     }
 

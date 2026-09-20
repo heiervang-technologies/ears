@@ -775,13 +775,11 @@ impl TextInput {
             .arg("--no-newline")
             .stdin(Stdio::null())
             .stderr(Stdio::null());
-        let original_clipboard = output_bounded(read_clip, KEY_TIMEOUT).ok().and_then(|o| {
-            if o.status.success() {
-                Some(o.stdout)
-            } else {
-                None
-            }
-        });
+        // A timeout/overflow is not an empty clipboard. Abort before changing
+        // it rather than lose an original value that could not be preserved.
+        let clipboard = output_bounded(read_clip, KEY_TIMEOUT)
+            .context("Cannot safely preserve clipboard; paste aborted")?;
+        let original_clipboard = clipboard.status.success().then_some(clipboard.stdout);
 
         // Copy text to clipboard using wl-copy
         let mut child = Command::new("wl-copy")
