@@ -496,6 +496,9 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(20));
         }
+        // Keep this assertion about stage progress, even if the CI scheduler
+        // delayed the supervisor enough for the earlier audio sample to age.
+        health.captured(&[0.0; 512]);
         let snap = health.snapshot();
         assert_eq!(
             snap.problem(snap.updated_monotonic_ms),
