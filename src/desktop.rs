@@ -519,7 +519,6 @@ pub(crate) fn wait_bounded(
 /// bytes it already wrote are drained without waiting for other holders of
 /// the write end to close.
 pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
-    use std::io::Read;
     use std::os::unix::io::AsRawFd;
 
     cmd.stdout(std::process::Stdio::piped());
@@ -533,15 +532,17 @@ pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std:
     let mut chunk = [0u8; 4096];
     let mut status = None;
     while status.is_none() {
-        // Drain whatever is available right now without blocking.
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break, // write end fully closed
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
+        // Drain whatever is available right now without blocking, up to a
+        // per-iteration budget so a child that writes continuously cannot
+        // keep us in this inner loop past the deadline.
+        if drain_available(&mut stdout, &mut buf, &mut chunk, DRAIN_BUDGET_PER_PASS).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(stdout);
+            anyhow::bail!(
+                "child process produced more than {} bytes of output; killed and reaped",
+                OUTPUT_CAP
+            );
         }
         if let Some(st) = child.try_wait().context("Failed to poll child process")? {
             status = Some(st);
@@ -560,23 +561,59 @@ pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std:
         backoff = (backoff * 2).min(Duration::from_millis(50));
     }
 
-    // Child has exited: take what it left in the pipe, then stop regardless
-    // of whether a descendant still holds the write end.
-    loop {
-        match stdout.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-        }
-    }
+    // Child has exited: take everything it left in the pipe. The read is
+    // non-blocking, so this ends at EOF or as soon as nothing more is
+    // buffered, regardless of whether a descendant still holds the write end.
+    let overflow = drain_available(&mut stdout, &mut buf, &mut chunk, usize::MAX).is_err();
     drop(stdout);
+    if overflow {
+        anyhow::bail!(
+            "child process produced more than {} bytes of output",
+            OUTPUT_CAP
+        );
+    }
 
     Ok(std::process::Output {
         status: status.expect("loop exits only with a status"),
         stdout: buf,
         stderr: Vec::new(),
     })
+}
+
+/// Bytes read from a non-blocking pipe per drain pass before we go back to
+/// checking the child and the deadline.
+const DRAIN_BUDGET_PER_PASS: usize = 64 * 1024;
+
+/// Hard cap on collected output. Exceeding it is an error, never a silent
+/// truncation: a caller such as the clipboard restore must not act on a
+/// partial value.
+const OUTPUT_CAP: usize = 1024 * 1024;
+
+/// Read what is available on a non-blocking pipe, up to `budget` bytes.
+/// Returns `Err(())` if the collected output would exceed [`OUTPUT_CAP`].
+fn drain_available(
+    stdout: &mut impl std::io::Read,
+    buf: &mut Vec<u8>,
+    chunk: &mut [u8],
+    budget: usize,
+) -> Result<(), ()> {
+    let mut read_this_pass = 0usize;
+    while read_this_pass < budget {
+        match stdout.read(chunk) {
+            Ok(0) => break, // write end fully closed
+            Ok(n) => {
+                read_this_pass += n;
+                if buf.len() + n > OUTPUT_CAP {
+                    return Err(());
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    Ok(())
 }
 
 /// Put a file descriptor into O_NONBLOCK mode.
@@ -913,6 +950,41 @@ mod tests {
         );
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout), "partial");
+    }
+
+    #[test]
+    fn test_output_bounded_firehose_child_still_times_out() {
+        // A child that never stops writing must not keep us in the drain
+        // loop past the deadline, and must not blow memory.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("cat /dev/zero; exit 0");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(300)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_oversized_output_is_an_error_not_truncation() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("head -c 3000000 /dev/zero; exit 0");
+        let err = output_bounded(cmd, Duration::from_secs(10)).unwrap_err();
+        assert!(err.to_string().contains("more than"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_keeps_everything_an_exited_child_wrote() {
+        // More than one pipe buffer and more than one drain budget, written
+        // by a child that exits immediately: nothing may be lost.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("head -c 300000 /dev/zero; exit 0");
+        let out = output_bounded(cmd, Duration::from_secs(10)).unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 300000);
     }
 
     #[test]

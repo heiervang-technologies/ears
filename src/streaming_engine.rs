@@ -167,6 +167,13 @@ pub struct StreamingEngine {
     /// Active guided grammar (bash mode). When set, transcription is routed to
     /// the constrained chat-completions path and text filters are bypassed.
     guided_grammar: Option<String>,
+
+    /// Set after a typing failure. While suspended, transcription and
+    /// transcript events continue but nothing is injected and Enter is never
+    /// sent, because the target may hold a partial command. Cleared only by
+    /// an explicit [`StreamingEngine::resume_typing`] or a fresh engine
+    /// (i.e. restarting listening).
+    typing_suspended: bool,
 }
 
 impl StreamingEngine {
@@ -203,6 +210,7 @@ impl StreamingEngine {
             text_filters: TextFilters::default(),
             language: None,
             guided_grammar: None,
+            typing_suspended: false,
         })
     }
 
@@ -365,7 +373,9 @@ impl StreamingEngine {
         }
 
         // Update progressive typing with the full accumulated text
-        if self.config.progressive_typing && !newly_committed.is_empty() {
+        if self.typing_suspended {
+            debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
+        } else if self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
             let progressive_typing = &mut self.progressive_typing;
             let accumulated = &self.accumulated_text;
@@ -420,13 +430,13 @@ impl StreamingEngine {
     /// Account for a progressive-typing attempt. Returns whether the text is
     /// known to have been delivered.
     ///
-    /// On failure the typed state is *discarded*, not retried: a timed-out
-    /// child may have delivered part of the text, so neither the engine nor
-    /// the progressive typer can know what is on screen. Carrying the old
-    /// accumulated text forward would replay it (duplicate output) or, with
-    /// auto-correction, backspace over characters that were never typed. The
-    /// next segment therefore starts from a clean slate and types only its
-    /// own words.
+    /// On failure typing is *suspended*, not retried: a timed-out child may
+    /// have delivered part of the text, so neither the engine nor the
+    /// progressive typer can know what is on screen. Typing the next segment
+    /// would append to that partial command, and auto-Enter would execute it.
+    /// Transcription keeps running so the transcript history and clipboard
+    /// stay useful; the user is told to check the target and restart
+    /// listening to resume injection.
     fn handle_typing_outcome(
         &mut self,
         outcome: Result<usize, crate::progressive_typing::ProgressiveTypingError>,
@@ -440,25 +450,41 @@ impl StreamingEngine {
             }
             Err(e) => {
                 warn!(
-                    "Progressive typing error after {:?}: {}; discarding uncertain typed state",
+                    "Progressive typing error after {:?}: {}; typing suspended until listening is restarted",
                     typing_start.elapsed(),
                     e
                 );
                 self.send_event(StreamingEvent::Error(format!(
-                    "Typing error: {} (output may be partial; not retried)",
+                    "Typing error: {}. Output may be partial and was not retried. \
+                     Typing is paused: check the target window, then restart listening to resume.",
                     e
                 )));
-                self.discard_uncertain_typing_state();
+                self.suspend_typing();
                 false
             }
         }
     }
 
-    /// Forget everything about what has been typed so far. Used after a
-    /// typing failure, when the on-screen state is unknown.
-    fn discard_uncertain_typing_state(&mut self) {
-        self.local_agreement.reset();
+    /// Stop injecting text and Enter until [`StreamingEngine::resume_typing`]
+    /// or a fresh engine. The progressive typer's notion of what is on screen
+    /// is discarded because it is no longer trustworthy.
+    fn suspend_typing(&mut self) {
+        self.typing_suspended = true;
         self.progressive_typing.reset();
+    }
+
+    /// Whether injection is currently paused after a typing failure.
+    pub fn typing_suspended(&self) -> bool {
+        self.typing_suspended
+    }
+
+    /// Explicitly resume injection after the user has checked the target.
+    /// Starts the progressive typer from a clean slate so nothing already
+    /// transcribed is replayed.
+    pub fn resume_typing(&mut self) {
+        self.typing_suspended = false;
+        self.progressive_typing.reset();
+        self.local_agreement.reset();
         self.accumulated_text.clear();
     }
 
@@ -534,6 +560,7 @@ impl StreamingEngine {
         self.was_speaking = false;
         self.was_probably_speaking = false;
         self.auto_enter = false;
+        self.typing_suspended = false;
     }
 
     /// Update configuration
@@ -668,11 +695,10 @@ mod tests {
     }
 
     #[test]
-    fn test_typing_failure_suppresses_enter_and_discards_state() {
+    fn test_typing_failure_suppresses_enter_and_suspends_typing() {
         use crate::progressive_typing::ProgressiveTypingError;
         let (mut engine, mut rx) = seq_engine();
         engine.accumulated_text = "hello world".to_string();
-        engine.local_agreement.process("hello world".to_string());
 
         let delivered = engine.handle_typing_outcome(
             Err(ProgressiveTypingError::TextInputError(
@@ -685,16 +711,36 @@ mod tests {
             !delivered,
             "Enter must not follow a failed/timed-out typing"
         );
-        assert!(
-            engine.committed_text().is_empty(),
-            "no replay of uncertain text"
+        assert!(engine.typing_suspended());
+        assert_eq!(
+            engine.committed_text(),
+            "hello world",
+            "transcript history is preserved"
         );
         assert!(engine.progressive_typing.typed_text().is_empty());
-        assert_eq!(engine.local_agreement.committed(), "");
         let events = drain(&mut rx);
         assert_eq!(events.len(), 1);
         assert!(events[0].starts_with("Error("), "{}", events[0]);
         assert!(events[0].contains("not retried"));
+        assert!(events[0].contains("restart listening"));
+
+        // A later successful-looking outcome does not lift the suspension.
+        engine.handle_typing_outcome(Ok(3), Instant::now());
+        assert!(engine.typing_suspended());
+
+        // Explicit resume starts clean.
+        engine.resume_typing();
+        assert!(!engine.typing_suspended());
+        assert!(engine.committed_text().is_empty());
+    }
+
+    #[test]
+    fn test_reset_clears_typing_suspension() {
+        let (mut engine, _rx) = seq_engine();
+        engine.suspend_typing();
+        assert!(engine.typing_suspended());
+        engine.reset();
+        assert!(!engine.typing_suspended());
     }
 
     #[test]
