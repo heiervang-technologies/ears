@@ -616,6 +616,86 @@ fn drain_available(
     Ok(())
 }
 
+/// Write `data` to a spawned child's piped stdin, close it, and wait for the
+/// child, all under one deadline.
+///
+/// The write is non-blocking and interleaved with polling the child, so a
+/// child that stops reading (or never reads) cannot block us once the pipe
+/// buffer fills. On expiry the child is killed and reaped.
+pub(crate) fn feed_stdin_bounded(
+    child: &mut std::process::Child,
+    data: &[u8],
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    use std::io::Write;
+    use std::os::unix::io::AsRawFd;
+
+    let mut stdin = child.stdin.take().context("child stdin unavailable")?;
+    set_nonblocking(stdin.as_raw_fd()).context("Failed to set stdin non-blocking")?;
+
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    let mut written = 0usize;
+    while written < data.len() {
+        match stdin.write(&data[written..]) {
+            Ok(0) => break, // read end closed: nothing more will be accepted
+            Ok(n) => {
+                written += n;
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e).context("Failed to write to child stdin");
+            }
+        }
+        // Pipe is full: give the child a chance, but respect the deadline.
+        if let Some(status) = child.try_wait().context("Failed to poll child process")? {
+            drop(stdin);
+            anyhow::bail!(
+                "child exited ({}) before accepting all input ({} of {} bytes)",
+                status,
+                written,
+                data.len()
+            );
+        }
+        if start.elapsed() >= timeout {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "child stopped reading stdin; timed out after {:?} with {} of {} bytes written; killed and reaped",
+                timeout,
+                written,
+                data.len()
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+    drop(stdin); // EOF for the child
+
+    if written < data.len() {
+        // Read end closed under us (EPIPE / zero-length write): the child
+        // went away before accepting everything. Reap it and report.
+        let status = wait_bounded(child, Duration::from_millis(500))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "not reaped".to_string());
+        anyhow::bail!(
+            "child closed stdin ({}) before accepting all input ({} of {} bytes)",
+            status,
+            written,
+            data.len()
+        );
+    }
+
+    let remaining = timeout.saturating_sub(start.elapsed());
+    wait_bounded(child, remaining.max(Duration::from_millis(50)))
+}
+
 /// Put a file descriptor into O_NONBLOCK mode.
 fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
     // SAFETY: fcntl on a valid, owned fd with well-formed flags.
@@ -822,11 +902,9 @@ impl TextInput {
                 .spawn()
                 .context("Failed to restore clipboard")?;
 
-            if let Some(mut stdin) = restore.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(&original);
+            if let Err(e) = feed_stdin_bounded(&mut restore, &original, KEY_TIMEOUT) {
+                tracing::warn!("Clipboard restore did not complete: {}", e);
             }
-            let _ = wait_bounded(&mut restore, KEY_TIMEOUT);
         }
 
         Ok(())
@@ -995,6 +1073,53 @@ mod tests {
         let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
         assert!(start.elapsed() < Duration::from_secs(4));
         assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    fn spawn_with_stdin(script: &str) -> std::process::Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_delivers_more_than_a_pipe_buffer() {
+        // 300 KB is well past the 64 KB default pipe buffer.
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("n=$(wc -c); [ \"$n\" -eq 300000 ]");
+        let status = feed_stdin_bounded(&mut child, &data, Duration::from_secs(10)).unwrap();
+        assert!(status.success(), "child must have received every byte");
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_times_out_when_child_never_reads() {
+        // Child holds stdin open but never reads: the pipe fills and a
+        // blocking write would hang here forever.
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("sleep 30; exit 0");
+        let start = Instant::now();
+        let err = feed_stdin_bounded(&mut child, &data, Duration::from_millis(300)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+        assert!(child.try_wait().unwrap().is_some(), "child must be reaped");
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_reports_child_that_exits_early() {
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("exit 3");
+        let err = feed_stdin_bounded(&mut child, &data, Duration::from_secs(5)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("before accepting"), "{}", msg);
+        assert!(child.try_wait().unwrap().is_some(), "child must be reaped");
     }
 
     #[test]
