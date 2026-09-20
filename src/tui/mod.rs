@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use crate::config::Config;
-use crate::continuous_capture::{ContinuousCapture, ContinuousCaptureConfig};
+use crate::continuous_capture::{CaptureStatus, ContinuousCapture, ContinuousCaptureConfig};
 use crate::progressive_typing::ProgressiveTypingConfig;
 use crate::state::{State as EarsState, StateManager};
 use crate::streaming::StreamingConfig;
@@ -110,6 +110,10 @@ pub async fn start_vad_pipeline(
         .await
         .map_err(|e| anyhow::anyhow!("Whisper server health check failed: {}", e))?;
 
+    let health_monitor = crate::health::HealthMonitor::start(&config.state_dir)?;
+    let health = health_monitor.health();
+    health.device(&config.device);
+
     // Audio channel
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<f32>>();
 
@@ -120,8 +124,10 @@ pub async fn start_vad_pipeline(
     };
     let temp_dir = config.state_dir.clone();
     let mut capture = ContinuousCapture::new(capture_config, temp_dir.clone());
+    capture.set_health(health.clone());
     capture.set_audio_sender(audio_tx);
     capture.start().await?;
+    let mut capture_status = capture.status_rx();
 
     // Create streaming engine with VAD settings from config
     let streaming_config = StreamingConfig::default();
@@ -140,7 +146,9 @@ pub async fn start_vad_pipeline(
         typing_config,
         temp_dir,
     )?;
+    let engine_event_tx = event_tx.clone();
     engine.set_event_sender(event_tx);
+    engine.set_health(health.clone());
 
     // Shutdown channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -150,11 +158,13 @@ pub async fn start_vad_pipeline(
 
     // Spawn audio processing task
     let handle = tokio::spawn(async move {
+        let _health_monitor = health_monitor;
         loop {
             tokio::select! {
                 audio = audio_rx.recv() => {
                     match audio {
                         Some(samples) => {
+                            health.queue(audio_rx.len());
                             if let Err(e) = engine.process_audio(&samples).await {
                                 tracing::warn!("Audio processing error: {}", e);
                             }
@@ -175,6 +185,17 @@ pub async fn start_vad_pipeline(
                 _ = shutdown_rx.changed() => {
                     tracing::debug!("VAD pipeline shutdown requested");
                     break;
+                }
+                changed = capture_status.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let status = capture_status.borrow_and_update().clone();
+                    if let CaptureStatus::Stopped { reason } = status {
+                        tracing::warn!("VAD pipeline ending: capture stopped ({})", reason);
+                        let _ = engine_event_tx.send(StreamingEvent::CaptureStopped { reason });
+                        break;
+                    }
                 }
             }
         }

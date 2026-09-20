@@ -135,7 +135,11 @@ impl ProgressiveTypingEngine {
     /// Uses wtype on Omarchy/Hyprland (batched into a single invocation),
     /// ydotool otherwise.
     fn backspace(&self, count: usize) -> Result<(), ProgressiveTypingError> {
+        use crate::desktop::run_bounded;
         use std::process::{Command, Stdio};
+
+        /// Deadline for a batched backspace child.
+        const KEY_SEQUENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
         if count == 0 {
             return Ok(());
@@ -153,11 +157,10 @@ impl ProgressiveTypingEngine {
             for _ in 0..count {
                 cmd.arg("-k").arg("BackSpace");
             }
-            let status = cmd
-                .stdin(Stdio::null())
+            cmd.stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+                .stderr(Stdio::null());
+            let status = run_bounded(cmd, KEY_SEQUENCE_TIMEOUT)
                 .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
 
             if !status.success() {
@@ -172,12 +175,12 @@ impl ProgressiveTypingEngine {
                 args.push("14:1".to_string());
                 args.push("14:0".to_string());
             }
-            let status = Command::new("ydotool")
-                .args(&args)
+            let mut cmd = Command::new("ydotool");
+            cmd.args(&args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+                .stderr(Stdio::null());
+            let status = run_bounded(cmd, KEY_SEQUENCE_TIMEOUT)
                 .map_err(|e| ProgressiveTypingError::TextInputError(e.to_string()))?;
 
             if !status.success() {

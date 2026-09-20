@@ -26,6 +26,7 @@ pub mod tui;
 // Iteration 8: Streaming transcription with VAD
 pub mod continuous_capture;
 pub mod ducker;
+pub mod health;
 pub mod progressive_typing;
 pub mod streaming;
 pub mod streaming_engine;

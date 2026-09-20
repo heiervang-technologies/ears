@@ -51,6 +51,17 @@ pub enum StreamingEvent {
     /// VAD detected end of speech
     SpeechEnded,
 
+    /// A probable-speech candidate (after `SpeechProbable`) dropped below the
+    /// threshold before it was confirmed. No segment is produced. Consumers
+    /// that reacted to `SpeechProbable` (e.g. volume ducking) should undo
+    /// that reaction here. Carries no audio cue.
+    SpeechRejected,
+
+    /// Audio capture ended without being asked to (device unplugged,
+    /// PipeWire restart, pw-record exit). No further audio will arrive; the
+    /// owner must stop claiming to listen.
+    CaptureStopped { reason: String },
+
     /// New transcript chunk received
     TranscriptUpdate {
         committed: String,
@@ -83,6 +94,24 @@ pub struct StreamingStats {
     pub chars_typed: usize,
     /// Number of corrections made
     pub corrections_made: usize,
+}
+
+/// Run a blocking, subprocess-driving closure without stalling the async
+/// runtime's worker thread.
+///
+/// Typing helpers (`wtype`, `ydotool`) block on child processes. On the
+/// multi-threaded runtime this hands the current worker to the closure via
+/// `block_in_place`, so other tasks (capture reader, event loop, IPC) keep
+/// running. On a current-thread runtime (tests) it just runs inline.
+/// The children themselves are bounded by `desktop::run_bounded`, so the
+/// closure is guaranteed to return.
+fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
 }
 
 /// Main streaming transcription engine
@@ -120,6 +149,8 @@ pub struct StreamingEngine {
     /// Track previous speaking state to emit SpeechStarted only on transition
     was_speaking: bool,
 
+    health: Option<crate::health::PipelineHealth>,
+
     /// Track previous probable-speaking state to emit SpeechProbable only on transition
     was_probably_speaking: bool,
 
@@ -138,6 +169,13 @@ pub struct StreamingEngine {
     /// Active guided grammar (bash mode). When set, transcription is routed to
     /// the constrained chat-completions path and text filters are bypassed.
     guided_grammar: Option<String>,
+
+    /// Set after a typing failure. While suspended, transcription and
+    /// transcript events continue but nothing is injected and Enter is never
+    /// sent, because the target may hold a partial command. Cleared only by
+    /// an explicit [`StreamingEngine::resume_typing`] or a fresh engine
+    /// (i.e. restarting listening).
+    typing_suspended: bool,
 }
 
 impl StreamingEngine {
@@ -168,13 +206,21 @@ impl StreamingEngine {
             temp_dir,
             accumulated_text: String::new(),
             was_speaking: false,
+            health: None,
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
             text_filters: TextFilters::default(),
             language: None,
             guided_grammar: None,
+            typing_suspended: false,
         })
+    }
+
+    pub fn set_health(&mut self, health: crate::health::PipelineHealth) {
+        health.set_typing_paused(self.typing_suspended);
+        self.vad_detector.set_health(health.clone());
+        self.health = Some(health);
     }
 
     /// Set event sender for receiving streaming events
@@ -187,40 +233,69 @@ impl StreamingEngine {
     /// # Arguments
     /// * `samples` - Audio samples (mono, f32, -1.0 to 1.0, 16kHz)
     pub async fn process_audio(&mut self, samples: &[f32]) -> Result<(), StreamingEngineError> {
+        let _stage = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Detecting));
         // Add to audio buffer
         self.audio_buffer.write(samples);
 
         // Process with VAD to detect speech segments
-        match self.vad_detector.process(samples) {
-            Ok(Some(segment)) => {
-                // Complete speech segment detected
-                self.was_speaking = false;
-                self.was_probably_speaking = false;
-                self.send_event(StreamingEvent::SpeechEnded);
-                self.process_segment(segment).await?;
-            }
-            Ok(None) => {
-                // Fire SpeechProbable on first speech frames (before min duration met)
-                let is_probable = self.vad_detector.is_probably_speaking();
-                if is_probable && !self.was_probably_speaking {
-                    self.send_event(StreamingEvent::SpeechProbable);
-                }
-                self.was_probably_speaking = is_probable;
-
-                // Fire SpeechStarted only on the false→true transition (confirmed)
-                let is_speaking = self.vad_detector.is_speaking();
-                if is_speaking && !self.was_speaking {
-                    self.send_event(StreamingEvent::SpeechStarted);
-                }
-                self.was_speaking = is_speaking;
-            }
+        let outcome = match self.vad_detector.process(samples) {
+            Ok(outcome) => outcome,
             Err(e) => {
                 warn!("VAD error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("VAD error: {}", e)));
+                return Ok(());
             }
+        };
+
+        if let Some(segment) = self.handle_vad_outcome(outcome) {
+            self.process_segment(segment).await?;
         }
 
         Ok(())
+    }
+
+    /// Translate the detector's state after a chunk into transition events.
+    ///
+    /// Returns the completed segment (if any) for downstream processing.
+    /// Emits exactly one of the speech transition events per edge:
+    /// `SpeechProbable` (candidate started), `SpeechStarted` (confirmed),
+    /// `SpeechEnded` (segment complete) or `SpeechRejected` (candidate
+    /// dropped before confirmation).
+    fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
+        if let Some(segment) = outcome {
+            // Complete speech segment detected
+            self.was_speaking = false;
+            self.was_probably_speaking = false;
+            self.send_event(StreamingEvent::SpeechEnded);
+            return Some(segment);
+        }
+
+        let is_probable = self.vad_detector.is_probably_speaking();
+        let is_speaking = self.vad_detector.is_speaking();
+
+        // Fire SpeechProbable on first speech frames (before min duration met)
+        if is_probable && !self.was_probably_speaking {
+            self.send_event(StreamingEvent::SpeechProbable);
+        }
+
+        // Fire SpeechStarted only on the false→true transition (confirmed)
+        if is_speaking && !self.was_speaking {
+            self.send_event(StreamingEvent::SpeechStarted);
+        }
+
+        // A candidate we announced fell back to silence without ever being
+        // confirmed: tell listeners so they can undo the probable reaction.
+        if self.was_probably_speaking && !is_probable && !is_speaking && !self.was_speaking {
+            debug!("Speech candidate rejected before confirmation");
+            self.send_event(StreamingEvent::SpeechRejected);
+        }
+
+        self.was_probably_speaking = is_probable;
+        self.was_speaking = is_speaking;
+        None
     }
 
     /// Process a complete speech segment
@@ -249,13 +324,22 @@ impl StreamingEngine {
         let segment_file = self
             .temp_dir
             .join(format!("segment_{}.wav", self.stats.segments_processed));
+        let saving = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Saving));
         self.save_wav(&segment_file, &segment.samples)
             .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
         debug!("WAV save took {:?}", wav_start.elapsed());
+        drop(saving);
 
         // Transcribe with Whisper. In bash mode a guided grammar routes the
         // request to the constrained chat-completions path.
         let transcribe_start = Instant::now();
+        let transcribing = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Transcribing));
         let transcript = match self
             .whisper_client
             .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
@@ -269,6 +353,7 @@ impl StreamingEngine {
             }
         };
 
+        drop(transcribing);
         info!("Transcription took {:?}", transcribe_start.elapsed());
 
         // Clean up temp file
@@ -310,31 +395,41 @@ impl StreamingEngine {
             self.accumulated_text.push_str(&newly_committed);
         }
 
-        // Update progressive typing with the full accumulated text
-        if self.config.progressive_typing && !newly_committed.is_empty() {
-            let typing_start = Instant::now();
-            match self.progressive_typing.update(&self.accumulated_text) {
-                Ok(chars) => {
-                    info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
-                    self.stats.chars_typed += chars;
-                }
-                Err(e) => {
-                    warn!(
-                        "Progressive typing error after {:?}: {}",
-                        typing_start.elapsed(),
-                        e
-                    );
-                    self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
-                }
-            }
+        let typing = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Typing));
 
-            // Send Enter key after typing if auto_enter is enabled
-            if self.auto_enter {
-                if let Err(e) = TextInput::send_enter() {
-                    warn!("Failed to send Enter key: {}", e);
+        // Update progressive typing with the full accumulated text
+        if self.typing_suspended {
+            debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
+        } else if self.config.progressive_typing && !newly_committed.is_empty() {
+            let typing_start = Instant::now();
+            let progressive_typing = &mut self.progressive_typing;
+            let accumulated = &self.accumulated_text;
+            let outcome = run_blocking(|| progressive_typing.update(accumulated));
+            let delivered = self.handle_typing_outcome(outcome, typing_start);
+
+            // Send Enter only after typing that we know completed. After a
+            // failure (including a timeout) the screen may hold a partial
+            // command; submitting it would execute something nobody said.
+            if self.auto_enter && delivered {
+                if let Err(e) = run_blocking(TextInput::send_enter) {
+                    // A failed Enter leaves target state uncertain too: the
+                    // next utterance must not append to and submit this one.
+                    self.handle_typing_outcome(
+                        Err(
+                            crate::progressive_typing::ProgressiveTypingError::TextInputError(
+                                format!("Enter key failed: {e}"),
+                            ),
+                        ),
+                        typing_start,
+                    );
                 }
             }
         }
+
+        drop(typing);
 
         // Update stats
         let latency_ms = start_time.elapsed().as_millis() as u64;
@@ -369,6 +464,73 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Account for a progressive-typing attempt. Returns whether the text is
+    /// known to have been delivered.
+    ///
+    /// On failure typing is *suspended*, not retried: a timed-out child may
+    /// have delivered part of the text, so neither the engine nor the
+    /// progressive typer can know what is on screen. Typing the next segment
+    /// would append to that partial command, and auto-Enter would execute it.
+    /// Transcription keeps running so the transcript history and clipboard
+    /// stay useful; the user is told to check the target and restart
+    /// listening to resume injection.
+    fn handle_typing_outcome(
+        &mut self,
+        outcome: Result<usize, crate::progressive_typing::ProgressiveTypingError>,
+        typing_start: Instant,
+    ) -> bool {
+        match outcome {
+            Ok(chars) => {
+                info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
+                self.stats.chars_typed += chars;
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "Progressive typing error after {:?}: {}; typing suspended until listening is restarted",
+                    typing_start.elapsed(),
+                    e
+                );
+                self.send_event(StreamingEvent::Error(format!(
+                    "Typing error: {}. Output may be partial and was not retried. \
+                     Typing is paused: check the target window, then restart listening to resume.",
+                    e
+                )));
+                self.suspend_typing();
+                false
+            }
+        }
+    }
+
+    /// Stop injecting text and Enter until [`StreamingEngine::resume_typing`]
+    /// or a fresh engine. The progressive typer's notion of what is on screen
+    /// is discarded because it is no longer trustworthy.
+    fn suspend_typing(&mut self) {
+        self.typing_suspended = true;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(true);
+        }
+        self.progressive_typing.reset();
+    }
+
+    /// Whether injection is currently paused after a typing failure.
+    pub fn typing_suspended(&self) -> bool {
+        self.typing_suspended
+    }
+
+    /// Explicitly resume injection after the user has checked the target.
+    /// Starts the progressive typer from a clean slate so nothing already
+    /// transcribed is replayed.
+    pub fn resume_typing(&mut self) {
+        self.typing_suspended = false;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(false);
+        }
+        self.progressive_typing.reset();
+        self.local_agreement.reset();
+        self.accumulated_text.clear();
     }
 
     /// Save audio samples to WAV file
@@ -441,7 +603,12 @@ impl StreamingEngine {
         self.accumulated_text.clear();
         self.stats = StreamingStats::default();
         self.was_speaking = false;
+        self.was_probably_speaking = false;
         self.auto_enter = false;
+        self.typing_suspended = false;
+        if let Some(ref health) = self.health {
+            health.set_typing_paused(false);
+        }
     }
 
     /// Update configuration
@@ -494,6 +661,152 @@ impl StreamingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<StreamingEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            out.push(format!("{:?}", ev));
+        }
+        out
+    }
+
+    /// Engine wired to a detector with short (3-frame) thresholds and an
+    /// event receiver, driven by injected probabilities.
+    fn seq_engine() -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
+        let mut engine = StreamingEngine::new(
+            Arc::new(WhisperClient::new("http://localhost:8178")),
+            StreamingConfig::default(),
+            VadConfig {
+                min_speech_duration_ms: 96,
+                max_silence_duration_ms: 96,
+                pre_speech_buffer_ms: 64,
+                ..VadConfig::default()
+            },
+            ProgressiveTypingConfig::default(),
+            PathBuf::new(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        engine.set_event_sender(tx);
+        (engine, rx)
+    }
+
+    fn feed(engine: &mut StreamingEngine, probs: &[f32]) -> Vec<SpeechSegment> {
+        let mut segs = Vec::new();
+        for &p in probs {
+            let outcome = engine.vad_detector.inject_probability(p);
+            if let Some(seg) = engine.handle_vad_outcome(outcome) {
+                segs.push(seg);
+            }
+        }
+        segs
+    }
+
+    #[test]
+    fn test_rejected_candidate_emits_speech_rejected() {
+        let (mut engine, mut rx) = seq_engine();
+        feed(&mut engine, &[0.9]);
+        assert_eq!(drain(&mut rx), vec!["SpeechProbable"]);
+
+        // Dip before confirmation: the candidate is rejected.
+        feed(&mut engine, &[0.0]);
+        assert_eq!(drain(&mut rx), vec!["SpeechRejected"]);
+
+        // Nothing further while silent.
+        feed(&mut engine, &[0.0, 0.0]);
+        assert!(drain(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_confirmed_speech_emits_started_and_ended_not_rejected() {
+        let (mut engine, mut rx) = seq_engine();
+        let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(
+            drain(&mut rx),
+            vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
+        );
+    }
+
+    #[test]
+    fn test_rejected_then_confirmed_sequence() {
+        let (mut engine, mut rx) = seq_engine();
+        feed(&mut engine, &[0.9, 0.9, 0.0, 0.0]);
+        assert_eq!(drain(&mut rx), vec!["SpeechProbable", "SpeechRejected"]);
+
+        let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(
+            drain(&mut rx),
+            vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
+        );
+    }
+
+    #[test]
+    fn test_typing_failure_suppresses_enter_and_suspends_typing() {
+        use crate::progressive_typing::ProgressiveTypingError;
+        let (mut engine, mut rx) = seq_engine();
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = crate::health::HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        engine.set_health(health.clone());
+        engine.accumulated_text = "hello world".to_string();
+
+        let delivered = engine.handle_typing_outcome(
+            Err(ProgressiveTypingError::TextInputError(
+                "child process timed out".to_string(),
+            )),
+            Instant::now(),
+        );
+
+        assert!(
+            !delivered,
+            "Enter must not follow a failed/timed-out typing"
+        );
+        assert!(engine.typing_suspended());
+        assert!(health.snapshot().typing_paused);
+        assert_eq!(
+            engine.committed_text(),
+            "hello world",
+            "transcript history is preserved"
+        );
+        assert!(engine.progressive_typing.typed_text().is_empty());
+        let events = drain(&mut rx);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].starts_with("Error("), "{}", events[0]);
+        assert!(events[0].contains("not retried"));
+        assert!(events[0].contains("restart listening"));
+
+        // A later successful-looking outcome does not lift the suspension.
+        engine.handle_typing_outcome(Ok(3), Instant::now());
+        assert!(engine.typing_suspended());
+
+        // Explicit resume starts clean.
+        engine.resume_typing();
+        assert!(!engine.typing_suspended());
+        assert!(!health.snapshot().typing_paused);
+        assert!(engine.committed_text().is_empty());
+    }
+
+    #[test]
+    fn test_reset_clears_typing_suspension() {
+        let (mut engine, _rx) = seq_engine();
+        engine.suspend_typing();
+        assert!(engine.typing_suspended());
+        engine.reset();
+        assert!(!engine.typing_suspended());
+    }
+
+    #[test]
+    fn test_typing_success_keeps_state_and_allows_enter() {
+        let (mut engine, mut rx) = seq_engine();
+        engine.accumulated_text = "hello".to_string();
+        let delivered = engine.handle_typing_outcome(Ok(5), Instant::now());
+        assert!(delivered);
+        assert_eq!(engine.committed_text(), "hello");
+        assert_eq!(engine.stats().chars_typed, 5);
+        assert!(drain(&mut rx).is_empty());
+    }
 
     #[test]
     fn test_streaming_stats_default() {
