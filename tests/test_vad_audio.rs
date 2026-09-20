@@ -326,3 +326,37 @@ device = "test-mic"
     assert_eq!(config.vad.min_speech_duration_ms, 300);
     assert_eq!(config.vad.max_silence_duration_ms, 700);
 }
+
+#[test]
+fn test_health_instrumentation_preserves_vad_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let monitor = ears::health::HealthMonitor::start(dir.path()).unwrap();
+    let health = monitor.health();
+    let mut baseline = VadSegmentDetector::new(VadConfig::default()).unwrap();
+    let mut observed = VadSegmentDetector::new(VadConfig::default()).unwrap();
+    observed.set_health(health.clone());
+    for name in [
+        "silence.wav",
+        "speech_like.wav",
+        "short_utterances.wav",
+        "speech_over_noise.wav",
+    ] {
+        let samples = read_wav_samples(&fixtures_dir().join(name));
+        for chunk in samples.chunks(1600) {
+            let expected = baseline.process(chunk).unwrap();
+            let actual = observed.process(chunk).unwrap();
+            assert_eq!(baseline.is_speaking(), observed.is_speaking());
+            assert_eq!(
+                baseline.is_probably_speaking(),
+                observed.is_probably_speaking()
+            );
+            assert_eq!(expected.is_some(), actual.is_some());
+            if let (Some(expected), Some(actual)) = (expected, actual) {
+                assert_eq!(expected.start_ms, actual.start_ms);
+                assert_eq!(expected.end_ms, actual.end_ms);
+                assert_eq!(expected.samples, actual.samples);
+            }
+        }
+    }
+    assert!(health.snapshot().processed_frames > 0);
+}

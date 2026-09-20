@@ -90,6 +90,7 @@ pub struct ContinuousCapture {
 
     /// Incremented on every `start()`; readers act only on their own generation.
     generation: Arc<AtomicU64>,
+    health: Option<crate::health::PipelineHealth>,
 
     /// Configuration
     config: ContinuousCaptureConfig,
@@ -111,6 +112,7 @@ impl ContinuousCapture {
         Self {
             process: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
+            health: None,
             config,
             audio_tx: None,
             status_tx,
@@ -133,6 +135,10 @@ impl ContinuousCapture {
     /// Current liveness snapshot.
     pub fn status(&self) -> CaptureStatus {
         self.status_rx.borrow().clone()
+    }
+
+    pub fn set_health(&mut self, health: crate::health::PipelineHealth) {
+        self.health = Some(health);
     }
 
     /// Start continuous audio capture
@@ -227,6 +233,7 @@ impl ContinuousCapture {
         let process = self.process.clone();
         let status_tx = self.status_tx.clone();
         let current_generation = self.generation.clone();
+        let health = self.health.clone();
 
         // Use spawn_blocking for the reader since it does blocking std::io::Read.
         // tokio::spawn with blocking I/O would starve the async runtime.
@@ -245,6 +252,10 @@ impl ContinuousCapture {
                                 sample_i16 as f32 / 32768.0 // Normalize to -1.0..1.0
                             })
                             .collect();
+
+                        if let Some(ref health) = health {
+                            health.captured(&samples);
+                        }
 
                         // Send samples
                         if audio_tx.send(samples).is_err() {
@@ -296,6 +307,9 @@ impl ContinuousCapture {
                         Some(status) => format!("{} (pw-record exit: {})", reason, status),
                         None => reason,
                     };
+                    if let Some(ref health) = health {
+                        health.capture_stopped(&reason);
+                    }
                     warn!("Audio capture stopped: {}", reason);
                     let _ = status_tx.send(CaptureStatus::Stopped { reason });
                 }

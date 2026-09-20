@@ -317,6 +317,32 @@ Falls back to embedded sounds if not found.
 - Check state: `cat $XDG_RUNTIME_DIR/ears/state`
 - Check logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
 
+### VAD appears unresponsive
+
+Desktop VAD publishes `$XDG_RUNTIME_DIR/ears/vad-health.json` once per second.
+It identifies the desktop session, microphone, last audio/VAD progress, speech
+probability, rejected-candidate count, audio backlog, and current processing
+stage. It contains no audio or transcript text. A separate supervisor reports
+missing audio or slow processing in `debug.log`, even if the processing task
+is blocked. These are diagnostic warnings, not automatic restarts.
+
+For detailed periodic measurements, start Ears with:
+
+```bash
+RUST_LOG=info,ears::health=debug ears vad
+```
+
+`ears vad` is a toggle: stop an existing VAD session before starting this way.
+The health snapshot is always available; debug logging is selected at startup.
+The updated HAIos ears bridge uses this snapshot to prevent Friend from showing
+healthy listening for a stalled or unrelated Ears process. Existing audio cues
+and IPC events keep their meanings.
+
+A stopped snapshot is intentionally retained. If rolling back to an older Ears
+binary that does not publish health, stop VAD and remove only
+`$XDG_RUNTIME_DIR/ears/vad-health.json` before starting the older version; the
+bridge then uses its legacy process/state check.
+
 ### Text isn't being typed
 - Hyprland: ensure `wtype` is installed
 - Other: ensure `ydotoold` is running (`pgrep ydotoold`)

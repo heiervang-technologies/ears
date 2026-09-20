@@ -77,6 +77,7 @@ pub struct SileroVad {
     speech_frames: usize,
     silence_frames: usize,
     in_speech: bool,
+    health: Option<crate::health::PipelineHealth>,
 }
 
 impl SileroVad {
@@ -94,6 +95,7 @@ impl SileroVad {
             speech_frames: 0,
             silence_frames: 0,
             in_speech: false,
+            health: None,
         })
     }
 
@@ -120,6 +122,8 @@ impl SileroVad {
     /// machine can be driven deterministically in tests without the model.
     pub(crate) fn apply_probability(&mut self, probability: f32) -> VadResult {
         let is_speech = probability >= self.config.speech_threshold;
+
+        let rejected = !self.in_speech && self.speech_frames > 0 && !is_speech;
 
         // Update counters
         if is_speech {
@@ -158,6 +162,16 @@ impl SileroVad {
         } else {
             VadResult::Speech
         };
+
+        if let Some(ref health) = self.health {
+            health.frame(
+                probability,
+                self.config.speech_threshold,
+                self.speech_frames,
+                self.in_speech,
+                rejected,
+            );
+        }
 
         result
     }
@@ -244,6 +258,10 @@ impl VadSegmentDetector {
             pre_speech_buffer: VecDeque::with_capacity(pre_speech_samples),
             pre_speech_buffer_capacity: pre_speech_samples,
         })
+    }
+
+    pub fn set_health(&mut self, health: crate::health::PipelineHealth) {
+        self.vad.health = Some(health);
     }
 
     /// Push a frame into the pre-speech ring buffer, evicting old samples if full

@@ -149,6 +149,8 @@ pub struct StreamingEngine {
     /// Track previous speaking state to emit SpeechStarted only on transition
     was_speaking: bool,
 
+    health: Option<crate::health::PipelineHealth>,
+
     /// Track previous probable-speaking state to emit SpeechProbable only on transition
     was_probably_speaking: bool,
 
@@ -197,6 +199,7 @@ impl StreamingEngine {
             temp_dir,
             accumulated_text: String::new(),
             was_speaking: false,
+            health: None,
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
@@ -204,6 +207,11 @@ impl StreamingEngine {
             language: None,
             guided_grammar: None,
         })
+    }
+
+    pub fn set_health(&mut self, health: crate::health::PipelineHealth) {
+        self.vad_detector.set_health(health.clone());
+        self.health = Some(health);
     }
 
     /// Set event sender for receiving streaming events
@@ -216,6 +224,10 @@ impl StreamingEngine {
     /// # Arguments
     /// * `samples` - Audio samples (mono, f32, -1.0 to 1.0, 16kHz)
     pub async fn process_audio(&mut self, samples: &[f32]) -> Result<(), StreamingEngineError> {
+        let _stage = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Detecting));
         // Add to audio buffer
         self.audio_buffer.write(samples);
 
@@ -303,13 +315,22 @@ impl StreamingEngine {
         let segment_file = self
             .temp_dir
             .join(format!("segment_{}.wav", self.stats.segments_processed));
+        let saving = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Saving));
         self.save_wav(&segment_file, &segment.samples)
             .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
         debug!("WAV save took {:?}", wav_start.elapsed());
+        drop(saving);
 
         // Transcribe with Whisper. In bash mode a guided grammar routes the
         // request to the constrained chat-completions path.
         let transcribe_start = Instant::now();
+        let transcribing = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Transcribing));
         let transcript = match self
             .whisper_client
             .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
@@ -323,6 +344,7 @@ impl StreamingEngine {
             }
         };
 
+        drop(transcribing);
         info!("Transcription took {:?}", transcribe_start.elapsed());
 
         // Clean up temp file
@@ -364,6 +386,11 @@ impl StreamingEngine {
             self.accumulated_text.push_str(&newly_committed);
         }
 
+        let typing = self
+            .health
+            .as_ref()
+            .map(|h| h.enter(crate::health::Stage::Typing));
+
         // Update progressive typing with the full accumulated text
         if self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
@@ -381,6 +408,8 @@ impl StreamingEngine {
                 }
             }
         }
+
+        drop(typing);
 
         // Update stats
         let latency_ms = start_time.elapsed().as_millis() as u64;
