@@ -369,23 +369,13 @@ impl StreamingEngine {
             let typing_start = Instant::now();
             let progressive_typing = &mut self.progressive_typing;
             let accumulated = &self.accumulated_text;
-            match run_blocking(|| progressive_typing.update(accumulated)) {
-                Ok(chars) => {
-                    info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
-                    self.stats.chars_typed += chars;
-                }
-                Err(e) => {
-                    warn!(
-                        "Progressive typing error after {:?}: {}",
-                        typing_start.elapsed(),
-                        e
-                    );
-                    self.send_event(StreamingEvent::Error(format!("Typing error: {}", e)));
-                }
-            }
+            let outcome = run_blocking(|| progressive_typing.update(accumulated));
+            let delivered = self.handle_typing_outcome(outcome, typing_start);
 
-            // Send Enter key after typing if auto_enter is enabled
-            if self.auto_enter {
+            // Send Enter only after typing that we know completed. After a
+            // failure (including a timeout) the screen may hold a partial
+            // command; submitting it would execute something nobody said.
+            if self.auto_enter && delivered {
                 if let Err(e) = run_blocking(TextInput::send_enter) {
                     warn!("Failed to send Enter key: {}", e);
                 }
@@ -425,6 +415,51 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Account for a progressive-typing attempt. Returns whether the text is
+    /// known to have been delivered.
+    ///
+    /// On failure the typed state is *discarded*, not retried: a timed-out
+    /// child may have delivered part of the text, so neither the engine nor
+    /// the progressive typer can know what is on screen. Carrying the old
+    /// accumulated text forward would replay it (duplicate output) or, with
+    /// auto-correction, backspace over characters that were never typed. The
+    /// next segment therefore starts from a clean slate and types only its
+    /// own words.
+    fn handle_typing_outcome(
+        &mut self,
+        outcome: Result<usize, crate::progressive_typing::ProgressiveTypingError>,
+        typing_start: Instant,
+    ) -> bool {
+        match outcome {
+            Ok(chars) => {
+                info!("Typed {} characters in {:?}", chars, typing_start.elapsed());
+                self.stats.chars_typed += chars;
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "Progressive typing error after {:?}: {}; discarding uncertain typed state",
+                    typing_start.elapsed(),
+                    e
+                );
+                self.send_event(StreamingEvent::Error(format!(
+                    "Typing error: {} (output may be partial; not retried)",
+                    e
+                )));
+                self.discard_uncertain_typing_state();
+                false
+            }
+        }
+    }
+
+    /// Forget everything about what has been typed so far. Used after a
+    /// typing failure, when the on-screen state is unknown.
+    fn discard_uncertain_typing_state(&mut self) {
+        self.local_agreement.reset();
+        self.progressive_typing.reset();
+        self.accumulated_text.clear();
     }
 
     /// Save audio samples to WAV file
@@ -630,6 +665,47 @@ mod tests {
             drain(&mut rx),
             vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
         );
+    }
+
+    #[test]
+    fn test_typing_failure_suppresses_enter_and_discards_state() {
+        use crate::progressive_typing::ProgressiveTypingError;
+        let (mut engine, mut rx) = seq_engine();
+        engine.accumulated_text = "hello world".to_string();
+        engine.local_agreement.process("hello world".to_string());
+
+        let delivered = engine.handle_typing_outcome(
+            Err(ProgressiveTypingError::TextInputError(
+                "child process timed out".to_string(),
+            )),
+            Instant::now(),
+        );
+
+        assert!(
+            !delivered,
+            "Enter must not follow a failed/timed-out typing"
+        );
+        assert!(
+            engine.committed_text().is_empty(),
+            "no replay of uncertain text"
+        );
+        assert!(engine.progressive_typing.typed_text().is_empty());
+        assert_eq!(engine.local_agreement.committed(), "");
+        let events = drain(&mut rx);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].starts_with("Error("), "{}", events[0]);
+        assert!(events[0].contains("not retried"));
+    }
+
+    #[test]
+    fn test_typing_success_keeps_state_and_allows_enter() {
+        let (mut engine, mut rx) = seq_engine();
+        engine.accumulated_text = "hello".to_string();
+        let delivered = engine.handle_typing_outcome(Ok(5), Instant::now());
+        assert!(delivered);
+        assert_eq!(engine.committed_text(), "hello");
+        assert_eq!(engine.stats().chars_typed, 5);
+        assert!(drain(&mut rx).is_empty());
     }
 
     #[test]

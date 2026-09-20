@@ -512,28 +512,85 @@ pub(crate) fn wait_bounded(
 
 /// Spawn `cmd` with piped stdout, collect its output, and enforce a deadline.
 ///
-/// The pipe is drained on a helper thread so a chatty child cannot deadlock
-/// against a full pipe while we poll for exit. On expiry the child is killed
-/// and reaped, which closes the pipe and releases the drain thread.
+/// The pipe is switched to non-blocking mode and drained in the same loop
+/// that polls the child for exit, so no helper thread can be left waiting on
+/// a pipe that a forked descendant still holds open. On expiry the child is
+/// killed and reaped and the pipe is dropped. Once the child has exited, any
+/// bytes it already wrote are drained without waiting for other holders of
+/// the write end to close.
 pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     use std::io::Read;
+    use std::os::unix::io::AsRawFd;
 
     cmd.stdout(std::process::Stdio::piped());
     let mut child = cmd.spawn().context("Failed to spawn child process")?;
     let mut stdout = child.stdout.take().context("child stdout unavailable")?;
-    let drain = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let status = wait_bounded(&mut child, timeout);
-    let stdout = drain.join().unwrap_or_default();
-    let status = status?;
+    set_nonblocking(stdout.as_raw_fd()).context("Failed to set pipe non-blocking")?;
+
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut status = None;
+    while status.is_none() {
+        // Drain whatever is available right now without blocking.
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break, // write end fully closed
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        if let Some(st) = child.try_wait().context("Failed to poll child process")? {
+            status = Some(st);
+            break;
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(stdout);
+            anyhow::bail!(
+                "child process timed out after {:?}; killed and reaped (output may be partially delivered)",
+                timeout
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+
+    // Child has exited: take what it left in the pipe, then stop regardless
+    // of whether a descendant still holds the write end.
+    loop {
+        match stdout.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    drop(stdout);
+
     Ok(std::process::Output {
-        status,
-        stdout,
+        status: status.expect("loop exits only with a status"),
+        stdout: buf,
         stderr: Vec::new(),
     })
+}
+
+/// Put a file descriptor into O_NONBLOCK mode.
+fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
+    // SAFETY: fcntl on a valid, owned fd with well-formed flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Text input automation
@@ -831,11 +888,42 @@ mod tests {
     #[test]
     fn test_output_bounded_kills_hung_child_holding_pipe() {
         // Child writes then hangs with the pipe open: must be killed, not awaited.
+        // The trailing `exit` defeats shells that exec the last command, so
+        // the shell itself (our direct child) is the one that hangs.
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg("printf partial; sleep 30");
+        cmd.arg("-c").arg("printf partial; sleep 30; exit 0");
         let start = Instant::now();
         let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
         assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_returns_when_child_exits_but_grandchild_holds_pipe() {
+        // The direct child exits at once, but a backgrounded descendant keeps
+        // the write end of stdout open for 30s. A blocking read-to-end would
+        // hang here; we must return with the child's status and its bytes.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & printf partial; exit 0");
+        let start = Instant::now();
+        let out = output_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "must not wait for the grandchild"
+        );
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "partial");
+    }
+
+    #[test]
+    fn test_output_bounded_timeout_with_grandchild_holding_pipe() {
+        // Direct child hangs AND a descendant holds the pipe: kill must not
+        // be followed by any wait on the pipe.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & sleep 30; exit 0");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(4));
         assert!(err.to_string().contains("timed out"), "{}", err);
     }
 

@@ -14,6 +14,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
@@ -77,13 +78,18 @@ impl CaptureStatus {
     }
 }
 
-/// Shared handle to the pw-record child.
-type SharedChild = Arc<Mutex<Option<Child>>>;
+/// Shared handle to the pw-record child, tagged with the start generation
+/// that spawned it so a reader from an earlier `start()` can never kill or
+/// report on a child that belongs to a later one.
+type SharedChild = Arc<Mutex<Option<(u64, Child)>>>;
 
 /// Continuous audio capture handler
 pub struct ContinuousCapture {
     /// pw-record child process, shared with the reader task
     process: SharedChild,
+
+    /// Incremented on every `start()`; readers act only on their own generation.
+    generation: Arc<AtomicU64>,
 
     /// Configuration
     config: ContinuousCaptureConfig,
@@ -104,6 +110,7 @@ impl ContinuousCapture {
         let (status_tx, status_rx) = watch::channel(CaptureStatus::Idle);
         Self {
             process: Arc::new(Mutex::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
             config,
             audio_tx: None,
             status_tx,
@@ -171,12 +178,15 @@ impl ContinuousCapture {
             ContinuousCaptureError::StartError("pw-record stdout unavailable".to_string())
         })?;
 
+        // Make sure no previous child lingers, then claim a new generation.
+        Self::kill_and_reap(&self.process);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut slot) = self.process.lock() {
-            *slot = Some(child);
+            *slot = Some((generation, child));
         }
         let _ = self.status_tx.send(CaptureStatus::Running);
 
-        self.spawn_reader_task(stdout, audio_tx);
+        self.spawn_reader_task(stdout, audio_tx, generation);
 
         Ok(())
     }
@@ -200,7 +210,7 @@ impl ContinuousCapture {
             Ok(mut slot) => slot.take(),
             Err(_) => None,
         };
-        if let Some(mut child) = child {
+        if let Some((_, mut child)) = child {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -211,10 +221,12 @@ impl ContinuousCapture {
         &mut self,
         mut stdout: std::process::ChildStdout,
         audio_tx: mpsc::UnboundedSender<Vec<f32>>,
+        generation: u64,
     ) {
         let chunk_size = self.config.chunk_size;
         let process = self.process.clone();
         let status_tx = self.status_tx.clone();
+        let current_generation = self.generation.clone();
 
         // Use spawn_blocking for the reader since it does blocking std::io::Read.
         // tokio::spawn with blocking I/O would starve the async runtime.
@@ -249,21 +261,38 @@ impl ContinuousCapture {
                 }
             };
 
-            // Reap the child and enrich the reason with its exit status.
+            // Reap *our* child and enrich the reason with its exit status.
+            // If the slot now holds a later generation's child, leave it alone.
             let exit_status = match process.lock() {
-                Ok(mut slot) => slot.take().map(|mut child| {
-                    let _ = child.kill();
-                    child.wait().ok()
-                }),
+                Ok(mut slot) => match slot.take() {
+                    Some((gen, mut child)) if gen == generation => {
+                        let _ = child.kill();
+                        child.wait().ok()
+                    }
+                    Some(other) => {
+                        *slot = Some(other);
+                        None
+                    }
+                    None => None,
+                },
                 Err(_) => None,
             };
+
+            // A newer start() owns the status now; this reader is history.
+            if current_generation.load(Ordering::SeqCst) != generation {
+                debug!(
+                    "Audio capture reader (gen {}) ended after a restart",
+                    generation
+                );
+                return;
+            }
 
             // Only publish Stopped if nobody asked us to stop. `stop()` sets
             // Idle before killing the child, so an EOF after that is expected.
             let requested = !status_tx.borrow().is_running();
             match exit_reason {
                 Some(reason) if !requested => {
-                    let reason = match exit_status.flatten() {
+                    let reason = match exit_status {
                         Some(status) => format!("{} (pw-record exit: {})", reason, status),
                         None => reason,
                     };
@@ -351,10 +380,11 @@ mod tests {
         // Two full chunks, then EOF.
         let mut child = spawn_fake_child(400);
         let stdout = child.stdout.take().unwrap();
-        *capture.process.lock().unwrap() = Some(child);
+        let generation = capture.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *capture.process.lock().unwrap() = Some((generation, child));
         let _ = capture.status_tx.send(CaptureStatus::Running);
         let audio_tx = capture.audio_tx.clone().unwrap();
-        capture.spawn_reader_task(stdout, audio_tx);
+        capture.spawn_reader_task(stdout, audio_tx, generation);
 
         let mut status_rx = capture.status_rx();
         assert_eq!(rx.recv().await.unwrap().len(), 100);
@@ -374,6 +404,67 @@ mod tests {
 
         assert!(!capture.is_running());
         assert!(capture.process.lock().unwrap().is_none(), "child reaped");
+    }
+
+    /// Install a fake child as if `start()` had spawned it.
+    fn install_fake(capture: &mut ContinuousCapture, mut child: Child) -> u64 {
+        let stdout = child.stdout.take().unwrap();
+        let generation = capture.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *capture.process.lock().unwrap() = Some((generation, child));
+        let _ = capture.status_tx.send(CaptureStatus::Running);
+        let audio_tx = capture.audio_tx.clone().unwrap();
+        capture.spawn_reader_task(stdout, audio_tx, generation);
+        generation
+    }
+
+    fn sh(script: &str) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_old_reader_does_not_touch_restarted_capture() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ContinuousCaptureConfig {
+            chunk_size: 100,
+            ..ContinuousCaptureConfig::default()
+        };
+        let mut capture = ContinuousCapture::new(config, temp_dir.path().into());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        capture.set_audio_sender(tx);
+
+        // Generation 1: writes one chunk, then holds the pipe open a while
+        // so its reader is still alive when we restart.
+        let gen1 = install_fake(&mut capture, sh("head -c 200 /dev/zero; sleep 0.3"));
+        assert!(rx.recv().await.is_some());
+
+        // "Restart": stop() then install generation 2 (an endless producer).
+        capture.stop().unwrap();
+        let gen2 = install_fake(&mut capture, sh("cat /dev/zero"));
+        assert_ne!(gen1, gen2);
+        assert!(capture.is_running());
+
+        // Let generation 1's reader hit EOF and exit.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        // Generation 2 must be untouched: still Running, child still in slot.
+        assert_eq!(capture.status(), CaptureStatus::Running);
+        {
+            let slot = capture.process.lock().unwrap();
+            assert!(
+                matches!(&*slot, Some((g, _)) if *g == gen2),
+                "gen2 child must remain in the slot"
+            );
+        }
+        assert!(rx.recv().await.is_some(), "gen2 still delivering audio");
+
+        capture.stop().unwrap();
     }
 
     #[tokio::test]
@@ -397,10 +488,11 @@ mod tests {
             .spawn()
             .unwrap();
         let stdout = child.stdout.take().unwrap();
-        *capture.process.lock().unwrap() = Some(child);
+        let generation = capture.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *capture.process.lock().unwrap() = Some((generation, child));
         let _ = capture.status_tx.send(CaptureStatus::Running);
         let audio_tx = capture.audio_tx.clone().unwrap();
-        capture.spawn_reader_task(stdout, audio_tx);
+        capture.spawn_reader_task(stdout, audio_tx, generation);
 
         assert!(rx.recv().await.is_some());
         assert!(capture.is_running());
