@@ -244,9 +244,10 @@ Currently supported commands:
 | Command | Response | Description |
 |---------|----------|-------------|
 | `toggle-auto-enter` | `auto-enter:on` or `auto-enter:off` | Toggle the auto-enter setting |
+| `typing-on` / `typing-off` / `typing-toggle` / `typing-status` | `typing:on` or `typing:off` | Switch typing into the focused window. Off still transcribes and publishes segments on `ears.sock`, so `talking-stick listen` can route them instead. Persisted in `$XDG_STATE_HOME/ears/typing` (override `EARS_TYPING_STATE`); missing file = on. |
 | (unknown) | `error:unknown-command` | Any unrecognized command |
 
-The `ears auto-enter` CLI command uses `ipc::send_command("toggle-auto-enter")` to communicate with the running instance.
+The `ears auto-enter` CLI command uses `ipc::send_command("toggle-auto-enter")` to communicate with the running instance. `ears typing [on|off|toggle|status]` does the same with the `typing-*` verbs; with no running instance it reads or writes the persisted switch directly. Push-to-talk (`ears toggle`) is an explicit "type this" action and ignores the switch: it does not publish on `ears.sock`, so muting it would lose the words.
 
 ### WebSocket IPC
 

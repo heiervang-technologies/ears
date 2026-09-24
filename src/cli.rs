@@ -68,6 +68,15 @@ pub enum Commands {
     #[command(alias = "ae")]
     AutoEnter,
 
+    /// Type transcripts into the focused window: on, off, toggle or status.
+    /// Off keeps transcribing and publishing on the IPC socket (for
+    /// `talking-stick listen`) without typing. Persists across restarts.
+    Typing {
+        /// on | off | toggle | status (default: status)
+        #[arg(default_value = "status", value_parser = ["on", "off", "toggle", "status"])]
+        action: String,
+    },
+
     /// Select audio device with fzf (shortcut for `device select`)
     #[command(alias = "s", hide = true)]
     Select,
