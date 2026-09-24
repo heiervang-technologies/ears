@@ -216,6 +216,8 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
     let mut vad_shutdown: Option<watch::Sender<bool>> = None;
     let mut vad_settings: Option<watch::Sender<TypingSettings>> = None;
     let mut vad_handle: Option<tokio::task::JoinHandle<()>> = None;
+    // Remote typing switch (`ears typing ...`); off = transcribe and publish only.
+    let mut typing = crate::typing_switch::load();
 
     let result: Result<()> = async {
         loop {
@@ -230,6 +232,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_auto_enter = app.auto_enter;
             let prev_text_filters = app.text_filters.clone();
             let prev_bash_mode = app.bash_mode;
+            let prev_typing = typing;
 
             match event_handler.next().await? {
                 Event::Key(key) => {
@@ -275,6 +278,16 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         let _ = respond.send(format!("auto-enter:{}", state));
                         app.add_log(&format!("Auto-enter: {}", state));
                     }
+                    crate::ipc::EarsCommand::Typing { request, respond } => {
+                        let next = request.apply(typing);
+                        if request.changes_state() {
+                            if let Err(e) = crate::typing_switch::save(next) {
+                                app.add_log(&format!("Failed to persist typing switch: {}", e));
+                            }
+                            typing = next;
+                        }
+                        let _ = respond.send(crate::typing_switch::describe(typing));
+                    }
                 }
             }
 
@@ -285,13 +298,14 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 || app.auto_enter != prev_auto_enter
                 || app.text_filters != prev_text_filters
                 || app.bash_mode != prev_bash_mode
+                || typing != prev_typing
             {
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
-                        progressive_typing: app.progressive_typing,
+                        progressive_typing: app.progressive_typing && typing,
                         auto_correction: app.auto_correction,
-                        typing_mode: app.typing_mode,
-                        auto_enter: app.auto_enter,
+                        typing_mode: crate::typing_switch::effective_mode(app.typing_mode, typing),
+                        auto_enter: app.auto_enter && typing,
                         text_filters: app.text_filters.clone(),
                         language: app.language.clone(),
                         guided_grammar: app.active_grammar(),
@@ -312,10 +326,13 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                     Ok((shutdown, settings, handle)) => {
                         // Send current settings immediately so engine matches TUI state
                         let _ = settings.send(TypingSettings {
-                            progressive_typing: app.progressive_typing,
+                            progressive_typing: app.progressive_typing && typing,
                             auto_correction: app.auto_correction,
-                            typing_mode: app.typing_mode,
-                            auto_enter: app.auto_enter,
+                            typing_mode: crate::typing_switch::effective_mode(
+                                app.typing_mode,
+                                typing,
+                            ),
+                            auto_enter: app.auto_enter && typing,
                             text_filters: app.text_filters.clone(),
                             language: app.language.clone(),
                             guided_grammar: app.active_grammar(),
