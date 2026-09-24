@@ -1,5 +1,11 @@
 //! Persisted on/off switch for typing transcripts into the focused window.
 //!
+//! Applies to the VAD pipeline (daemon and TUI), which publishes segments on
+//! `ears.sock`. Push-to-talk (`ears toggle`) is an explicit "type this" and
+//! always types: it does not publish on the socket, so muting it would lose
+//! the words. A switch takes effect between audio chunks; a segment already
+//! being transcribed when it arrives is handled with the previous setting.
+//!
 //! When typing is off, ears still transcribes and publishes every segment on
 //! its IPC socket (`ears.sock`), so a consumer such as `talking-stick listen`
 //! can route the words elsewhere without them also being typed. The switch

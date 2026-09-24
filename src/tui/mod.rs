@@ -284,6 +284,12 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             if let Err(e) = crate::typing_switch::save(next) {
                                 app.add_log(&format!("Failed to persist typing switch: {}", e));
                             }
+                            if next != typing {
+                                app.add_log(&format!(
+                                    "Typing into focused window: {} (remote switch)",
+                                    if next { "on" } else { "off" }
+                                ));
+                            }
                             typing = next;
                         }
                         let _ = respond.send(crate::typing_switch::describe(typing));

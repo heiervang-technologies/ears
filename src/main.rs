@@ -1004,13 +1004,9 @@ async fn stop_and_transcribe(
             tracing::debug!("Filtered text: {}", filtered_text);
 
             let typing_start = std::time::Instant::now();
-            let typing_mode = ears::typing_switch::effective_mode(
-                config.typing_mode,
-                ears::typing_switch::load(),
-            );
-            match TextInput::type_text(&filtered_text, typing_mode) {
+            match TextInput::type_text(&filtered_text, config.typing_mode) {
                 Ok(()) => {
-                    if config.auto_enter && typing_mode != ears::TypingMode::None {
+                    if config.auto_enter {
                         if let Err(e) = TextInput::send_enter() {
                             tracing::warn!("Failed to send Enter key: {}", e);
                         }
