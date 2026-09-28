@@ -1139,12 +1139,10 @@ async fn stream_ghost_preview(
     recorder_alive: impl Fn() -> bool,
     ghost: &mut PreviewGhost<'_>,
 ) -> StreamPreview {
-    use ears::continuous::DecoderState;
+    use ears::continuous::{join_segments, samples, DecoderState, Rollover, PAUSE_WINDOW};
     use ears::stream_client::{StartParams, StreamEvent, StreamSession};
 
     const POLL: Duration = Duration::from_millis(50);
-    /// One recording, one utterance.
-    const UTTERANCE: u64 = 1;
 
     let state_file = ghost_continuous_state_file(config);
     let mut state = DecoderState::default();
@@ -1160,13 +1158,23 @@ async fn stream_ghost_preview(
         context: config.prompt.clone().filter(|c| !c.trim().is_empty()),
         ..StartParams::default()
     };
-    session.start(UTTERANCE, &params);
-    // The server drops audio past its cap anyway; do not send it.
-    let max = session
+    // One utterance per segment; a long recording rolls over to the next
+    // before it outgrows the server's context.
+    let rollover = session
         .max_samples()
-        .map_or(MAX_CONTINUOUS_BYTES, |n| (n * 2).min(MAX_CONTINUOUS_BYTES));
+        .map_or(Rollover::DEFAULT, |max| Rollover {
+            soft: Rollover::DEFAULT.soft.min(max * 2 / 3),
+            hard: Rollover::DEFAULT.hard.min(max * 9 / 10),
+        });
+    let mut utterance = 1u64;
+    session.start(utterance, &params);
     let mut tail = ears::ghost::WavTail::new(config.state_dir.join("recording.wav"));
-    let mut sent = 0usize;
+    // Samples in the current segment, and those read while the previous
+    // segment's final was pending.
+    let mut segment = 0usize;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut ending = false;
+    let mut recent: Vec<i16> = Vec::with_capacity(PAUSE_WINDOW * 2);
     let mut poll = tokio::time::interval(POLL);
     while recorder_alive() {
         tokio::select! {
@@ -1174,25 +1182,68 @@ async fn stream_ghost_preview(
                 let Ok(bytes) = tail.read_new() else {
                     continue;
                 };
-                let n = bytes.len().min(max.saturating_sub(sent));
+                if ending {
+                    pending.extend_from_slice(&bytes);
+                    continue;
+                }
                 // A refused push means the connection is gone; its Closed
                 // event ends the loop.
-                if n > 0 && session.push_bytes(UTTERANCE, &bytes[..n]) {
-                    sent += n;
+                if !bytes.is_empty() && session.push_bytes(utterance, &bytes) {
+                    segment += bytes.len() / 2;
+                    recent.extend(samples(&bytes));
+                    let excess = recent.len().saturating_sub(PAUSE_WINDOW);
+                    recent.drain(..excess);
+                }
+                if rollover.due(segment, &recent) && session.end(utterance) {
+                    tracing::info!("Stream segment rolls over after {} samples", segment);
+                    ending = true;
                 }
             }
             event = session.recv() => match event {
-                Some(StreamEvent::Partial(partial)) if partial.utterance == UTTERANCE => {
+                Some(StreamEvent::Partial(partial)) if partial.utterance == utterance => {
                     if !recorder_alive() {
                         break; // a later recording owns the state file now
                     }
+                    let prefix = std::mem::take(&mut state.prefix);
+                    let offset = state.offset;
                     state = partial.snapshot();
+                    state.prefix = prefix;
+                    state.offset = offset;
                     state.owner = Some(owner.to_string());
                     write_continuous_state(&state_file, &state);
-                    ghost.show(partial.text.trim().to_string());
+                    ghost.show(join_segments(&state.prefix, partial.text.trim()));
+                }
+                Some(StreamEvent::Final { utterance: done, text }) if done == utterance && ending => {
+                    // The finished segment's text is now fixed; the next one
+                    // starts where it ended.
+                    state = DecoderState {
+                        header: state.header.take(),
+                        prefix: join_segments(&state.prefix, &text),
+                        offset: state.offset + segment,
+                        owner: Some(owner.to_string()),
+                        ..DecoderState::default()
+                    };
+                    write_continuous_state(&state_file, &state);
+                    ghost.show(state.prefix.clone());
+                    utterance += 1;
+                    segment = 0;
+                    ending = false;
+                    recent.clear();
+                    session.start(utterance, &params);
+                    let backlog = std::mem::take(&mut pending);
+                    if !backlog.is_empty() && session.push_bytes(utterance, &backlog) {
+                        segment += backlog.len() / 2;
+                    }
                 }
                 Some(StreamEvent::Error { code, message, .. }) if code == "unsupported" => {
                     tracing::warn!("Stream unsupported, decoding per tick: {}", message);
+                    return StreamPreview::Fallback(state);
+                }
+                Some(StreamEvent::Error { utterance: Some(u), code, message }) if u == utterance && ending => {
+                    // The segment's final failed: its text is lost to the
+                    // preview, so hand over to per-tick decoding, which
+                    // decodes the segment again from its settled text.
+                    tracing::warn!("Stream segment final failed ({}): {}", code, message);
                     return StreamPreview::Fallback(state);
                 }
                 Some(StreamEvent::Error { code, message, .. }) => {
@@ -1217,7 +1268,9 @@ async fn stream_ghost_preview(
 /// Exits when the recording ends (or on SIGTERM from the stopping toggle);
 /// closing the addon connection clears the ghost.
 async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u64) -> Result<()> {
-    use ears::continuous::{samples, ContinuousDecoder, ContinuousError};
+    use ears::continuous::{
+        join_segments, samples, ContinuousDecoder, ContinuousError, DecoderState, Rollover,
+    };
     use ears::ghost::{default_socket_path, growing_wav_payload, write_pcm16_wav, GhostClient};
 
     const INTERVAL: Duration = Duration::from_millis(300);
@@ -1258,6 +1311,9 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     // one reusing the PID) is not ours to preview.
     let recorder_alive = || same_process(recorder_pid, recorder_start);
 
+    // Finished segments of a long recording (see `Rollover`).
+    let mut prefix = String::new();
+    let mut offset = 0usize;
     let mut finished = false;
     if let Some(decoder) = continuous.take() {
         match stream_ghost_preview(
@@ -1272,7 +1328,11 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         {
             StreamPreview::Done => finished = true,
             // Carry on from what the stream settled; nothing is replayed.
-            StreamPreview::Fallback(state) => continuous = Some(decoder.resume(state)),
+            StreamPreview::Fallback(state) => {
+                prefix = state.prefix.clone();
+                offset = state.offset;
+                continuous = Some(decoder.resume(state));
+            }
         }
     }
 
@@ -1285,26 +1345,55 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         let Some(pcm) = growing_wav_payload(&bytes) else {
             continue;
         };
-        let max = if continuous.is_some() {
-            MAX_CONTINUOUS_BYTES
-        } else {
-            MAX_BYTES
-        };
-        if pcm.len() < MIN_BYTES || pcm.len() > max || pcm.len() == last_len {
+        if pcm.len() < MIN_BYTES || pcm.len() == last_len {
+            continue;
+        }
+        if continuous.is_none() && pcm.len() > MAX_BYTES {
             continue;
         }
         last_len = pcm.len();
         let text = if let Some(decoder) = continuous.as_mut() {
-            let outcome = decoder.step(&samples(pcm), false, DEADLINE).await;
+            let all = samples(pcm);
+            let segment = &all[offset.min(all.len())..];
+            // Finish the segment at a pause before it outgrows the context.
+            let roll = Rollover::DEFAULT.due(segment.len(), segment);
+            let outcome = decoder.step(segment, roll, DEADLINE).await;
             if !recorder_alive() {
                 break; // a later recording owns the state file now
             }
             match outcome {
+                Ok(text) if roll => {
+                    tracing::info!("Segment rolls over after {} samples", segment.len());
+                    prefix = join_segments(&prefix, &text);
+                    offset += segment.len();
+                    let header = decoder.snapshot().header;
+                    *decoder = ContinuousDecoder::new(
+                        server_url.as_str(),
+                        config.api_key.clone(),
+                        decoder.model().map(str::to_string),
+                    )
+                    .with_language(language.as_deref())
+                    .with_context(config.prompt.clone())
+                    .resume(DecoderState {
+                        header,
+                        ..Default::default()
+                    });
+                    let state = DecoderState {
+                        prefix: prefix.clone(),
+                        offset,
+                        owner: Some(owner.clone()),
+                        ..decoder.snapshot()
+                    };
+                    write_continuous_state(&state_file, &state);
+                    prefix.clone()
+                }
                 Ok(text) => {
                     let mut state = decoder.snapshot();
                     state.owner = Some(owner.clone());
+                    state.prefix = prefix.clone();
+                    state.offset = offset;
                     write_continuous_state(&state_file, &state);
-                    text
+                    join_segments(&prefix, &text)
                 }
                 Err(ContinuousError::Unsupported(e)) => {
                     let state = ears::continuous::DecoderState {
@@ -1380,20 +1469,25 @@ async fn finish_continuous(
     let state =
         state.filter(|s| !s.unsupported && owner.is_some() && s.owner.as_deref() == owner)?;
     let bytes = tokio::fs::read(audio_file).await.ok()?;
-    let pcm = ears::ghost::growing_wav_payload(&bytes)?;
-    if pcm.len() > MAX_CONTINUOUS_BYTES {
+    let all = samples(ears::ghost::growing_wav_payload(&bytes)?);
+    // Only the last segment is decoded; earlier ones are already text.
+    let segment = all.get(state.offset..)?;
+    if segment.len() * 2 > MAX_CONTINUOUS_BYTES {
         return None; // past the server's context
     }
+    let prefix = state.prefix.clone();
     let started = std::time::Instant::now();
     let mut decoder = ContinuousDecoder::new(server_url, config.api_key.clone(), model)
         .with_language(language)
         .with_context(config.prompt.clone())
         .resume(state);
-    match decoder.step(&samples(pcm), true, DEADLINE).await {
+    match decoder.step(segment, true, DEADLINE).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!("Continuous final in {:?}", started.elapsed());
-            Some(text)
+            Some(ears::continuous::join_segments(&prefix, &text))
         }
+        // A last segment of silence still leaves the earlier ones.
+        Ok(_) if !prefix.is_empty() => Some(prefix),
         Ok(_) => None,
         Err(e) => {
             tracing::warn!("Continuous final failed, transcribing in full: {}", e);

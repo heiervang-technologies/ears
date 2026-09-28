@@ -352,6 +352,59 @@ pub struct DecoderState {
     /// Continuous decoding stopped working for this recording.
     #[serde(default)]
     pub unsupported: bool,
+    /// Text of the segments already finished (see [`Rollover`]).
+    #[serde(default)]
+    pub prefix: String,
+    /// Where the current segment starts, in samples.
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Long recordings outgrow the server's context (about 90 s of audio). A
+/// long recording is therefore decoded in segments: once the current one is
+/// long enough, it is finished at a pause and a fresh one starts where it
+/// ended. The finished text is kept verbatim in front of the live one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rollover {
+    /// Finish the segment at the first pause after this many samples.
+    pub soft: usize,
+    /// Finish it here even without a pause.
+    pub hard: usize,
+}
+
+impl Rollover {
+    pub const DEFAULT: Rollover = Rollover {
+        soft: 60 * SAMPLE_RATE,
+        hard: 80 * SAMPLE_RATE,
+    };
+
+    /// Whether a segment of `len` samples ending in `recent` should end now.
+    pub fn due(&self, len: usize, recent: &[i16]) -> bool {
+        len >= self.hard || (len >= self.soft && is_pause(recent))
+    }
+}
+
+/// Samples inspected for a pause at a segment boundary.
+pub const PAUSE_WINDOW: usize = SAMPLE_RATE * 3 / 10;
+
+/// Whether `pcm` (the last [`PAUSE_WINDOW`] samples) is quiet enough to cut
+/// between words: RMS under about -36 dBFS.
+pub fn is_pause(pcm: &[i16]) -> bool {
+    if pcm.len() < PAUSE_WINDOW {
+        return false;
+    }
+    let tail = &pcm[pcm.len() - PAUSE_WINDOW..];
+    let energy: f64 = tail.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
+    (energy / tail.len() as f64).sqrt() < 500.0
+}
+
+/// Finished segments' text followed by the live segment's.
+pub fn join_segments(prefix: &str, text: &str) -> String {
+    match (prefix.trim_end(), text.trim_start()) {
+        ("", t) => t.to_string(),
+        (p, "") => p.to_string(),
+        (p, t) => format!("{p} {t}"),
+    }
 }
 
 fn is_qwen3_asr(model: &str) -> bool {
@@ -486,6 +539,30 @@ mod tests {
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
         assert_eq!(samples(&wav[44..]), vec![1, -1, 3]);
+    }
+
+    #[test]
+    fn rollover_waits_for_a_pause_until_the_hard_limit() {
+        let r = Rollover {
+            soft: 10,
+            hard: 20 * SAMPLE_RATE,
+        };
+        let speech: Vec<i16> = (0..PAUSE_WINDOW)
+            .map(|i| if i % 2 == 0 { 3000 } else { -3000 })
+            .collect();
+        let quiet = vec![20i16; PAUSE_WINDOW];
+        assert!(!r.due(5, &quiet), "too short");
+        assert!(!r.due(SAMPLE_RATE, &speech), "no pause yet");
+        assert!(r.due(SAMPLE_RATE, &quiet));
+        assert!(r.due(20 * SAMPLE_RATE, &speech), "hard limit");
+        assert!(!is_pause(&quiet[..10]), "not enough audio to judge");
+    }
+
+    #[test]
+    fn segments_join_with_one_space() {
+        assert_eq!(join_segments("", "b"), "b");
+        assert_eq!(join_segments("a.", ""), "a.");
+        assert_eq!(join_segments("a. ", " b"), "a. b");
     }
 
     #[test]
