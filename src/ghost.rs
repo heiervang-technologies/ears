@@ -73,13 +73,16 @@ pub enum Delivery {
     Unknown,
 }
 
-/// Class of the window Hyprland has focused, if it can be asked.
+/// How long to wait for `hyprctl` before treating focus as unknown.
+const FOCUS_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// Class of the window Hyprland has focused, if it can be asked in time.
 pub fn hyprland_active_class() -> Option<String> {
-    let out = std::process::Command::new("hyprctl")
-        .args(["activewindow", "-j"])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("hyprctl");
+    cmd.args(["activewindow", "-j"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let out = crate::desktop::output_bounded(cmd, FOCUS_PROBE_TIMEOUT).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -187,21 +190,24 @@ impl GhostClient {
         self.send("S").map(|(shown, _)| shown)
     }
 
-    /// Does the addon's input context belong to the window that has focus?
+    /// Does the addon's input context plausibly belong to the focused window?
     ///
     /// fcitx5 keeps reporting the last app as focused when focus moves to a
     /// surface that never enables text input, so its answer alone would put
-    /// ghost text (or the final commit) into a window the user left. When
-    /// either side cannot tell, trust the addon.
+    /// ghost text (or the final commit) into a window the user left. This
+    /// compares the addon's program with Hyprland's active window class. It
+    /// is an app-level check, not window identity: two windows of the same
+    /// app compare equal. When either side cannot tell, the answer is no, so
+    /// the caller types instead of trusting a possibly stale context.
     fn focus_matches(&mut self) -> Result<bool, GhostError> {
         let (shown, program) = self.send("S")?;
         if shown == GhostDisplay::None {
             return Ok(false);
         }
         let Some(program) = program else {
-            return Ok(true);
+            return Ok(false);
         };
-        Ok((self.active_class)().is_none_or(|class| program.eq_ignore_ascii_case(&class)))
+        Ok((self.active_class)().is_some_and(|class| program.eq_ignore_ascii_case(&class)))
     }
 
     /// Show `text` as the ghost, replacing the previous one. Returns
@@ -424,6 +430,17 @@ mod tests {
         let rx = fake_addon(path.clone());
         let mut client = GhostClient::with_focus_probe(path, focus_elsewhere);
 
+        assert_eq!(client.preedit("hi").unwrap(), GhostDisplay::None);
+        assert_eq!(client.commit("hi"), Delivery::NotDelivered);
+        assert_eq!(commands(&rx), ["X", "X"]);
+    }
+
+    #[test]
+    fn unknown_focus_types_instead_of_committing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let rx = fake_addon(path.clone());
+        let mut client = GhostClient::with_focus_probe(path, || None);
         assert_eq!(client.preedit("hi").unwrap(), GhostDisplay::None);
         assert_eq!(client.commit("hi"), Delivery::NotDelivered);
         assert_eq!(commands(&rx), ["X", "X"]);

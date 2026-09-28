@@ -1135,8 +1135,13 @@ mod tests {
                 let mut w = stream.try_clone().unwrap();
                 for line in std::io::BufReader::new(stream).lines() {
                     let Ok(line) = line else { break };
+                    let reply: &[u8] = if line == "S" {
+                        b"OK preedit TestApp\n"
+                    } else {
+                        b"OK preedit\n"
+                    };
                     let _ = tx.send(line);
-                    let _ = w.write_all(b"OK preedit\n");
+                    let _ = w.write_all(reply);
                 }
             }
         });
@@ -1149,7 +1154,7 @@ mod tests {
         let (path, lines) = fake_ghost_addon(dir);
         engine.set_ghost_client(Some(crate::ghost::GhostClient::with_focus_probe(
             path,
-            || None,
+            || Some("TestApp".to_string()),
         )));
         assert_eq!(lines.recv().unwrap(), "S", "probe on enable");
         (engine, lines)
