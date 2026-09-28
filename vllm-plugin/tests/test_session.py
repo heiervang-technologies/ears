@@ -112,17 +112,17 @@ def test_partial_final_flow_with_forced_language():
 
 def test_language_detected_from_first_decode():
     async def go():
-        d = FakeDecoder("language German<asr_text>Hallo du da", " da drüben")
+        d = FakeDecoder("language German<asr_text>Grüße du da", " da drüben")
         h = Harness(d)
         await h.text(type="start", utterance=1, rollback_words=1)
         await h.audio(0.2)
         await h.audio(0.2)
         assert d.calls[0]["prefix"] == ""
-        assert d.calls[1]["prefix"] == "language German<asr_text>Hallo du"
+        assert d.calls[1]["prefix"] == "language German<asr_text>Grüße du"
         p1, p2 = h.of("partial")
-        assert p1["text"] == "Hallo du da" and p1["language"] == "German"
-        assert p2["text"] == "Hallo du da drüben"
-        assert p2["stable_chars"] == len("Hallo du da".encode())
+        assert p1["text"] == "Grüße du da" and p1["language"] == "German"
+        assert p2["text"] == "Grüße du da drüben"
+        assert p2["stable_chars"] == len("Grüße du da".encode()) == 13  # bytes
     run(go())
 
 
