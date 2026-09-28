@@ -1078,20 +1078,8 @@ impl StreamingEngine {
 
         info!("Transcribed: {}", transcript);
 
-        // Each VAD segment is a discrete utterance. Reset agreement state so
-        // the previous segment's text doesn't interfere, then feed the
-        // transcript twice to force LocalAgreement to commit it immediately.
-        self.local_agreement.reset();
-        self.local_agreement.process(transcript.clone());
-        let (newly_committed, _uncommitted) = self.local_agreement.process(transcript.clone());
-
-        // Accumulate committed text across segments (space-separated)
-        if !newly_committed.is_empty() {
-            if !self.accumulated_text.is_empty() {
-                self.accumulated_text.push(' ');
-            }
-            self.accumulated_text.push_str(&newly_committed);
-        }
+        let guided_command = self.guided_grammar.is_some();
+        let newly_committed = self.commit_transcript(&transcript);
 
         let typing = self
             .health
@@ -1108,30 +1096,32 @@ impl StreamingEngine {
             }
         } else if self.typing_suspended {
             debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
+        } else if guided_command {
+            // Guided output is one complete command per VAD segment. Type it
+            // directly even when progressive typing is disabled, while keeping
+            // TypingMode::None as the explicit no-input mode (ws-listen,
+            // `ears typing off`).
+            if self.typing_mode != TypingMode::None && !newly_committed.is_empty() {
+                let typing_start = Instant::now();
+                let mode = self.typing_mode;
+                let chars = newly_committed.chars().count();
+                let outcome = run_blocking(|| TextInput::type_text(&newly_committed, mode))
+                    .map(|()| chars)
+                    .map_err(|e| {
+                        crate::progressive_typing::ProgressiveTypingError::TextInputError(
+                            e.to_string(),
+                        )
+                    });
+                let delivered = self.handle_typing_outcome(outcome, typing_start);
+                self.send_enter_if_delivered(delivered, typing_start);
+            }
         } else if self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
             let progressive_typing = &mut self.progressive_typing;
             let accumulated = &self.accumulated_text;
             let outcome = run_blocking(|| progressive_typing.update(accumulated));
             let delivered = self.handle_typing_outcome(outcome, typing_start);
-
-            // Send Enter only after typing that we know completed. After a
-            // failure (including a timeout) the screen may hold a partial
-            // command; submitting it would execute something nobody said.
-            if self.auto_enter && delivered {
-                if let Err(e) = run_blocking(TextInput::send_enter) {
-                    // A failed Enter leaves target state uncertain too: the
-                    // next utterance must not append to and submit this one.
-                    self.handle_typing_outcome(
-                        Err(
-                            crate::progressive_typing::ProgressiveTypingError::TextInputError(
-                                format!("Enter key failed: {e}"),
-                            ),
-                        ),
-                        typing_start,
-                    );
-                }
-            }
+            self.send_enter_if_delivered(delivered, typing_start);
         }
 
         drop(typing);
@@ -1169,6 +1159,61 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Commit a completed VAD transcript according to the active mode.
+    ///
+    /// Dictation mode preserves the historical space-separated accumulation
+    /// used by progressive typing. Guided (bash) mode treats each segment as a
+    /// fresh command and never carries text or typing agreement across
+    /// segments.
+    fn commit_transcript(&mut self, transcript: &str) -> String {
+        self.local_agreement.reset();
+        if self.guided_grammar.is_some() {
+            self.progressive_typing.reset();
+            self.accumulated_text.clear();
+            self.accumulated_text.push_str(transcript);
+            return transcript.to_string();
+        }
+
+        // Each VAD segment is a discrete utterance. Reset agreement state so
+        // the previous segment's text doesn't interfere, then feed the
+        // transcript twice to force LocalAgreement to commit it immediately.
+        self.local_agreement.process(transcript.to_string());
+        let (newly_committed, _uncommitted) = self.local_agreement.process(transcript.to_string());
+
+        // Accumulate committed text across segments (space-separated)
+        if !newly_committed.is_empty() {
+            if !self.accumulated_text.is_empty() {
+                self.accumulated_text.push(' ');
+            }
+            self.accumulated_text.push_str(&newly_committed);
+        }
+
+        newly_committed
+    }
+
+    /// Send Enter after typing when auto-Enter is on.
+    ///
+    /// Only after typing that we know completed: after a failure (including
+    /// a timeout) the screen may hold a partial command, and submitting it
+    /// would execute something nobody said.
+    fn send_enter_if_delivered(&mut self, delivered: bool, typing_start: Instant) {
+        if !(self.auto_enter && delivered) {
+            return;
+        }
+        if let Err(e) = run_blocking(TextInput::send_enter) {
+            // A failed Enter leaves target state uncertain too: the next
+            // utterance must not append to and submit this one.
+            self.handle_typing_outcome(
+                Err(
+                    crate::progressive_typing::ProgressiveTypingError::TextInputError(format!(
+                        "Enter key failed: {e}"
+                    )),
+                ),
+                typing_start,
+            );
+        }
     }
 
     /// Account for a progressive-typing attempt. Returns whether the text is
@@ -1378,6 +1423,12 @@ impl StreamingEngine {
     /// Update the active guided grammar (bash mode). `None` disables constrained
     /// decoding and returns to the plain transcription endpoint.
     pub fn set_guided_grammar(&mut self, grammar: Option<String>) {
+        if self.guided_grammar.is_some() != grammar.is_some() {
+            // Dictation and command text must never bleed into each other.
+            self.local_agreement.reset();
+            self.progressive_typing.reset();
+            self.accumulated_text.clear();
+        }
         self.guided_grammar = grammar;
     }
 
@@ -1985,6 +2036,44 @@ mod tests {
         assert_eq!(finals, 1);
         // The utterance was never replayed into a new stream.
         assert_eq!(server.starts(), vec![id]);
+    }
+
+    #[test]
+    fn test_guided_segments_are_discrete_without_progressive_typing() {
+        let (mut engine, _rx) = seq_engine();
+        assert!(!engine.config.progressive_typing);
+        engine.set_guided_grammar(Some("root ::= command".to_string()));
+
+        assert_eq!(engine.commit_transcript("git status"), "git status");
+        assert_eq!(engine.committed_text(), "git status");
+
+        assert_eq!(engine.commit_transcript("cargo test"), "cargo test");
+        assert_eq!(engine.committed_text(), "cargo test");
+    }
+
+    #[test]
+    fn test_dictation_segments_still_accumulate() {
+        let (mut engine, _rx) = seq_engine();
+        engine.commit_transcript("hello");
+        engine.commit_transcript("world");
+        assert_eq!(engine.committed_text(), "hello world");
+    }
+
+    #[test]
+    fn test_switching_guided_mode_clears_typing_state() {
+        let (mut engine, _rx) = seq_engine();
+        engine.accumulated_text = "previous dictation".to_string();
+
+        engine.set_guided_grammar(Some("root ::= command".to_string()));
+        assert!(engine.committed_text().is_empty());
+
+        // Replacing one grammar with another keeps command state.
+        engine.commit_transcript("pwd");
+        engine.set_guided_grammar(Some("root ::= other".to_string()));
+        assert_eq!(engine.committed_text(), "pwd");
+
+        engine.set_guided_grammar(None);
+        assert!(engine.committed_text().is_empty());
     }
 
     #[test]
