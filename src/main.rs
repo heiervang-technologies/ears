@@ -60,7 +60,15 @@ async fn main() -> Result<()> {
             handle_vad(&config, false).await?;
         }
         Some(Commands::Ghost) => {
+            ears::ghost_style::apply(&config.ghost);
             handle_vad(&config, true).await?;
+        }
+        Some(Commands::GhostStyle {
+            color,
+            underline,
+            no_underline,
+        }) => {
+            ghost_style_command(config, color, underline, no_underline)?;
         }
         Some(Commands::WsListen { host, port, socket }) => {
             handle_ws_listen(&config, &host, port, socket).await?;
@@ -914,6 +922,7 @@ async fn start_recording(
     // Typing disabled in the config: nothing may reach the focused window,
     // ghost text included.
     if ghost && config.typing_mode != ears::desktop::TypingMode::None {
+        ears::ghost_style::apply(&config.ghost);
         if let Err(e) = spawn_ghost_preview(config, pid) {
             // Recording still works; the text is just typed at the end.
             tracing::warn!("Ghost preview not started: {}", e);
@@ -926,6 +935,63 @@ async fn start_recording(
         toggle_start.elapsed()
     );
 
+    Ok(())
+}
+
+/// `ears ghost-style`: show or change the ghost style and write it into the
+/// apps that support it.
+fn ghost_style_command(
+    mut config: Config,
+    color: Option<String>,
+    underline: bool,
+    no_underline: bool,
+) -> Result<()> {
+    use ears::ghost_style::{apply, normalize_color, PRESETS};
+    let mut changed = false;
+    if let Some(color) = color {
+        config.ghost.color = if color.eq_ignore_ascii_case("default") {
+            None
+        } else {
+            let Some(_) = normalize_color(&color) else {
+                let names: Vec<_> = PRESETS.iter().map(|(n, _)| *n).collect();
+                anyhow::bail!(
+                    "not a colour: {color:?} (use #rrggbb, #rgb, default, or one of {})",
+                    names.join(", ")
+                );
+            };
+            Some(color)
+        };
+        changed = true;
+    }
+    if underline || no_underline {
+        config.ghost.underline = underline;
+        changed = true;
+    }
+    if changed {
+        config.save().context("Failed to save config")?;
+    }
+    println!(
+        "Ghost text: {}{}",
+        config.ghost.label(),
+        if config.ghost.underline {
+            ", underlined"
+        } else {
+            ""
+        }
+    );
+    let applied = apply(&config.ghost);
+    if applied.is_empty() {
+        println!("No supported app found (Alacritty with the preedit patch, Hover).");
+    }
+    for a in applied {
+        let note = match (a.app, a.changed) {
+            ("hover", true) => "updated; takes effect when Hover restarts",
+            (_, true) => "updated",
+            (_, false) => "already set",
+        };
+        println!("  {:<9} {} ({})", a.app, a.path.display(), note);
+    }
+    println!("Chromium, Firefox and GTK4 apps (Walker) draw ghost text in their own style.");
     Ok(())
 }
 

@@ -35,6 +35,20 @@ pub enum Commands {
     #[command(alias = "g")]
     Ghost,
 
+    /// Show or set how ghost text looks (colour, underline), and write it
+    /// into the apps that support it (Alacritty, Hover).
+    GhostStyle {
+        /// `#rrggbb`, `#rgb`, a preset (grey, blue-grey, orange, yellow,
+        /// green-yellow), or `default` to leave colour to each app
+        color: Option<String>,
+        /// Underline the ghost text
+        #[arg(long, conflicts_with = "no_underline")]
+        underline: bool,
+        /// Do not underline the ghost text
+        #[arg(long)]
+        no_underline: bool,
+    },
+
     /// Internal: ghost preview loop for a push-to-talk recording
     #[command(hide = true)]
     GhostPreview {

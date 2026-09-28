@@ -297,6 +297,32 @@ Notes:
 - `ears ghost` and `ears vad` share the toggle: either one stops the other.
 - Auto-Enter is not sent in VAD ghost mode; push-to-talk keeps `auto_enter`.
 
+#### Ghost text style
+
+The input method passes only the text; each app draws the ghost itself. Set
+the style once and ears writes it into the apps that support it:
+
+```toml
+[ghost]
+color = "yellow"   # #rrggbb, #rgb, or grey | blue-grey | orange | yellow | green-yellow
+underline = false
+```
+
+```
+ears ghost-style                  # show the style and where it is applied
+ears ghost-style green-yellow     # set a preset (or "#c8d44a", or "default")
+ears ghost-style --underline
+```
+
+In the TUI's Configuration panel, `o` cycles the presets. Supported apps:
+- **Alacritty** with the preedit-colors patch: `[colors.preedit]` in
+  `alacritty.toml`. Alacritty reloads it immediately.
+- **Hover**: the `hover.ime.ghost_preedit_color` pref in each profile's
+  `user.js`, which applies from the next Hover start.
+
+Chromium, Firefox and GTK4 apps (Walker) keep their own preedit style. The
+style is also re-applied whenever `ears ghost` or `ears toggle --ghost` starts.
+
 #### Continuous live decoding (Qwen3-ASR on vLLM)
 
 By default the ghost re-transcribes the whole recording every 300 ms, so each
