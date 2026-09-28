@@ -266,7 +266,8 @@ works in any app with input-method support (terminals, browsers, GTK, Qt).
 
 ```bash
 fcitx5-addon/install.sh   # build + install the earsghost addon (needs fcitx5 headers)
-ears ghost                # toggle listening with ghost completion
+ears ghost                # hands-free (VAD) listening with ghost completion
+ears toggle --ghost       # push-to-talk: ghost text while recording, commit on the second press
 ```
 
 Hyprland binding example:
@@ -282,7 +283,7 @@ Notes:
 - If the addon is not reachable, final text is typed as usual.
 - `ears typing off` also silences ghost output.
 - `ears ghost` and `ears vad` share the toggle: either one stops the other.
-- Auto-Enter is not sent in ghost mode.
+- Auto-Enter is not sent in VAD ghost mode; push-to-talk keeps `auto_enter`.
 
 ### All Commands
 

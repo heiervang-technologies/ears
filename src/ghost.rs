@@ -79,6 +79,54 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// PCM payload of a WAV file that may still be being written.
+///
+/// `pw-record` only fills in the RIFF/data sizes when it closes the file, so
+/// the sizes are ignored: everything after the `data` chunk header up to the
+/// end of what has been written so far is returned, trimmed to whole 16-bit
+/// samples.
+pub fn growing_wav_payload(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut pos = 12;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
+        if id == b"data" {
+            let body = &bytes[pos + 8..];
+            return Some(&body[..body.len() & !1]);
+        }
+        // Chunks are word-aligned.
+        pos = pos.checked_add(8 + size + (size & 1))?;
+    }
+    None
+}
+
+/// Write mono 16-bit PCM as a WAV file.
+pub fn write_pcm16_wav(
+    path: &std::path::Path,
+    pcm: &[u8],
+    sample_rate: u32,
+) -> std::io::Result<()> {
+    let data_len = pcm.len() as u32;
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(pcm);
+    std::fs::write(path, out)
+}
+
 /// Client for the `earsghost` fcitx5 addon.
 ///
 /// Connects lazily and reconnects after any failure, so fcitx5 restarts are
@@ -187,6 +235,32 @@ mod tests {
             }
         });
         rx
+    }
+
+    #[test]
+    fn growing_wav_payload_ignores_unfinished_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.wav");
+        write_pcm16_wav(&path, &[1, 0, 2, 0, 3, 0], 16000).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        // Simulate pw-record mid-write: zero sizes and an odd trailing byte.
+        bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&0u32.to_le_bytes());
+        bytes.push(9);
+        assert_eq!(growing_wav_payload(&bytes).unwrap(), &[1, 0, 2, 0, 3, 0]);
+    }
+
+    #[test]
+    fn growing_wav_payload_skips_extra_chunks() {
+        let mut bytes = b"RIFF\0\0\0\0WAVE".to_vec();
+        bytes.extend_from_slice(b"LIST");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&[7, 7, 7, 0]); // 3 bytes + pad
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&[5, 6]);
+        assert_eq!(growing_wav_payload(&bytes).unwrap(), &[5, 6]);
+        assert!(growing_wav_payload(b"nope").is_none());
     }
 
     #[test]
