@@ -18,7 +18,8 @@ if pgrep -x fcitx5 >/dev/null; then
     # Stop, then start: avoids racing the old instance during a replace.
     pkill -x fcitx5 || true
     for _ in $(seq 50); do pgrep -x fcitx5 >/dev/null || break; sleep 0.1; done
-    setsid fcitx5 -d >/dev/null 2>&1 < /dev/null &
+    # Keep the flags Omarchy starts it with.
+    setsid fcitx5 -d --disable notificationitem >/dev/null 2>&1 < /dev/null &
     sleep 2
 fi
 sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ears/ghost.sock"

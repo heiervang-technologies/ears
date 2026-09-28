@@ -228,8 +228,20 @@ private:
         }
     }
 
+    /// The input context that has keyboard focus right now, or nullptr.
+    ///
+    /// lastFocusedInputContext() keeps pointing at the previous app after
+    /// focus moves to a surface that never opens an input method (some
+    /// browser fields, XWayland apps). Committing there would put the text
+    /// into a window the user left, so require real focus; ears types the
+    /// text instead when there is none.
+    fcitx::InputContext *focusedNow() {
+        auto *ic = instance_->lastFocusedInputContext();
+        return ic && ic->hasFocus() ? ic : nullptr;
+    }
+
     fcitx::InputContext *target() {
-        auto *focused = instance_->lastFocusedInputContext();
+        auto *focused = focusedNow();
         auto *current = ghostIc_.get();
         if (current && current != focused) {
             // Focus moved: take the ghost out of the window we left.
@@ -278,7 +290,7 @@ private:
             clearGhost();
             return "OK none";
         case 'S': {
-            auto *ic = instance_->lastFocusedInputContext();
+            auto *ic = focusedNow();
             return ic ? "OK " + mode(ic) + " " + ic->program()
                       : std::string("OK none");
         }
