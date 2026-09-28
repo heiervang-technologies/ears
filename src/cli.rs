@@ -37,7 +37,15 @@ pub enum Commands {
 
     /// Internal: ghost preview loop for a push-to-talk recording
     #[command(hide = true)]
-    GhostPreview,
+    GhostPreview {
+        /// PID of the recorder this preview belongs to
+        #[arg(long)]
+        recorder_pid: i32,
+        /// Start time (clock ticks since boot) of that recorder, so a
+        /// recycled PID is not mistaken for it
+        #[arg(long)]
+        recorder_start: u64,
+    },
 
     /// Start WebSocket server for remote audio input (VAD pipeline)
     #[command(alias = "ws")]

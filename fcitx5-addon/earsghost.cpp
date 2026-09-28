@@ -109,6 +109,7 @@ public:
 private:
     struct Client {
         int fd = -1;
+        uint64_t id = 0;
         std::string buffer;
         std::unique_ptr<fcitx::EventSourceIO> event;
         ~Client() {
@@ -163,6 +164,7 @@ private:
             setNonBlocking(fd);
             auto client = std::make_unique<Client>();
             client->fd = fd;
+            client->id = ++nextClientId_;
             client->event = instance_->eventLoop().addIOEvent(
                 fd, fcitx::IOEventFlag::In,
                 [this](fcitx::EventSourceIO *, int cfd, fcitx::IOEventFlags) {
@@ -204,8 +206,12 @@ private:
             if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK &&
                            errno != EINTR)) {
                 // Peer went away: a dead ears must not leave ghost text.
+                // Only its own ghost, though: a status probe or an older
+                // preview disconnecting must not erase a newer one.
                 handleLines(client);
-                clearGhost();
+                if (client.id == ownerId_) {
+                    clearGhost();
+                }
                 dropClient(fd);
                 return;
             }
@@ -222,7 +228,7 @@ private:
         while ((pos = client.buffer.find('\n')) != std::string::npos) {
             std::string line = client.buffer.substr(0, pos);
             client.buffer.erase(0, pos + 1);
-            std::string reply = handle(line) + "\n";
+            std::string reply = handle(client.id, line) + "\n";
             // Best effort; replies are advisory.
             (void)!::write(client.fd, reply.data(), reply.size());
         }
@@ -247,6 +253,7 @@ private:
             // Focus moved: take the ghost out of the window we left.
             clearOn(current);
             ghostIc_.unwatch();
+            ownerId_ = 0;
         }
         return focused;
     }
@@ -257,7 +264,7 @@ private:
                    : "panel";
     }
 
-    std::string handle(const std::string &line) {
+    std::string handle(uint64_t clientId, const std::string &line) {
         if (line.empty()) {
             return "ERR empty";
         }
@@ -272,6 +279,7 @@ private:
             }
             showOn(ic, text);
             ghostIc_ = ic->watch();
+            ownerId_ = clientId;
             return "OK " + mode(ic);
         }
         case 'C': {
@@ -281,13 +289,17 @@ private:
             }
             clearOn(ic);
             ghostIc_.unwatch();
+            ownerId_ = 0;
             if (!text.empty()) {
                 ic->commitString(text);
             }
             return "OK " + mode(ic);
         }
         case 'X':
-            clearGhost();
+            // Only the ghost's owner may clear it.
+            if (clientId == ownerId_) {
+                clearGhost();
+            }
             return "OK none";
         case 'S': {
             auto *ic = focusedNow();
@@ -327,6 +339,7 @@ private:
             clearOn(ic);
         }
         ghostIc_.unwatch();
+        ownerId_ = 0;
     }
 
     fcitx::Instance *instance_;
@@ -336,6 +349,9 @@ private:
     std::unique_ptr<fcitx::EventSourceIO> listenEvent_;
     std::map<int, std::unique_ptr<Client>> clients_;
     fcitx::TrackableObjectReference<fcitx::InputContext> ghostIc_;
+    // Client whose P put the ghost up; 0 when none is showing.
+    uint64_t ownerId_ = 0;
+    uint64_t nextClientId_ = 0;
 };
 
 class EarsGhostFactory : public fcitx::AddonFactory {

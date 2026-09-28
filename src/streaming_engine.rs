@@ -496,12 +496,16 @@ impl StreamingEngine {
             return;
         };
         let spaced = ghost.spaced(text);
-        let r = ghost.client.commit(&spaced);
-        ghost.note_result(&r);
+        let delivery = ghost.client.commit(&spaced);
         ghost.showing = false;
-        match r {
-            Ok(crate::ghost::GhostDisplay::None) | Err(_) => {
-                info!("Ghost addon could not deliver the text; typing it instead");
+        match delivery {
+            crate::ghost::Delivery::Delivered => {
+                ghost.warned_unavailable = false;
+                self.stats.chars_typed += spaced.chars().count();
+                ghost.committed_any = true;
+            }
+            crate::ghost::Delivery::NotDelivered => {
+                info!("Ghost addon did not deliver the text; typing it instead");
                 let mode = self.typing_mode;
                 let typing_start = Instant::now();
                 let outcome = run_blocking(|| TextInput::type_text(&spaced, mode))
@@ -518,9 +522,17 @@ impl StreamingEngine {
                     }
                 }
             }
-            Ok(_) => {
-                self.stats.chars_typed += spaced.chars().count();
-                ghost.committed_any = true;
+            crate::ghost::Delivery::Unknown => {
+                // The addon may have committed before the reply was lost.
+                // Typing it again could duplicate it, so stop instead.
+                self.handle_typing_outcome(
+                    Err(
+                        crate::progressive_typing::ProgressiveTypingError::TextInputError(
+                            "ghost commit outcome unknown (addon did not answer)".to_string(),
+                        ),
+                    ),
+                    Instant::now(),
+                );
             }
         }
     }
@@ -1135,9 +1147,22 @@ mod tests {
         let (mut engine, _rx) = seq_engine();
         engine.typing_mode = TypingMode::Wtype;
         let (path, lines) = fake_ghost_addon(dir);
-        engine.set_ghost_client(Some(crate::ghost::GhostClient::new(path)));
+        engine.set_ghost_client(Some(crate::ghost::GhostClient::with_focus_probe(
+            path,
+            || None,
+        )));
         assert_eq!(lines.recv().unwrap(), "S", "probe on enable");
         (engine, lines)
+    }
+
+    /// Next command the engine sent, skipping focus status queries.
+    fn next_cmd(lines: &std::sync::mpsc::Receiver<String>) -> String {
+        loop {
+            let line = lines.recv().unwrap();
+            if line != "S" {
+                return line;
+            }
+        }
     }
 
     #[test]
@@ -1146,8 +1171,8 @@ mod tests {
         let (mut engine, lines) = ghost_engine(dir.path());
         engine.ghost_commit("hello world");
         engine.ghost_commit("second one");
-        assert_eq!(lines.recv().unwrap(), "C hello world");
-        assert_eq!(lines.recv().unwrap(), "C  second one");
+        assert_eq!(next_cmd(&lines), "C hello world");
+        assert_eq!(next_cmd(&lines), "C  second one");
         assert_eq!(engine.stats().chars_typed, 11 + 11);
     }
 
@@ -1159,7 +1184,7 @@ mod tests {
         engine.ghost.as_mut().unwrap().showing = true;
         feed(&mut engine, &[0.9]);
         feed(&mut engine, &[0.0]);
-        assert_eq!(lines.recv().unwrap(), "X");
+        assert_eq!(next_cmd(&lines), "X");
         assert!(!engine.ghost.as_ref().unwrap().showing);
     }
 
@@ -1179,8 +1204,11 @@ mod tests {
             .send((current, Ok("fresh".into())))
             .unwrap();
         engine.ghost_poll_partials();
-        assert_eq!(lines.recv().unwrap(), "P fresh");
-        assert!(lines.try_recv().is_err(), "stale partial must not be shown");
+        assert_eq!(next_cmd(&lines), "P fresh");
+        assert!(
+            lines.try_iter().all(|l| l == "S"),
+            "stale partial must not be shown"
+        );
     }
 
     #[test]
