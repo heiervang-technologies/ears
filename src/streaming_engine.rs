@@ -180,6 +180,9 @@ pub struct StreamingEngine {
     /// Ghost completion state; `Some` when output goes to the fcitx5 ghost
     /// addon as inline preedit instead of being typed.
     ghost: Option<GhostState>,
+    /// Decode ghost partials continuously (issue #144) instead of
+    /// re-transcribing the growing utterance.
+    continuous: Option<crate::continuous::ContinuousSpec>,
 }
 
 /// Minimum spacing between partial transcriptions of the utterance in progress.
@@ -195,6 +198,32 @@ const GHOST_MIN_PARTIAL_SAMPLES: usize = 16_000 * 6 / 10;
 /// ghost simply waits for the final transcript.
 const GHOST_MAX_PARTIAL_SAMPLES: usize = 16_000 * 30;
 
+/// Continuous partials cost about the same at any length; the bound is the
+/// server's context.
+const GHOST_MAX_CONTINUOUS_SAMPLES: usize = 16_000 * 90;
+
+/// A finished partial transcription.
+struct Partial {
+    utterance: u64,
+    result: Result<String, String>,
+    /// The continuous decoder, handed back for the next partial.
+    decoder: Option<crate::continuous::ContinuousDecoder>,
+    /// The server cannot decode continuously; stop trying.
+    unsupported: bool,
+}
+
+impl Partial {
+    /// A repeated-preview result (no decoder to hand back).
+    fn plain(utterance: u64, result: Result<String, String>) -> Self {
+        Self {
+            utterance,
+            result,
+            decoder: None,
+            unsupported: false,
+        }
+    }
+}
+
 /// Ghost completion bookkeeping.
 struct GhostState {
     client: crate::ghost::GhostClient,
@@ -205,8 +234,10 @@ struct GhostState {
     partial_in_flight: bool,
     last_partial_at: Option<Instant>,
     partial_seq: u64,
-    partial_tx: mpsc::UnboundedSender<(u64, Result<String, String>)>,
-    partial_rx: mpsc::UnboundedReceiver<(u64, Result<String, String>)>,
+    partial_tx: mpsc::UnboundedSender<Partial>,
+    partial_rx: mpsc::UnboundedReceiver<Partial>,
+    /// Continuous decoder for the utterance in progress (None: start fresh).
+    decoder: Option<crate::continuous::ContinuousDecoder>,
     /// Something is currently drawn as a ghost.
     showing: bool,
     /// At least one utterance was committed this session (for spacing).
@@ -226,6 +257,7 @@ impl GhostState {
             partial_seq: 0,
             partial_tx,
             partial_rx,
+            decoder: None,
             showing: false,
             committed_any: false,
             warned_unavailable: false,
@@ -257,6 +289,7 @@ impl GhostState {
     fn next_utterance(&mut self) {
         self.utterance += 1;
         self.last_partial_at = None;
+        self.decoder = None;
     }
 
     fn clear(&mut self) {
@@ -305,6 +338,7 @@ impl StreamingEngine {
             guided_grammar: None,
             typing_suspended: false,
             ghost: None,
+            continuous: None,
         })
     }
 
@@ -390,6 +424,15 @@ impl StreamingEngine {
         }
     }
 
+    /// Decode ghost partials continuously with this server, or `None` to
+    /// re-transcribe the growing utterance.
+    pub fn set_continuous(&mut self, spec: Option<crate::continuous::ContinuousSpec>) {
+        self.continuous = spec;
+        if let Some(ghost) = self.ghost.as_mut() {
+            ghost.decoder = None;
+        }
+    }
+
     /// Whether ghost completion is active.
     pub fn ghost_enabled(&self) -> bool {
         self.ghost.is_some()
@@ -405,11 +448,21 @@ impl StreamingEngine {
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
-        while let Ok((utterance, result)) = ghost.partial_rx.try_recv() {
+        while let Ok(partial) = ghost.partial_rx.try_recv() {
             ghost.partial_in_flight = false;
+            let Partial {
+                utterance,
+                result,
+                decoder,
+                unsupported,
+            } = partial;
+            if unsupported {
+                self.continuous = None;
+            }
             if utterance != ghost.utterance || !speaking {
                 continue; // stale: that utterance already ended
             }
+            ghost.decoder = decoder;
             if muted {
                 continue; // typing switched off: show nothing in the target
             }
@@ -453,12 +506,41 @@ impl StreamingEngine {
         let Some(samples) = self.vad_detector.current_segment_samples() else {
             return;
         };
-        if samples.len() < GHOST_MIN_PARTIAL_SAMPLES || samples.len() > GHOST_MAX_PARTIAL_SAMPLES {
+        let continuous = self.continuous.is_some() && self.guided_grammar.is_none();
+        let max = if continuous {
+            GHOST_MAX_CONTINUOUS_SAMPLES
+        } else {
+            GHOST_MAX_PARTIAL_SAMPLES
+        };
+        if samples.len() < GHOST_MIN_PARTIAL_SAMPLES || samples.len() > max {
             return;
         }
         let samples = samples.to_vec();
 
         let ghost = self.ghost.as_mut().expect("checked above");
+        if continuous {
+            let spec = self.continuous.as_ref().expect("checked above");
+            let mut decoder = ghost.decoder.take().unwrap_or_else(|| spec.decoder());
+            ghost.partial_in_flight = true;
+            ghost.last_partial_at = Some(Instant::now());
+            let utterance = ghost.utterance;
+            let tx = ghost.partial_tx.clone();
+            tokio::spawn(async move {
+                let pcm: Vec<i16> = samples.iter().map(|&s| f32_to_i16(s)).collect();
+                let outcome = decoder.step(&pcm, false, GHOST_PARTIAL_DEADLINE).await;
+                let unsupported = matches!(
+                    outcome,
+                    Err(crate::continuous::ContinuousError::Unsupported(_))
+                );
+                let _ = tx.send(Partial {
+                    utterance,
+                    result: outcome.map_err(|e| e.to_string()),
+                    decoder: (!unsupported).then_some(decoder),
+                    unsupported,
+                });
+            });
+            return;
+        }
         ghost.partial_seq += 1;
         let path = self
             .temp_dir
@@ -479,7 +561,7 @@ impl StreamingEngine {
                 .await
                 .map_err(|e| e.to_string());
             let _ = std::fs::remove_file(&path);
-            let _ = tx.send((utterance, result));
+            let _ = tx.send(Partial::plain(utterance, result));
         });
     }
 
@@ -845,6 +927,10 @@ impl StreamingEngine {
     }
 }
 
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * 32767.0) as i16
+}
+
 /// Write mono 16 kHz 16-bit PCM WAV.
 fn write_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), std::io::Error> {
     {
@@ -881,10 +967,8 @@ fn write_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), std::io::Err
         file.write_all(b"data")?;
         file.write_all(&data_size.to_le_bytes())?;
 
-        // Convert f32 samples to i16 and write
         for &sample in samples {
-            let sample_i16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
-            file.write_all(&sample_i16.to_le_bytes())?;
+            file.write_all(&f32_to_i16(sample).to_le_bytes())?;
         }
 
         Ok(())
@@ -1212,11 +1296,11 @@ mod tests {
         let current = ghost.utterance;
         ghost
             .partial_tx
-            .send((current + 7, Ok("old".into())))
+            .send(Partial::plain(current + 7, Ok("old".into())))
             .unwrap();
         ghost
             .partial_tx
-            .send((current, Ok("fresh".into())))
+            .send(Partial::plain(current, Ok("fresh".into())))
             .unwrap();
         engine.ghost_poll_partials();
         assert_eq!(next_cmd(&lines), "P fresh");
@@ -1224,6 +1308,56 @@ mod tests {
             lines.try_iter().all(|l| l == "S"),
             "stale partial must not be shown"
         );
+    }
+
+    fn spec() -> crate::continuous::ContinuousSpec {
+        crate::continuous::ContinuousSpec {
+            server_url: "http://127.0.0.1:9".into(),
+            api_key: None,
+            model: Some("m".into()),
+            language: Some("en".into()),
+        }
+    }
+
+    #[test]
+    fn test_ghost_continuous_decoder_follows_its_utterance() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.set_continuous(Some(spec()));
+        feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+        let ghost = engine.ghost.as_mut().unwrap();
+        let current = ghost.utterance;
+        let mut stale = Partial::plain(current + 1, Ok("old".into()));
+        stale.decoder = Some(spec().decoder());
+        ghost.partial_tx.send(stale).unwrap();
+        engine.ghost_poll_partials();
+        assert!(
+            engine.ghost.as_ref().unwrap().decoder.is_none(),
+            "a stale utterance's decoder is dropped"
+        );
+        let ghost = engine.ghost.as_mut().unwrap();
+        let mut fresh = Partial::plain(current, Ok("fresh".into()));
+        fresh.decoder = Some(spec().decoder());
+        ghost.partial_tx.send(fresh).unwrap();
+        engine.ghost_poll_partials();
+        assert_eq!(next_cmd(&lines), "P fresh");
+        assert!(engine.ghost.as_ref().unwrap().decoder.is_some());
+        // The next utterance starts from a fresh decoder.
+        engine.ghost.as_mut().unwrap().next_utterance();
+        assert!(engine.ghost.as_ref().unwrap().decoder.is_none());
+    }
+
+    #[test]
+    fn test_ghost_unsupported_server_falls_back_to_repeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, _lines) = ghost_engine(dir.path());
+        engine.set_continuous(Some(spec()));
+        let ghost = engine.ghost.as_mut().unwrap();
+        let mut refused = Partial::plain(ghost.utterance, Err("unsupported".into()));
+        refused.unsupported = true;
+        ghost.partial_tx.send(refused).unwrap();
+        engine.ghost_poll_partials();
+        assert!(engine.continuous.is_none());
     }
 
     #[test]
@@ -1249,7 +1383,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .partial_tx
-            .send((old, Ok("stale".into())))
+            .send(Partial::plain(old, Ok("stale".into())))
             .unwrap();
         engine.ghost_poll_partials();
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1271,7 +1405,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .partial_tx
-            .send((current, Ok("secret".into())))
+            .send(Partial::plain(current, Ok("secret".into())))
             .unwrap();
         engine.ghost_poll_partials();
         engine.ghost_commit("secret");

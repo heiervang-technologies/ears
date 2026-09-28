@@ -937,6 +937,11 @@ fn ghost_preview_text_file(config: &Config) -> std::path::PathBuf {
     config.state_dir.join("ghost-preview.txt")
 }
 
+/// Settled continuous-decoding state the preview leaves for the final commit.
+fn ghost_continuous_state_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("ghost-continuous.json")
+}
+
 /// Start time of a process in clock ticks since boot (field 22 of
 /// `/proc/PID/stat`). Together with the PID this identifies one process:
 /// a recycled PID gets a different start time.
@@ -997,6 +1002,7 @@ fn spawn_ghost_preview(config: &Config, recorder_pid: u32) -> Result<()> {
         return Err(e);
     }
     let _ = std::fs::remove_file(ghost_preview_text_file(config));
+    let _ = std::fs::remove_file(ghost_continuous_state_file(config));
     // Reap it from a detached thread if we are still around when it exits.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -1064,11 +1070,15 @@ fn deliver_via_ghost(last_ghost: &str, text: &str) -> ears::ghost::Delivery {
 /// Exits when the recording ends (or on SIGTERM from the stopping toggle);
 /// closing the addon connection clears the ghost.
 async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u64) -> Result<()> {
+    use ears::continuous::{samples, ContinuousDecoder, ContinuousError};
     use ears::ghost::{default_socket_path, growing_wav_payload, write_pcm16_wav, GhostClient};
 
     const INTERVAL: Duration = Duration::from_millis(300);
     const MIN_BYTES: usize = 16_000 * 2 * 4 / 10; // 0.4 s
     const MAX_BYTES: usize = 16_000 * 2 * 60; // stop previewing past 60 s
+                                              // Continuous ticks cost about the same at any length; the bound is the
+                                              // server's context (about 17 tokens per second against 2048).
+    const MAX_CONTINUOUS_BYTES: usize = 16_000 * 2 * 90;
     const DEADLINE: Duration = Duration::from_secs(4);
 
     let audio_file = config.state_dir.join("recording.wav");
@@ -1080,10 +1090,18 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
         .with_api_key(config.api_key.clone())
-        .with_model(model)
+        .with_model(model.clone())
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
     let mut ghost = GhostClient::new(default_socket_path());
+    // Grammar-constrained (bash) decoding has its own request shape.
+    let mut continuous = (config.live_decoding == ears::config::LiveDecoding::Continuous
+        && grammar.is_none())
+    .then(|| {
+        ContinuousDecoder::new(server_url.as_str(), config.api_key.clone(), model)
+            .with_language(language.as_deref())
+    });
+    let state_file = ghost_continuous_state_file(config);
 
     // Bound to the one recorder it was started for: a later recording (even
     // one reusing the PID) is not ours to preview.
@@ -1099,21 +1117,47 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         let Some(pcm) = growing_wav_payload(&bytes) else {
             continue;
         };
-        if pcm.len() < MIN_BYTES || pcm.len() > MAX_BYTES || pcm.len() == last_len {
+        let max = if continuous.is_some() {
+            MAX_CONTINUOUS_BYTES
+        } else {
+            MAX_BYTES
+        };
+        if pcm.len() < MIN_BYTES || pcm.len() > max || pcm.len() == last_len {
             continue;
         }
         last_len = pcm.len();
-        if write_pcm16_wav(&partial, pcm, 16_000).is_err() {
-            continue;
-        }
-        let text = match client
-            .transcribe_preview(&partial, grammar.as_deref(), DEADLINE)
-            .await
-        {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::debug!("Ghost preview transcription: {}", e);
+        let text = if let Some(decoder) = continuous.as_mut() {
+            match decoder.step(&samples(pcm), false, DEADLINE).await {
+                Ok(text) => {
+                    if let Ok(json) = serde_json::to_string(&decoder.snapshot()) {
+                        let _ = std::fs::write(&state_file, json);
+                    }
+                    text
+                }
+                Err(ContinuousError::Unsupported(e)) => {
+                    tracing::warn!("Continuous decoding unavailable, repeating instead: {}", e);
+                    continuous = None;
+                    last_len = 0;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::debug!("Ghost preview transcription: {}", e);
+                    continue;
+                }
+            }
+        } else {
+            if write_pcm16_wav(&partial, pcm, 16_000).is_err() {
                 continue;
+            }
+            match client
+                .transcribe_preview(&partial, grammar.as_deref(), DEADLINE)
+                .await
+            {
+                Ok(text) => text,
+                Err(e) => {
+                    tracing::debug!("Ghost preview transcription: {}", e);
+                    continue;
+                }
             }
         };
         let text = if config.bash_mode {
@@ -1142,6 +1186,46 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         let _ = std::fs::remove_file(&pid_file);
     }
     Ok(())
+}
+
+/// Final text from continuous decoding: one more tick over the whole
+/// recording, forcing what the preview already settled. None means use a
+/// full transcription instead.
+async fn finish_continuous(
+    config: &Config,
+    audio_file: &std::path::Path,
+    server_url: &str,
+    model: Option<String>,
+    language: Option<&str>,
+) -> Option<String> {
+    use ears::continuous::{samples, ContinuousDecoder, DecoderState};
+    const DEADLINE: Duration = Duration::from_secs(4);
+
+    let state_file = ghost_continuous_state_file(config);
+    // No state (preview never ran or fell back) still works: the tick then
+    // decodes everything, like a full transcription.
+    let state: DecoderState = std::fs::read_to_string(&state_file)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let _ = std::fs::remove_file(&state_file);
+    let bytes = tokio::fs::read(audio_file).await.ok()?;
+    let pcm = ears::ghost::growing_wav_payload(&bytes)?;
+    let started = std::time::Instant::now();
+    let mut decoder = ContinuousDecoder::new(server_url, config.api_key.clone(), model)
+        .with_language(language)
+        .resume(state);
+    match decoder.step(&samples(pcm), true, DEADLINE).await {
+        Ok(text) if !text.is_empty() => {
+            tracing::info!("Continuous final in {:?}", started.elapsed());
+            Some(text)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!("Continuous final failed, transcribing in full: {}", e);
+            None
+        }
+    }
 }
 
 /// Stop recording and transcribe
@@ -1245,13 +1329,33 @@ async fn stop_and_transcribe(
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
         .with_api_key(config.api_key.clone())
-        .with_model(model)
+        .with_model(model.clone())
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
-    match client
-        .transcribe_with_grammar(&audio_file, grammar.as_deref())
-        .await
+    let continuous_final = if config.live_decoding == ears::config::LiveDecoding::Continuous
+        && !config.final_correction
+        && grammar.is_none()
     {
+        finish_continuous(
+            config,
+            &audio_file,
+            server_url.as_str(),
+            model,
+            language.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
+    let result = match continuous_final {
+        Some(text) => Ok(text),
+        None => {
+            client
+                .transcribe_with_grammar(&audio_file, grammar.as_deref())
+                .await
+        }
+    };
+    match result {
         Ok(text) if !text.is_empty() => {
             tracing::info!(
                 "Transcription completed in {:?}: {}",

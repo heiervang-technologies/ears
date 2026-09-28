@@ -100,6 +100,14 @@ pub async fn start_vad_pipeline(
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let (server_url, model) = config.resolve_server(language.as_deref());
+    let continuous = (config.live_decoding == crate::config::LiveDecoding::Continuous).then(|| {
+        crate::continuous::ContinuousSpec {
+            server_url: server_url.to_string(),
+            api_key: config.api_key.clone(),
+            model: model.clone(),
+            language: language.clone(),
+        }
+    });
     let whisper_client = Arc::new(
         WhisperClient::new(server_url.to_string())
             .with_language(language)
@@ -153,6 +161,7 @@ pub async fn start_vad_pipeline(
     let engine_event_tx = event_tx.clone();
     engine.set_event_sender(event_tx);
     engine.set_health(health.clone());
+    engine.set_continuous(continuous);
 
     // Shutdown channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);

@@ -24,6 +24,7 @@ pub mod desktop;
 pub mod tui;
 
 // Iteration 8: Streaming transcription with VAD
+pub mod continuous;
 pub mod continuous_capture;
 pub mod ducker;
 pub mod ghost;

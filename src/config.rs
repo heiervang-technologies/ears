@@ -52,6 +52,23 @@ fn default_cue_volume() -> u8 {
     100
 }
 
+fn default_final_correction() -> bool {
+    true
+}
+
+/// How the live ghost preview decodes a growing recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LiveDecoding {
+    /// Re-transcribe the whole clip on every tick. Works with any server.
+    #[default]
+    Repeat,
+    /// Qwen3-ASR on vLLM: cached encoder windows plus the settled transcript
+    /// as a forced prefix, so each tick costs about the same. Falls back to
+    /// `repeat` when the server does not support it.
+    Continuous,
+}
+
 fn default_save_to_clipboard() -> bool {
     false
 }
@@ -166,6 +183,14 @@ pub struct Config {
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
+    /// Live preview decoding (`repeat` or `continuous`). Default: repeat.
+    #[serde(default)]
+    pub live_decoding: LiveDecoding,
+    /// Re-transcribe the whole recording for the committed text. When false
+    /// and continuous live decoding is on, the committed text is the live
+    /// hypothesis finished off in one more tick, which is faster. Default: true.
+    #[serde(default = "default_final_correction")]
+    pub final_correction: bool,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -218,6 +243,8 @@ impl Config {
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
+            live_decoding: LiveDecoding::default(),
+            final_correction: default_final_correction(),
             config_dir,
             active_profile: None,
             state_dir,
@@ -351,6 +378,8 @@ impl Config {
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
+            live_decoding: LiveDecoding::default(),
+            final_correction: default_final_correction(),
             config_dir: PathBuf::new(),
             active_profile: None,
             state_dir: PathBuf::new(),
