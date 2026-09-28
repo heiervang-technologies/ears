@@ -937,6 +937,17 @@ fn ghost_preview_text_file(config: &Config) -> std::path::PathBuf {
     config.state_dir.join("ghost-preview.txt")
 }
 
+/// Present while the ghost preview is streaming to the realtime endpoint:
+/// the stop path then waits for its transcript instead of killing it.
+fn ghost_realtime_live_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("ghost-realtime.live")
+}
+
+/// Final transcript of a realtime preview, written once input has ended.
+fn ghost_realtime_final_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("ghost-realtime.final")
+}
+
 /// Start time of a process in clock ticks since boot (field 22 of
 /// `/proc/PID/stat`). Together with the PID this identifies one process:
 /// a recycled PID gets a different start time.
@@ -997,6 +1008,8 @@ fn spawn_ghost_preview(config: &Config, recorder_pid: u32) -> Result<()> {
         return Err(e);
     }
     let _ = std::fs::remove_file(ghost_preview_text_file(config));
+    let _ = std::fs::remove_file(ghost_realtime_live_file(config));
+    let _ = std::fs::remove_file(ghost_realtime_final_file(config));
     // Reap it from a detached thread if we are still around when it exits.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -1036,6 +1049,46 @@ fn stop_ghost_preview(config: &Config) -> Option<String> {
     let _ = std::fs::remove_file(&text_file);
     let _ = std::fs::remove_file(config.state_dir.join("ghost_toggle_partial.wav"));
     Some(last)
+}
+
+/// Wait for a streaming preview to hand over its final transcript.
+///
+/// Returns the ghost it last showed (as [`stop_ghost_preview`] does) and the
+/// streamed final text, or `None` text when the stream failed or took too
+/// long; the caller then transcribes the recording itself. Nothing has been
+/// delivered at that point, so falling back cannot duplicate text.
+fn finish_realtime_preview(config: &Config) -> (Option<String>, Option<String>) {
+    const WAIT: Duration = Duration::from_secs(6);
+    let final_file = ghost_realtime_final_file(config);
+    let live_file = ghost_realtime_live_file(config);
+    let preview = std::fs::read_to_string(ghost_preview_pid_file(config))
+        .ok()
+        .and_then(|record| {
+            let mut fields = record.split_whitespace();
+            Some((
+                fields.next()?.parse::<i32>().ok()?,
+                fields.next()?.parse::<u64>().ok()?,
+            ))
+        });
+    let deadline = std::time::Instant::now() + WAIT;
+    while std::time::Instant::now() < deadline
+        && !final_file.exists()
+        && live_file.exists()
+        && preview.is_some_and(|(pid, start)| same_process(pid, start))
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let final_text = std::fs::read_to_string(&final_file).ok();
+    let _ = std::fs::remove_file(&final_file);
+    let _ = std::fs::remove_file(&live_file);
+    // A preview that exited on its own already removed its PID record.
+    let last = stop_ghost_preview(config).or_else(|| {
+        let text_file = ghost_preview_text_file(config);
+        let last = std::fs::read_to_string(&text_file).ok();
+        let _ = std::fs::remove_file(&text_file);
+        last
+    });
+    (last, final_text)
 }
 
 /// Commit the final push-to-talk text through the ghost addon.
@@ -1080,7 +1133,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
         .with_api_key(config.api_key.clone())
-        .with_model(model)
+        .with_model(model.clone())
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
     let mut ghost = GhostClient::new(default_socket_path());
@@ -1088,6 +1141,32 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     // Bound to the one recorder it was started for: a later recording (even
     // one reusing the PID) is not ours to preview.
     let recorder_alive = || same_process(recorder_pid, recorder_start);
+
+    // Streaming needs no grammar support from the server, so bash mode keeps
+    // the repeated previews.
+    if config.realtime.enabled && grammar.is_none() {
+        let streamed = run_realtime_preview(
+            config,
+            &server_url,
+            model,
+            language.as_deref(),
+            &mut ghost,
+            &recorder_alive,
+        )
+        .await;
+        match streamed {
+            Ok(()) => {
+                end_ghost_preview(config, &partial);
+                return Ok(());
+            }
+            Err(e) => {
+                // Hand over to repeated previews for the rest of the
+                // recording; the stop path transcribes the file itself.
+                let _ = std::fs::remove_file(ghost_realtime_live_file(config));
+                tracing::warn!("Realtime preview failed, falling back: {:#}", e);
+            }
+        }
+    }
 
     let mut last_len = 0usize;
     let mut last_shown = String::new();
@@ -1132,8 +1211,14 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
             Err(e) => tracing::debug!("Ghost preview: {}", e),
         }
     }
-    let _ = std::fs::remove_file(&partial);
-    // Natural exit: drop our PID record so nothing signals a recycled PID.
+    end_ghost_preview(config, &partial);
+    Ok(())
+}
+
+/// Natural exit of the preview process.
+fn end_ghost_preview(config: &Config, partial: &std::path::Path) {
+    let _ = std::fs::remove_file(partial);
+    // Drop our PID record so nothing signals a recycled PID.
     let pid_file = ghost_preview_pid_file(config);
     let me = std::process::id().to_string();
     if std::fs::read_to_string(&pid_file)
@@ -1141,7 +1226,166 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     {
         let _ = std::fs::remove_file(&pid_file);
     }
+}
+
+/// Ghost preview over the realtime endpoint: append the recording to one
+/// server session as it grows and show the streamed transcript. Once the
+/// recorder stops, send the rest of the audio, wait for the final text and
+/// leave it in [`ghost_realtime_final_file`] for the stop path.
+///
+/// Any error means the stream cannot be trusted to have produced the whole
+/// transcript; the caller falls back to batch transcription.
+async fn run_realtime_preview(
+    config: &Config,
+    server: &Url,
+    model: Option<String>,
+    language: Option<&str>,
+    ghost: &mut ears::ghost::GhostClient,
+    recorder_alive: &dyn Fn() -> bool,
+) -> Result<()> {
+    use ears::realtime::{
+        default_model, realtime_url, RealtimeEvent, RealtimeSession, TranscriptAssembler,
+    };
+
+    const TICK: Duration = Duration::from_millis(100);
+    // Send at least 100 ms at a time.
+    const MIN_APPEND: usize = 16_000 * 2 / 10;
+    // Qwen3-ASR's 2048-token context holds about 90 s of streamed audio.
+    const MAX_BYTES: usize = 16_000 * 2 * 80;
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+    const FINAL_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let url = match &config.realtime.url {
+        Some(url) => url.clone(),
+        None => realtime_url(server)?,
+    };
+    let api_key = config.api_key.as_deref();
+    let model = match model {
+        Some(model) => model,
+        None => default_model(server, api_key).await?,
+    };
+    let mut session = RealtimeSession::connect(&url, &model, api_key, CONNECT_TIMEOUT).await?;
+    std::fs::write(ghost_realtime_live_file(config), "")?;
+    tracing::info!("Realtime preview streaming to {} ({})", url, model);
+
+    let audio_file = config.state_dir.join("recording.wav");
+    let text_file = ghost_preview_text_file(config);
+    let filter = |text: String| {
+        if config.bash_mode {
+            text
+        } else {
+            config.text_filters.apply(&text, language)
+        }
+    };
+    let mut transcript = TranscriptAssembler::default();
+    let mut sent = 0usize;
+    let mut last_shown = String::new();
+    let mut tick = tokio::time::interval(TICK);
+
+    while recorder_alive() {
+        tokio::select! {
+            _ = tick.tick() => {
+                sent += send_new_audio(&mut session, &audio_file, sent, MIN_APPEND).await?;
+                if sent > MAX_BYTES {
+                    anyhow::bail!("recording outgrew the realtime context");
+                }
+            }
+            event = session.recv() => match event {
+                Some(RealtimeEvent::Delta(delta)) => {
+                    transcript.push(&delta);
+                    // A segment arrives as a burst of token deltas: show the
+                    // burst once rather than once per token.
+                    let mut pending = None;
+                    while let Some(event) = session.try_recv() {
+                        match event {
+                            RealtimeEvent::Delta(delta) => transcript.push(&delta),
+                            other => {
+                                pending = Some(other);
+                                break;
+                            }
+                        }
+                    }
+                    match pending {
+                        Some(RealtimeEvent::Error(e)) => anyhow::bail!("realtime server: {}", e),
+                        Some(_) => anyhow::bail!("realtime session ended early"),
+                        None => {}
+                    }
+                    let text = filter(transcript.text());
+                    if text.is_empty() || text == last_shown || !recorder_alive() {
+                        continue;
+                    }
+                    match ghost.preedit(&text) {
+                        Ok(_) => {
+                            last_shown = text;
+                            let _ = std::fs::write(&text_file, &last_shown);
+                        }
+                        Err(e) => tracing::debug!("Ghost preview: {}", e),
+                    }
+                }
+                Some(RealtimeEvent::Done(_)) => anyhow::bail!("realtime session ended early"),
+                Some(RealtimeEvent::Error(e)) => anyhow::bail!("realtime server: {}", e),
+                None => anyhow::bail!("realtime connection closed"),
+            }
+        }
+    }
+
+    // The recorder writes its last buffer while stopping: wait for the file
+    // to stop growing (at most 600 ms), then send the rest.
+    let mut last_len = None;
+    for _ in 0..12 {
+        let len = std::fs::read(&audio_file)
+            .ok()
+            .and_then(|bytes| ears::ghost::growing_wav_payload(&bytes).map(<[u8]>::len));
+        if len.is_some() && len == last_len {
+            break;
+        }
+        last_len = len;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    send_new_audio(&mut session, &audio_file, sent, 1).await?;
+    session.finish().await?;
+
+    let finished = tokio::time::timeout(FINAL_TIMEOUT, async {
+        loop {
+            match session.recv().await {
+                Some(RealtimeEvent::Delta(delta)) => transcript.push(&delta),
+                Some(RealtimeEvent::Done(_)) => return Ok(()),
+                Some(RealtimeEvent::Error(e)) => anyhow::bail!("realtime server: {}", e),
+                None => anyhow::bail!("realtime connection closed before the final text"),
+            }
+        }
+    })
+    .await;
+    finished.map_err(|_| anyhow::anyhow!("realtime final text timed out"))??;
+
+    // Write then rename: the stop path must never read half a transcript.
+    let final_file = ghost_realtime_final_file(config);
+    let tmp = final_file.with_extension("tmp");
+    // Unfiltered: the stop path applies the text filters once.
+    std::fs::write(&tmp, transcript.text())?;
+    std::fs::rename(&tmp, &final_file)?;
     Ok(())
+}
+
+/// Append whatever the recording gained since `sent` bytes, once there is
+/// at least `min` of it. Returns the number of bytes sent.
+async fn send_new_audio(
+    session: &mut ears::realtime::RealtimeSession,
+    audio_file: &std::path::Path,
+    sent: usize,
+    min: usize,
+) -> Result<usize> {
+    let Ok(bytes) = std::fs::read(audio_file) else {
+        return Ok(0);
+    };
+    let Some(pcm) = ears::ghost::growing_wav_payload(&bytes) else {
+        return Ok(0);
+    };
+    if pcm.len() < sent + min {
+        return Ok(0);
+    }
+    session.append(&pcm[sent..]).await?;
+    Ok(pcm.len() - sent)
 }
 
 /// Stop recording and transcribe
@@ -1175,8 +1419,15 @@ async fn stop_and_transcribe(
 
     // A ghost preview belongs to this recording: stop it first so no late
     // partial can land after the final commit. Its last ghost is re-shown
-    // below and replaced by the committed text.
-    let ghost_session = stop_ghost_preview(config);
+    // below and replaced by the committed text. A streaming preview instead
+    // stops previewing by itself once the recorder is gone, and is left to
+    // finish its transcript.
+    let streaming = ghost_realtime_live_file(config).exists();
+    let mut ghost_session = if streaming {
+        None
+    } else {
+        stop_ghost_preview(config)
+    };
 
     let stop_start = std::time::Instant::now();
     process_mgr
@@ -1241,6 +1492,16 @@ async fn stop_and_transcribe(
     }
 
     let transcribe_start = std::time::Instant::now();
+    let mut streamed = None;
+    if streaming {
+        let (last, final_text) = finish_realtime_preview(config);
+        ghost_session = last;
+        match final_text {
+            Some(text) if !config.realtime.batch_final => streamed = Some(text),
+            Some(_) => {}
+            None => tracing::warn!("No streamed transcript; transcribing the recording"),
+        }
+    }
     let (server_url, model) = config.resolve_server(language.as_deref());
     let client = WhisperClient::new(server_url.to_string())
         .with_language(language.clone())
@@ -1248,10 +1509,15 @@ async fn stop_and_transcribe(
         .with_model(model)
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
-    match client
-        .transcribe_with_grammar(&audio_file, grammar.as_deref())
-        .await
-    {
+    let transcribed = match streamed {
+        Some(text) => Ok(text),
+        None => {
+            client
+                .transcribe_with_grammar(&audio_file, grammar.as_deref())
+                .await
+        }
+    };
+    match transcribed {
         Ok(text) if !text.is_empty() => {
             tracing::info!(
                 "Transcription completed in {:?}: {}",

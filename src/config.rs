@@ -105,6 +105,26 @@ impl Default for VadSettings {
     }
 }
 
+/// Streaming ghost previews over the backend's realtime WebSocket
+/// (`WS /v1/realtime`, vLLM with a realtime-capable ASR model).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RealtimeSettings {
+    /// Stream push-to-talk audio to the realtime endpoint instead of
+    /// re-transcribing the growing recording (default: false). Falls back
+    /// to the repeated preview when the endpoint is unavailable.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Realtime endpoint (default: the ASR server with a ws scheme and
+    /// `/v1/realtime` appended)
+    #[serde(default)]
+    pub url: Option<Url>,
+    /// Transcribe the final text with a normal batch request instead of
+    /// using the streamed transcript (default: false). Slower, but free of
+    /// the segment-seam repairs the stream needs.
+    #[serde(default)]
+    pub batch_final: bool,
+}
+
 /// Configuration for the ears daemon
 ///
 /// Loaded from `~/.config/ears/config.toml` (or `config.{profile}.toml`).
@@ -166,6 +186,9 @@ pub struct Config {
     /// VAD settings
     #[serde(default)]
     pub vad: VadSettings,
+    /// Realtime streaming settings
+    #[serde(default)]
+    pub realtime: RealtimeSettings,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -218,6 +241,7 @@ impl Config {
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
+            realtime: RealtimeSettings::default(),
             config_dir,
             active_profile: None,
             state_dir,
@@ -351,6 +375,7 @@ impl Config {
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
+            realtime: RealtimeSettings::default(),
             config_dir: PathBuf::new(),
             active_profile: None,
             state_dir: PathBuf::new(),
