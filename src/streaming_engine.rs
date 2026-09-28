@@ -183,13 +183,13 @@ pub struct StreamingEngine {
 }
 
 /// Minimum spacing between partial transcriptions of the utterance in progress.
-const GHOST_PARTIAL_INTERVAL: Duration = Duration::from_millis(600);
+const GHOST_PARTIAL_INTERVAL: Duration = Duration::from_millis(300);
 
 /// A partial slower than this is dropped; the next one will be fresher.
 const GHOST_PARTIAL_DEADLINE: Duration = Duration::from_secs(4);
 
 /// Minimum audio (replay buffer included) before the first partial is worth it.
-const GHOST_MIN_PARTIAL_SAMPLES: usize = 16_000 * 8 / 10;
+const GHOST_MIN_PARTIAL_SAMPLES: usize = 16_000 * 6 / 10;
 
 /// Longest utterance we keep re-transcribing for partials; beyond this the
 /// ghost simply waits for the final transcript.
