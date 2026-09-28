@@ -92,11 +92,14 @@ impl StreamPartial {
     /// The same settled state the HTTP decoder keeps, so it can take over.
     pub fn snapshot(&self) -> DecoderState {
         DecoderState {
+            // "None" is what silence is detected as; never force it.
             header: self
                 .language
                 .as_ref()
+                .filter(|name| name.as_str() != "None")
                 .map(|name| format!("language {name}{ASR_TAG}")),
             stable: self.stable().to_string(),
+            ..DecoderState::default()
         }
     }
 }
@@ -643,6 +646,8 @@ pub(crate) mod fake {
         }
     }
 
+    // The handshake callback's error type is tungstenite's.
+    #[allow(clippy::result_large_err)]
     async fn serve(
         tcp: TcpStream,
         mode: Mode,
@@ -767,6 +772,7 @@ mod tests {
             DecoderState {
                 header: Some("language English<asr_text>".into()),
                 stable: "Okay, so here".into(),
+                ..DecoderState::default()
             }
         );
         // Out of range or inside a character: settle less, never panic.

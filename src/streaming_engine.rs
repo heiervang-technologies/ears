@@ -181,8 +181,11 @@ pub struct StreamingEngine {
     /// addon as inline preedit instead of being typed.
     ghost: Option<GhostState>,
     /// Decode ghost partials continuously (issue #144) instead of
-    /// re-transcribing the growing utterance.
+    /// re-transcribing the growing utterance: over the ears stream when the
+    /// server has it, else per tick over HTTP.
     continuous: Option<crate::continuous::ContinuousSpec>,
+    /// The per-tick HTTP decoder still works (false: repeat instead).
+    continuous_http: bool,
 }
 
 /// Minimum spacing between partial transcriptions of the utterance in progress.
@@ -202,6 +205,9 @@ const GHOST_MAX_PARTIAL_SAMPLES: usize = 16_000 * 30;
 /// server's context.
 const GHOST_MAX_CONTINUOUS_SAMPLES: usize = 16_000 * 90;
 
+/// A lost stream connection is tried again after this, at the earliest.
+const STREAM_RETRY: Duration = Duration::from_secs(5);
+
 /// A finished partial transcription.
 struct Partial {
     utterance: u64,
@@ -210,6 +216,8 @@ struct Partial {
     decoder: Option<crate::continuous::ContinuousDecoder>,
     /// The server cannot decode continuously; stop trying.
     unsupported: bool,
+    /// Pushed by the ears stream, not a request of ours in flight.
+    streamed: bool,
 }
 
 impl Partial {
@@ -220,8 +228,44 @@ impl Partial {
             result,
             decoder: None,
             unsupported: false,
+            streamed: false,
         }
     }
+
+    /// A partial the ears stream pushed for `utterance`.
+    fn streamed(utterance: u64, text: String) -> Self {
+        Self {
+            streamed: true,
+            ..Self::plain(utterance, Ok(text))
+        }
+    }
+}
+
+/// Connection to the ears stream (`docs/STREAM_PROTOCOL.md`).
+enum StreamLink {
+    /// Not connected; connect when `retry_at` has passed (None: right away).
+    Down {
+        retry_at: Option<Instant>,
+    },
+    Connecting(
+        tokio::sync::oneshot::Receiver<
+            Result<crate::stream_client::StreamSession, crate::continuous::ContinuousError>,
+        >,
+    ),
+    Up(crate::stream_client::StreamSession),
+    /// The server has no stream: per-tick HTTP from now on.
+    Unsupported,
+}
+
+/// The stream utterance carrying a ghost utterance.
+#[derive(Debug, Clone, Copy)]
+struct Streamed {
+    /// Stream utterance id (increasing; never reused after a cancel).
+    id: u64,
+    /// Ghost utterance it belongs to.
+    utterance: u64,
+    /// Samples of the segment sent so far.
+    sent: usize,
 }
 
 /// Ghost completion bookkeeping.
@@ -238,6 +282,17 @@ struct GhostState {
     partial_rx: mpsc::UnboundedReceiver<Partial>,
     /// Continuous decoder for the utterance in progress (None: start fresh).
     decoder: Option<crate::continuous::ContinuousDecoder>,
+    stream: StreamLink,
+    /// Stream utterance of the ghost utterance in progress, if streaming.
+    streamed: Option<Streamed>,
+    /// Last stream utterance id used.
+    stream_id: u64,
+    /// Ghost utterance decoded per tick to its end (the stream was not up
+    /// at its start, or was lost during it). Its audio is never replayed.
+    per_tick: Option<u64>,
+    /// Settled state of the latest stream partial, for the per-tick decoder
+    /// to carry on from if the stream is lost.
+    stream_state: Option<crate::continuous::DecoderState>,
     /// Something is currently drawn as a ghost.
     showing: bool,
     /// At least one utterance was committed this session (for spacing).
@@ -258,6 +313,11 @@ impl GhostState {
             partial_tx,
             partial_rx,
             decoder: None,
+            stream: StreamLink::Down { retry_at: None },
+            streamed: None,
+            stream_id: 0,
+            per_tick: None,
+            stream_state: None,
             showing: false,
             committed_any: false,
             warned_unavailable: false,
@@ -286,10 +346,56 @@ impl GhostState {
     }
 
     /// End the current utterance: stale partials are ignored from now on.
+    /// A stream utterance still open for it is cancelled.
     fn next_utterance(&mut self) {
+        self.stream_cancel();
         self.utterance += 1;
         self.last_partial_at = None;
         self.decoder = None;
+        self.stream_state = None;
+    }
+
+    fn session(&self) -> Option<&crate::stream_client::StreamSession> {
+        match &self.stream {
+            StreamLink::Up(session) => Some(session),
+            _ => None,
+        }
+    }
+
+    /// Drop the stream utterance in progress, if any.
+    fn stream_cancel(&mut self) {
+        if let Some(streamed) = self.streamed.take() {
+            if let Some(session) = self.session() {
+                session.cancel(streamed.id);
+            }
+        }
+    }
+
+    /// The current utterance's segment is complete: send the rest of it and
+    /// `end`. Its `final` is not used; the committed text comes from the
+    /// final transcription as always.
+    fn stream_end(&mut self, samples: &[f32]) {
+        let Some(streamed) = self.streamed.take() else {
+            return;
+        };
+        let Some(session) = self.session() else {
+            return;
+        };
+        if streamed.utterance == self.utterance {
+            let end = samples
+                .len()
+                .min(session.max_samples().unwrap_or(usize::MAX));
+            if end > streamed.sent {
+                let pcm: Vec<i16> = samples[streamed.sent..end]
+                    .iter()
+                    .map(|&s| f32_to_i16(s))
+                    .collect();
+                session.push(streamed.id, &pcm);
+            }
+            session.end(streamed.id);
+        } else {
+            session.cancel(streamed.id);
+        }
     }
 
     fn clear(&mut self) {
@@ -339,6 +445,7 @@ impl StreamingEngine {
             typing_suspended: false,
             ghost: None,
             continuous: None,
+            continuous_http: false,
         })
     }
 
@@ -414,6 +521,7 @@ impl StreamingEngine {
                     ),
                 }
                 self.ghost = Some(GhostState::new(client));
+                self.ghost_stream_link();
             }
             (None, true) => {
                 if let Some(mut ghost) = self.ghost.take() {
@@ -427,10 +535,191 @@ impl StreamingEngine {
     /// Decode ghost partials continuously with this server, or `None` to
     /// re-transcribe the growing utterance.
     pub fn set_continuous(&mut self, spec: Option<crate::continuous::ContinuousSpec>) {
+        self.continuous_http = spec.is_some();
         self.continuous = spec;
         if let Some(ghost) = self.ghost.as_mut() {
             ghost.decoder = None;
+            ghost.stream_cancel();
+            ghost.stream = StreamLink::Down { retry_at: None };
         }
+        // Connect now so the first utterance need not wait for it.
+        self.ghost_stream_link();
+    }
+
+    /// Advance the stream connection. Never waits on the network: connecting
+    /// runs as its own task and is picked up here once it is done.
+    fn ghost_stream_link(&mut self) {
+        use crate::continuous::ContinuousError;
+        let Some(spec) = self.continuous.as_ref() else {
+            return;
+        };
+        let Some(ghost) = self.ghost.as_mut() else {
+            return;
+        };
+        let next = match &mut ghost.stream {
+            StreamLink::Connecting(rx) => match rx.try_recv() {
+                Ok(Ok(session)) => {
+                    info!(
+                        "Ghost partials over the ears stream ({})",
+                        session.ready().model.as_deref().unwrap_or("unknown model")
+                    );
+                    StreamLink::Up(session)
+                }
+                Ok(Err(ContinuousError::Unsupported(e))) => {
+                    info!("No ears stream on the server, decoding per tick: {}", e);
+                    StreamLink::Unsupported
+                }
+                Ok(Err(e)) => {
+                    debug!("Ears stream not connected: {}", e);
+                    StreamLink::Down {
+                        retry_at: Some(Instant::now() + STREAM_RETRY),
+                    }
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => StreamLink::Down {
+                    retry_at: Some(Instant::now() + STREAM_RETRY),
+                },
+            },
+            StreamLink::Down { retry_at } if retry_at.is_none_or(|t| Instant::now() >= t) => {
+                // No runtime (sync tests): stay down.
+                let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                    return;
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let url = spec.server_url.clone();
+                let key = spec.api_key.clone();
+                runtime.spawn(async move {
+                    let session =
+                        crate::stream_client::StreamSession::connect(&url, key.as_deref()).await;
+                    let _ = tx.send(session);
+                });
+                StreamLink::Connecting(rx)
+            }
+            _ => return,
+        };
+        ghost.stream = next;
+    }
+
+    /// Turn what the stream pushed into partials for the current utterance.
+    /// A lost connection hands the utterance to the per-tick decoder.
+    fn ghost_stream_events(&mut self) {
+        use crate::stream_client::StreamEvent;
+        let Some(ghost) = self.ghost.as_mut() else {
+            return;
+        };
+        let StreamLink::Up(session) = &mut ghost.stream else {
+            return;
+        };
+        let mut lost = None;
+        while let Some(event) = session.try_recv() {
+            match event {
+                StreamEvent::Partial(partial) => match ghost.streamed {
+                    Some(s) if s.id == partial.utterance => {
+                        ghost.stream_state = Some(partial.snapshot());
+                        let text = partial.text.trim().to_string();
+                        let _ = ghost.partial_tx.send(Partial::streamed(s.utterance, text));
+                    }
+                    _ => debug!("Stale stream partial (utterance {})", partial.utterance),
+                },
+                // The committed text comes from the final transcription.
+                StreamEvent::Final { .. } => {}
+                StreamEvent::Error { code, message, .. } if code == "unsupported" => {
+                    info!("Ears stream unsupported, decoding per tick: {}", message);
+                    lost = Some(StreamLink::Unsupported);
+                    break;
+                }
+                StreamEvent::Error {
+                    utterance,
+                    code,
+                    message,
+                } => debug!("Ears stream error {} ({:?}): {}", code, utterance, message),
+                StreamEvent::Closed(reason) => {
+                    warn!("Ears stream lost ({}); decoding per tick", reason);
+                    lost = Some(StreamLink::Down {
+                        retry_at: Some(Instant::now() + STREAM_RETRY),
+                    });
+                }
+            }
+        }
+        if let Some(link) = lost {
+            // Finish the utterance per tick from what the stream settled;
+            // its audio is never sent again.
+            if let Some(streamed) = ghost.streamed.take() {
+                ghost.per_tick = Some(streamed.utterance);
+            }
+            ghost.stream = link;
+        }
+    }
+
+    /// Feed the utterance in progress to the ears stream: `start` at speech
+    /// onset with the replay buffer, then only new samples. Returns whether
+    /// the stream owns this utterance's partials; false means decode per
+    /// tick instead.
+    fn ghost_stream_feed(&mut self) -> bool {
+        if self.continuous.is_none() || self.guided_grammar.is_some() {
+            return false;
+        }
+        self.ghost_stream_link();
+        let muted = self.typing_mode == TypingMode::None;
+        let samples = if self.vad_detector.is_speaking() {
+            self.vad_detector.current_segment_samples()
+        } else {
+            None
+        };
+        let spec = self.continuous.as_ref().expect("checked above");
+        let Some(ghost) = self.ghost.as_mut() else {
+            return false;
+        };
+        if muted {
+            // Nothing may be shown; do not spend the server on it either.
+            ghost.stream_cancel();
+            return true;
+        }
+        let Some(samples) = samples else {
+            return false;
+        };
+        if ghost.per_tick == Some(ghost.utterance) {
+            return false;
+        }
+        let session = match &ghost.stream {
+            StreamLink::Up(session) => session,
+            StreamLink::Connecting(_) => return true, // settled within 2 s
+            StreamLink::Down { .. } | StreamLink::Unsupported => {
+                ghost.per_tick = Some(ghost.utterance);
+                return false;
+            }
+        };
+        let mut streamed = match ghost.streamed {
+            Some(s) if s.utterance == ghost.utterance => s,
+            _ => {
+                ghost.stream_id += 1;
+                session.start(
+                    ghost.stream_id,
+                    &crate::stream_client::StartParams::from_spec(spec),
+                );
+                Streamed {
+                    id: ghost.stream_id,
+                    utterance: ghost.utterance,
+                    sent: 0,
+                }
+            }
+        };
+        let end = samples
+            .len()
+            .min(GHOST_MAX_CONTINUOUS_SAMPLES)
+            .min(session.max_samples().unwrap_or(usize::MAX));
+        if end > streamed.sent {
+            let pcm: Vec<i16> = samples[streamed.sent..end]
+                .iter()
+                .map(|&s| f32_to_i16(s))
+                .collect();
+            // Refused only when the connection is gone; its Closed event
+            // hands the utterance over.
+            session.push(streamed.id, &pcm);
+            streamed.sent = end;
+        }
+        ghost.streamed = Some(streamed);
+        true
     }
 
     /// Whether ghost completion is active.
@@ -445,19 +734,23 @@ impl StreamingEngine {
         let language = self.language.clone();
         let bash = self.guided_grammar.is_some();
         let speaking = self.vad_detector.is_speaking();
+        self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
         while let Ok(partial) = ghost.partial_rx.try_recv() {
-            ghost.partial_in_flight = false;
             let Partial {
                 utterance,
                 result,
                 decoder,
                 unsupported,
+                streamed,
             } = partial;
+            if !streamed {
+                ghost.partial_in_flight = false;
+            }
             if unsupported {
-                self.continuous = None;
+                self.continuous_http = false;
             }
             // Resolve the server's model once, not per utterance.
             if let (Some(spec), Some(model)) = (
@@ -471,7 +764,9 @@ impl StreamingEngine {
             if utterance != ghost.utterance || !speaking {
                 continue; // stale: that utterance already ended
             }
-            ghost.decoder = decoder;
+            if !streamed {
+                ghost.decoder = decoder;
+            }
             if muted {
                 continue; // typing switched off: show nothing in the target
             }
@@ -501,6 +796,9 @@ impl StreamingEngine {
 
     /// Start a partial transcription of the utterance so far, if due.
     fn ghost_maybe_start_partial(&mut self) {
+        if self.ghost.is_none() || self.ghost_stream_feed() {
+            return;
+        }
         let Some(ghost) = self.ghost.as_ref() else {
             return;
         };
@@ -515,7 +813,8 @@ impl StreamingEngine {
         let Some(samples) = self.vad_detector.current_segment_samples() else {
             return;
         };
-        let continuous = self.continuous.is_some() && self.guided_grammar.is_none();
+        let continuous =
+            self.continuous.is_some() && self.continuous_http && self.guided_grammar.is_none();
         let max = if continuous {
             GHOST_MAX_CONTINUOUS_SAMPLES
         } else {
@@ -529,7 +828,14 @@ impl StreamingEngine {
         let ghost = self.ghost.as_mut().expect("checked above");
         if continuous {
             let spec = self.continuous.as_ref().expect("checked above");
-            let mut decoder = ghost.decoder.take().unwrap_or_else(|| spec.decoder());
+            // After a lost stream, carry on from what it settled.
+            let mut decoder = ghost.decoder.take().unwrap_or_else(|| {
+                let fresh = spec.decoder();
+                match ghost.stream_state.take() {
+                    Some(state) => fresh.resume(state),
+                    None => fresh,
+                }
+            });
             ghost.partial_in_flight = true;
             ghost.last_partial_at = Some(Instant::now());
             let utterance = ghost.utterance;
@@ -546,6 +852,7 @@ impl StreamingEngine {
                     result: outcome.map_err(|e| e.to_string()),
                     decoder: (!unsupported).then_some(decoder),
                     unsupported,
+                    streamed: false,
                 });
             });
             return;
@@ -688,6 +995,7 @@ impl StreamingEngine {
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
         if let Some(ghost) = self.ghost.as_mut() {
+            ghost.stream_end(&segment.samples);
             // Partials still in flight belong to this finished utterance.
             ghost.next_utterance();
         }
@@ -1055,6 +1363,9 @@ impl StreamingEngine {
         if typing_mode == TypingMode::None {
             // Muted: take down a ghost that is already on screen.
             self.ghost_clear();
+            if let Some(ghost) = self.ghost.as_mut() {
+                ghost.stream_cancel();
+            }
         }
     }
 
@@ -1091,8 +1402,15 @@ mod tests {
     /// Engine wired to a detector with short (3-frame) thresholds and an
     /// event receiver, driven by injected probabilities.
     fn seq_engine() -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
+        seq_engine_at("http://localhost:8178", PathBuf::new())
+    }
+
+    fn seq_engine_at(
+        whisper_url: &str,
+        temp_dir: PathBuf,
+    ) -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
         let mut engine = StreamingEngine::new(
-            Arc::new(WhisperClient::new("http://localhost:8178")),
+            Arc::new(WhisperClient::new(whisper_url)),
             StreamingConfig::default(),
             VadConfig {
                 min_speech_duration_ms: 96,
@@ -1101,7 +1419,7 @@ mod tests {
                 ..VadConfig::default()
             },
             ProgressiveTypingConfig::default(),
-            PathBuf::new(),
+            temp_dir,
         )
         .unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
@@ -1252,7 +1570,15 @@ mod tests {
     }
 
     fn ghost_engine(dir: &std::path::Path) -> (StreamingEngine, std::sync::mpsc::Receiver<String>) {
-        let (mut engine, _rx) = seq_engine();
+        ghost_engine_at(dir, "http://localhost:8178")
+    }
+
+    /// Ghost engine whose final transcriptions go to `whisper_url`.
+    fn ghost_engine_at(
+        dir: &std::path::Path,
+        whisper_url: &str,
+    ) -> (StreamingEngine, std::sync::mpsc::Receiver<String>) {
+        let (mut engine, _rx) = seq_engine_at(whisper_url, dir.to_path_buf());
         engine.typing_mode = TypingMode::Wtype;
         let (path, lines) = fake_ghost_addon(dir);
         engine.set_ghost_client(Some(crate::ghost::GhostClient::with_focus_probe(
@@ -1367,7 +1693,7 @@ mod tests {
         refused.unsupported = true;
         ghost.partial_tx.send(refused).unwrap();
         engine.ghost_poll_partials();
-        assert!(engine.continuous.is_none());
+        assert!(!engine.continuous_http);
     }
 
     #[test]
@@ -1421,6 +1747,244 @@ mod tests {
         engine.ghost_commit("secret");
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(lines.try_recv().is_err(), "nothing may reach the app");
+    }
+
+    fn spec_at(url: &str) -> crate::continuous::ContinuousSpec {
+        crate::continuous::ContinuousSpec {
+            server_url: url.into(),
+            ..spec()
+        }
+    }
+
+    /// What `process_audio` does for the ghost between segments, then a
+    /// moment for the socket tasks to run.
+    async fn ghost_tick(engine: &mut StreamingEngine) {
+        engine.ghost_poll_partials();
+        engine.ghost_maybe_start_partial();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    async fn tick_until(engine: &mut StreamingEngine, done: impl Fn(&StreamingEngine) -> bool) {
+        for _ in 0..400 {
+            if done(engine) {
+                return;
+            }
+            ghost_tick(engine).await;
+        }
+        panic!("condition never held");
+    }
+
+    fn stream_up(engine: &StreamingEngine) -> bool {
+        matches!(engine.ghost.as_ref().unwrap().stream, StreamLink::Up(_))
+    }
+
+    /// Tick until the addon gets a command other than a status query.
+    async fn next_cmd_ticking(
+        engine: &mut StreamingEngine,
+        lines: &std::sync::mpsc::Receiver<String>,
+    ) -> String {
+        for _ in 0..400 {
+            ghost_tick(engine).await;
+            if let Some(line) = lines.try_iter().find(|l| l != "S") {
+                return line;
+            }
+        }
+        panic!("the ghost addon never got a command");
+    }
+
+    fn stream_partial(id: u64, text: &str, stable_chars: usize) -> serde_json::Value {
+        serde_json::json!({"type": "partial", "utterance": id, "seq": 1, "text": text,
+            "stable_chars": stable_chars, "language": "English", "audio_ms": 1000,
+            "decode_ms": 50})
+    }
+
+    fn transcription(text: &str) -> wiremock::ResponseTemplate {
+        wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": text}))
+    }
+
+    fn chat_reply(content: &str) -> wiremock::ResponseTemplate {
+        wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}]
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_ghost_stream_utterance_follows_the_segment() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let whisper = MockServer::start().await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(transcription("hello stream."))
+            .mount(&whisper)
+            .await;
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine_at(dir.path(), &whisper.uri());
+        engine.set_continuous(Some(spec_at(&server.url)));
+        tick_until(&mut engine, stream_up).await;
+
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        ghost_tick(&mut engine).await;
+        let start = server.wait_for(|l| l.starts_with("start ")).await;
+        assert!(start.contains(r#""language":"en""#), "{start}");
+        let id = server.starts()[0];
+        server.say(stream_partial(id, "hello stream", 5));
+        assert_eq!(
+            next_cmd_ticking(&mut engine, &lines).await,
+            "P hello stream"
+        );
+        assert_eq!(
+            engine
+                .ghost
+                .as_ref()
+                .unwrap()
+                .stream_state
+                .as_ref()
+                .unwrap()
+                .stable,
+            "hello"
+        );
+
+        let segs = feed(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        let total = segs[0].samples.len();
+        engine
+            .process_segment(segs.into_iter().next().unwrap())
+            .await
+            .unwrap();
+        server.wait_for(|l| l == format!("end {id}")).await;
+        // Every sample went out exactly once, before `end`.
+        assert_eq!(server.audio_bytes(), 2 * total);
+        assert_eq!(
+            next_cmd_ticking(&mut engine, &lines).await,
+            "C hello stream."
+        );
+        assert_eq!(server.starts(), vec![id]);
+    }
+
+    #[tokio::test]
+    async fn test_ghost_stream_drops_stale_partials_and_cancels_on_reset() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.set_continuous(Some(spec_at(&server.url)));
+        tick_until(&mut engine, stream_up).await;
+
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        ghost_tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let old = server.starts()[0];
+        engine.reset();
+        server.wait_for(|l| l == format!("cancel {old}")).await;
+
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        ghost_tick(&mut engine).await;
+        server
+            .wait_for(|l| l.starts_with("start ") && !l.contains(&format!(":{old},")))
+            .await;
+        let fresh = server.starts()[1];
+        assert!(fresh > old, "stream utterance ids only increase");
+        server.say(stream_partial(old, "old words", 0));
+        server.say(stream_partial(fresh, "fresh words", 0));
+        assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "P fresh words");
+
+        // Muting cancels the stream utterance too.
+        engine.set_typing_enabled(false, false, TypingMode::None, false);
+        server.wait_for(|l| l == format!("cancel {fresh}")).await;
+        ghost_tick(&mut engine).await;
+        assert_eq!(server.starts().len(), 2, "no stream while muted");
+    }
+
+    #[tokio::test]
+    async fn test_ghost_without_stream_endpoint_decodes_per_tick() {
+        use wiremock::{matchers::path, Mock, MockServer};
+        // wiremock answers the upgrade with 404: the plugin is not installed.
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(chat_reply("over http"))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.set_continuous(Some(spec_at(&server.uri())));
+        tick_until(&mut engine, |e| {
+            matches!(e.ghost.as_ref().unwrap().stream, StreamLink::Unsupported)
+        })
+        .await;
+        feed(&mut engine, &[0.9; 24]);
+        assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "P over http");
+    }
+
+    #[tokio::test]
+    async fn test_ghost_lost_stream_falls_back_without_duplicate_commit() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let http = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(chat_reply(" then http"))
+            .mount(&http)
+            .await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(transcription("streamed words then http."))
+            .mount(&http)
+            .await;
+        // One URL for both: the stream here, plain HTTP passed to wiremock.
+        let server = FakeServer::start_with_http(Mode::Normal, Some(*http.address())).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine_at(dir.path(), &server.url);
+        engine.set_continuous(Some(spec_at(&server.url)));
+        tick_until(&mut engine, stream_up).await;
+
+        feed(&mut engine, &[0.9; 24]);
+        ghost_tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        server.say(stream_partial(id, "streamed words so far", 14));
+        assert_eq!(
+            next_cmd_ticking(&mut engine, &lines).await,
+            "P streamed words so far"
+        );
+
+        server.drop_connections();
+        // The per-tick decoder carries on from the settled text.
+        assert_eq!(
+            next_cmd_ticking(&mut engine, &lines).await,
+            "P streamed words then http"
+        );
+        let requests = http.received_requests().await.unwrap();
+        let chat: serde_json::Value = serde_json::from_slice(
+            &requests
+                .iter()
+                .find(|r| r.url.path() == "/v1/chat/completions")
+                .unwrap()
+                .body,
+        )
+        .unwrap();
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(
+            messages.last().unwrap()["content"],
+            "language English<asr_text>streamed words"
+        );
+
+        let segs = feed(&mut engine, &[0.0, 0.0, 0.0]);
+        engine
+            .process_segment(segs.into_iter().next().unwrap())
+            .await
+            .unwrap();
+        let commits: Vec<String> = lines.try_iter().filter(|l| l.starts_with("C ")).collect();
+        assert_eq!(commits, vec!["C streamed words then http."]);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let finals = http
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+            .count();
+        assert_eq!(finals, 1);
+        // The utterance was never replayed into a new stream.
+        assert_eq!(server.starts(), vec![id]);
     }
 
     #[test]
