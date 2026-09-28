@@ -84,6 +84,9 @@ async fn main() -> Result<()> {
         Some(Commands::AutoEnter) => {
             handle_auto_enter().await?;
         }
+        Some(Commands::Typing { action }) => {
+            handle_typing(&action).await?;
+        }
         // Hidden backwards-compat aliases
         Some(Commands::Select) => select_device(&config)?,
         Some(Commands::List) => list_devices()?,
@@ -105,6 +108,29 @@ async fn handle_auto_enter() -> Result<()> {
         }
         Err(_) => {
             anyhow::bail!("No running ears instance found (is VAD or TUI running?)");
+        }
+    }
+}
+
+/// `ears typing on|off|toggle|status`: ask the running instance, or update the
+/// persisted switch directly when no ears is running.
+async fn handle_typing(action: &str) -> Result<()> {
+    use ears::typing_switch::{self, TypingRequest};
+    let request = TypingRequest::from_arg(action)
+        .with_context(|| format!("Unknown typing action: {}", action))?;
+    match ears::ipc::send_command(request.command()).await {
+        Ok(resp) if resp.starts_with("typing:") => {
+            println!("{}", resp);
+            Ok(())
+        }
+        Ok(resp) => anyhow::bail!("Running ears does not support typing control: {}", resp),
+        Err(_) => {
+            let enabled = request.apply(typing_switch::load());
+            if request.changes_state() {
+                typing_switch::save(enabled)?;
+            }
+            println!("{}", typing_switch::describe(enabled));
+            Ok(())
         }
     }
 }
@@ -467,13 +493,14 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
         };
 
     // Helper to build typing settings from current config state
-    let make_settings = |auto_enter: bool| {
+    // With typing off, the engine only transcribes and publishes on ears.sock.
+    let make_settings = |auto_enter: bool, typing: bool| {
         let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
         ears::tui::TypingSettings {
-            progressive_typing: true,
+            progressive_typing: typing,
             auto_correction: true,
-            typing_mode: config.typing_mode,
-            auto_enter,
+            typing_mode: ears::typing_switch::effective_mode(config.typing_mode, typing),
+            auto_enter: auto_enter && typing,
             text_filters: config.text_filters.clone(),
             language,
             guided_grammar: config.active_grammar(),
@@ -482,7 +509,8 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     };
 
     // Send config-driven settings to the engine
-    let _ = settings_tx.send(make_settings(config.auto_enter));
+    let mut typing = ears::typing_switch::load();
+    let _ = settings_tx.send(make_settings(config.auto_enter, typing));
 
     AudioFeedback::beep_vad_open().ok();
     if ghost {
@@ -563,7 +591,7 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                 match cmd {
                     ears::ipc::EarsCommand::ToggleAutoEnter { respond } => {
                         auto_enter = !auto_enter;
-                        let _ = settings_tx.send(make_settings(auto_enter));
+                        let _ = settings_tx.send(make_settings(auto_enter, typing));
                         if auto_enter {
                             AudioFeedback::beep_toggle_on().ok();
                         } else {
@@ -573,6 +601,25 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                         let _ = respond.send(format!("auto-enter:{}", state));
                         tracing::info!("Auto-enter toggled to {}", auto_enter);
                         eprintln!("Auto-enter: {}", state);
+                    }
+                    ears::ipc::EarsCommand::Typing { request, respond } => {
+                        let next = request.apply(typing);
+                        if request.changes_state() {
+                            if let Err(e) = ears::typing_switch::save(next) {
+                                tracing::warn!("Failed to persist typing switch: {}", e);
+                            }
+                            if next != typing {
+                                typing = next;
+                                let _ = settings_tx.send(make_settings(auto_enter, typing));
+                                if typing {
+                                    AudioFeedback::beep_toggle_on().ok();
+                                } else {
+                                    AudioFeedback::beep_toggle_off().ok();
+                                }
+                                tracing::info!("Typing switched {}", if typing { "on" } else { "off" });
+                            }
+                        }
+                        let _ = respond.send(ears::typing_switch::describe(typing));
                     }
                 }
             }

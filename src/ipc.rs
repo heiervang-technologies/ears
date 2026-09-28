@@ -121,6 +121,11 @@ pub enum EarsCommand {
     ToggleAutoEnter {
         respond: tokio::sync::oneshot::Sender<String>,
     },
+    /// Switch typing into the focused window on/off (`typing-on|off|toggle|status`).
+    Typing {
+        request: crate::typing_switch::TypingRequest,
+        respond: tokio::sync::oneshot::Sender<String>,
+    },
 }
 
 /// Start the command server, returning received commands via the channel.
@@ -154,7 +159,23 @@ pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>)
                         let (reader, mut writer) = stream.split();
                         let mut lines = BufReader::new(reader).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
-                            let response = match line.trim() {
+                            let verb = line.trim();
+                            let response = match verb {
+                                v if crate::typing_switch::TypingRequest::from_command(v)
+                                    .is_some() =>
+                                {
+                                    let request =
+                                        crate::typing_switch::TypingRequest::from_command(v)
+                                            .expect("checked above");
+                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                    let _ = tx.send(EarsCommand::Typing {
+                                        request,
+                                        respond: resp_tx,
+                                    });
+                                    resp_rx
+                                        .await
+                                        .unwrap_or_else(|_| "error:internal".to_string())
+                                }
                                 "toggle-auto-enter" => {
                                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                                     let _ =
