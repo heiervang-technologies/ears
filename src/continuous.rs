@@ -155,6 +155,7 @@ impl ContinuousDecoder {
         DecoderState {
             header: self.header.clone(),
             stable: self.stable.clone(),
+            ..DecoderState::default()
         }
     }
 
@@ -167,15 +168,27 @@ impl ContinuousDecoder {
         self
     }
 
+    /// Model the decoder uses, once known.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
     /// Decode `pcm` (the whole utterance so far) and return the full
     /// hypothesis. With `last` the whole hypothesis is final; otherwise its
-    /// last words stay open for the next tick.
+    /// last words stay open for the next tick. `deadline` bounds the whole
+    /// step, model lookup included.
     pub async fn step(
         &mut self,
         pcm: &[i16],
         last: bool,
         deadline: Duration,
     ) -> Result<String, ContinuousError> {
+        tokio::time::timeout(deadline, self.step_inner(pcm, last))
+            .await
+            .map_err(|_| ContinuousError::Failed("timed out".to_string()))?
+    }
+
+    async fn step_inner(&mut self, pcm: &[i16], last: bool) -> Result<String, ContinuousError> {
         let model = match &self.model {
             Some(m) if !is_qwen3_asr(m) => {
                 return Err(ContinuousError::Unsupported(format!(
@@ -184,7 +197,7 @@ impl ContinuousDecoder {
             }
             Some(m) => m.clone(),
             None => {
-                let m = self.server_model(deadline).await?;
+                let m = self.server_model().await?;
                 self.model = Some(m.clone());
                 m
             }
@@ -242,7 +255,7 @@ impl ContinuousDecoder {
             "max_tokens": 64 + 5 * pcm.len() / SAMPLE_RATE,
         });
 
-        let mut request = self.http.post(&self.url).json(&body).timeout(deadline);
+        let mut request = self.http.post(&self.url).json(&body);
         if let Some(key) = &self.api_key {
             request = request.bearer_auth(key);
         }
@@ -260,16 +273,30 @@ impl ContinuousDecoder {
         }
         let reply: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| ContinuousError::Failed(e.to_string()))?;
-        let continuation = reply["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or_default();
+        let choice = &reply["choices"][0];
+        let continuation = choice["message"]["content"].as_str().unwrap_or_default();
+        // Cut off by max_tokens: the text is a runaway, not a transcript.
+        if choice["finish_reason"].as_str() == Some("length") {
+            return Err(ContinuousError::Failed("decode hit max_tokens".to_string()));
+        }
+        // The final tick must re-decode the words left open; an empty
+        // continuation there would silently drop them.
+        if last && !self.stable.is_empty() && continuation.trim().is_empty() {
+            return Err(ContinuousError::Failed(
+                "final decode dropped the open words".to_string(),
+            ));
+        }
 
         let hypothesis = if self.header.is_some() {
             format!("{}{}", self.stable, continuation)
         } else {
             match continuation.split_once(ASR_TAG) {
                 Some((lang, rest)) => {
-                    self.header = Some(format!("{}{ASR_TAG}", lang.trim()));
+                    // Silence is detected as "language None"; pinning that
+                    // would force it on the speech that follows.
+                    if lang.trim() != "language None" {
+                        self.header = Some(format!("{}{ASR_TAG}", lang.trim()));
+                    }
                     rest.to_string()
                 }
                 None => continuation.to_string(),
@@ -282,19 +309,27 @@ impl ContinuousDecoder {
         Ok(hypothesis.trim_end().to_string())
     }
 
-    async fn server_model(&self, deadline: Duration) -> Result<String, ContinuousError> {
+    async fn server_model(&self) -> Result<String, ContinuousError> {
         let url = self.url.replace("/v1/chat/completions", "/v1/models");
-        let mut request = self.http.get(url).timeout(deadline);
+        let mut request = self.http.get(url);
         if let Some(key) = &self.api_key {
             request = request.bearer_auth(key);
         }
-        let reply: serde_json::Value = request
+        let response = request
             .send()
             .await
-            .map_err(|e| ContinuousError::Failed(e.to_string()))?
+            .map_err(|e| ContinuousError::Failed(e.to_string()))?;
+        // A server without an OpenAI model list (whisper.cpp) is not vLLM.
+        if !response.status().is_success() {
+            return Err(ContinuousError::Unsupported(format!(
+                "no model list ({})",
+                response.status()
+            )));
+        }
+        let reply: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| ContinuousError::Failed(e.to_string()))?;
+            .map_err(|e| ContinuousError::Unsupported(format!("no model list: {e}")))?;
         let id = reply["data"][0]["id"].as_str().unwrap_or_default();
         if !is_qwen3_asr(id) {
             return Err(ContinuousError::Unsupported(format!(
@@ -310,6 +345,12 @@ impl ContinuousDecoder {
 pub struct DecoderState {
     pub header: Option<String>,
     pub stable: String,
+    /// Which recording this belongs to (set by the caller).
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// Continuous decoding stopped working for this recording.
+    #[serde(default)]
+    pub unsupported: bool,
 }
 
 fn is_qwen3_asr(model: &str) -> bool {
@@ -379,6 +420,16 @@ pub fn language_name(code: &str) -> Option<&'static str> {
         "tr" => "Turkish",
         "ar" => "Arabic",
         "hi" => "Hindi",
+        "id" => "Indonesian",
+        "th" => "Thai",
+        "vi" => "Vietnamese",
+        "ms" => "Malay",
+        "cs" => "Czech",
+        "el" => "Greek",
+        "hu" => "Hungarian",
+        "ro" => "Romanian",
+        "fa" => "Persian",
+        "mk" => "Macedonian",
         _ => return None,
     })
 }
@@ -552,8 +603,8 @@ mod tests {
         let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
             .with_language(Some("en"))
             .resume(DecoderState {
-                header: None,
                 stable: "x y".into(),
+                ..DecoderState::default()
             });
         let pcm = vec![0i16; SAMPLE_RATE];
         assert_eq!(d.step(&pcm, true, TICK).await.unwrap(), "x y a b c");
@@ -626,6 +677,108 @@ mod tests {
         // Blank context sends no system turn.
         let d = ContinuousDecoder::new("http://x", None, None).with_context(Some("  ".into()));
         assert!(d.context.is_none());
+    }
+
+    #[tokio::test]
+    async fn server_without_model_list_is_unsupported() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, None);
+        let err = d
+            .step(&vec![0i16; SAMPLE_RATE], false, TICK)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ContinuousError::Unsupported(_)));
+    }
+
+    #[tokio::test]
+    async fn runaway_decode_is_rejected() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": " la la la"}, "finish_reason": "length"}]
+            })))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"));
+        let err = d
+            .step(&vec![0i16; SAMPLE_RATE], false, TICK)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ContinuousError::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn final_that_drops_the_open_words_fails() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply(""))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"))
+            .resume(DecoderState {
+                stable: "a b c d e".into(),
+                ..DecoderState::default()
+            });
+        let pcm = vec![0i16; SAMPLE_RATE];
+        // A preview tick may legitimately add nothing...
+        assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "a b c d e");
+        // ...but the final must re-decode the open words.
+        let err = d.step(&pcm, true, TICK).await.unwrap_err();
+        assert!(matches!(err, ContinuousError::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn silence_does_not_pin_the_language() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("language None<asr_text>"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("language Norwegian<asr_text>Hei der"))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()));
+        let pcm = vec![0i16; SAMPLE_RATE];
+        assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "");
+        assert_eq!(d.snapshot().header, None);
+        assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "Hei der");
+        assert_eq!(
+            d.snapshot().header.as_deref(),
+            Some("language Norwegian<asr_text>")
+        );
+    }
+
+    #[tokio::test]
+    async fn deadline_covers_the_whole_step() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "Qwen/Qwen3-ASR-1.7B"}]}))
+                    .set_delay(Duration::from_millis(300)),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("hi").set_delay(Duration::from_millis(300)))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, None);
+        let started = std::time::Instant::now();
+        let err = d
+            .step(&vec![0i16; SAMPLE_RATE], false, Duration::from_millis(450))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ContinuousError::Failed(_)));
+        assert!(started.elapsed() < Duration::from_millis(550));
     }
 
     #[tokio::test]

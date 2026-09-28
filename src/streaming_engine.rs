@@ -459,6 +459,15 @@ impl StreamingEngine {
             if unsupported {
                 self.continuous = None;
             }
+            // Resolve the server's model once, not per utterance.
+            if let (Some(spec), Some(model)) = (
+                self.continuous.as_mut(),
+                decoder.as_ref().and_then(|d| d.model()),
+            ) {
+                if spec.model.is_none() {
+                    spec.model = Some(model.to_string());
+                }
+            }
             if utterance != ghost.utterance || !speaking {
                 continue; // stale: that utterance already ended
             }

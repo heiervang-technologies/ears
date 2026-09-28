@@ -944,6 +944,27 @@ fn ghost_continuous_state_file(config: &Config) -> std::path::PathBuf {
     config.state_dir.join("ghost-continuous.json")
 }
 
+/// Continuous ticks cost about the same at any length; the bound is the
+/// server's context (about 17 tokens per second against 2048).
+const MAX_CONTINUOUS_BYTES: usize = 16_000 * 2 * 90;
+
+/// Identifies one recorder process in the continuous state file.
+fn recording_owner(recorder_pid: i32, recorder_start: u64) -> String {
+    format!("{} {}", recorder_pid, recorder_start)
+}
+
+/// Replace the state file in one step: a preview killed mid-write must not
+/// leave half a file behind.
+fn write_continuous_state(path: &std::path::Path, state: &ears::continuous::DecoderState) {
+    let Ok(json) = serde_json::to_string(state) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 /// Start time of a process in clock ticks since boot (field 22 of
 /// `/proc/PID/stat`). Together with the PID this identifies one process:
 /// a recycled PID gets a different start time.
@@ -1077,9 +1098,6 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     const INTERVAL: Duration = Duration::from_millis(300);
     const MIN_BYTES: usize = 16_000 * 2 * 4 / 10; // 0.4 s
     const MAX_BYTES: usize = 16_000 * 2 * 60; // stop previewing past 60 s
-                                              // Continuous ticks cost about the same at any length; the bound is the
-                                              // server's context (about 17 tokens per second against 2048).
-    const MAX_CONTINUOUS_BYTES: usize = 16_000 * 2 * 90;
     const DEADLINE: Duration = Duration::from_secs(4);
 
     let audio_file = config.state_dir.join("recording.wav");
@@ -1104,6 +1122,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
             .with_context(config.prompt.clone())
     });
     let state_file = ghost_continuous_state_file(config);
+    let owner = recording_owner(recorder_pid, recorder_start);
 
     // Bound to the one recorder it was started for: a later recording (even
     // one reusing the PID) is not ours to preview.
@@ -1129,14 +1148,24 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         }
         last_len = pcm.len();
         let text = if let Some(decoder) = continuous.as_mut() {
-            match decoder.step(&samples(pcm), false, DEADLINE).await {
+            let outcome = decoder.step(&samples(pcm), false, DEADLINE).await;
+            if !recorder_alive() {
+                break; // a later recording owns the state file now
+            }
+            match outcome {
                 Ok(text) => {
-                    if let Ok(json) = serde_json::to_string(&decoder.snapshot()) {
-                        let _ = std::fs::write(&state_file, json);
-                    }
+                    let mut state = decoder.snapshot();
+                    state.owner = Some(owner.clone());
+                    write_continuous_state(&state_file, &state);
                     text
                 }
                 Err(ContinuousError::Unsupported(e)) => {
+                    let state = ears::continuous::DecoderState {
+                        owner: Some(owner.clone()),
+                        unsupported: true,
+                        ..Default::default()
+                    };
+                    write_continuous_state(&state_file, &state);
                     tracing::warn!("Continuous decoding unavailable, repeating instead: {}", e);
                     continuous = None;
                     last_len = 0;
@@ -1196,6 +1225,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
 async fn finish_continuous(
     config: &Config,
     audio_file: &std::path::Path,
+    owner: Option<&str>,
     server_url: &str,
     model: Option<String>,
     language: Option<&str>,
@@ -1204,15 +1234,20 @@ async fn finish_continuous(
     const DEADLINE: Duration = Duration::from_secs(4);
 
     let state_file = ghost_continuous_state_file(config);
-    // No state (preview never ran or fell back) still works: the tick then
-    // decodes everything, like a full transcription.
-    let state: DecoderState = std::fs::read_to_string(&state_file)
+    let state: Option<DecoderState> = std::fs::read_to_string(&state_file)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+        .and_then(|s| serde_json::from_str(&s).ok());
     let _ = std::fs::remove_file(&state_file);
+    // Only this recording's settled text may be forced. Without it (no
+    // preview tick landed, or continuous decoding stopped working) a full
+    // transcription is just as fast.
+    let state =
+        state.filter(|s| !s.unsupported && owner.is_some() && s.owner.as_deref() == owner)?;
     let bytes = tokio::fs::read(audio_file).await.ok()?;
     let pcm = ears::ghost::growing_wav_payload(&bytes)?;
+    if pcm.len() > MAX_CONTINUOUS_BYTES {
+        return None; // past the server's context
+    }
     let started = std::time::Instant::now();
     let mut decoder = ContinuousDecoder::new(server_url, config.api_key.clone(), model)
         .with_language(language)
@@ -1259,6 +1294,10 @@ async fn stop_and_transcribe(
         tracing::warn!("Recording process not alive (PID: {})", pid);
         return Ok(());
     }
+
+    // Identity of this recording's recorder, taken while it still runs: only
+    // a preview of this very recording may hand over settled text.
+    let recording = proc_start_time(pid as i32).map(|start| recording_owner(pid as i32, start));
 
     // A ghost preview belongs to this recording: stop it first so no late
     // partial can land after the final commit. Its last ghost is re-shown
@@ -1345,6 +1384,7 @@ async fn stop_and_transcribe(
         finish_continuous(
             config,
             &audio_file,
+            recording.as_deref(),
             server_url.as_str(),
             model,
             language.as_deref(),
