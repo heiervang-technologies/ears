@@ -315,7 +315,7 @@ only decodes the new words; the last three stay open to revision. On a 33 s
 clip, updates stayed at about 75 ms (versus climbing to 760 ms) and the final
 text matched a full transcription. The server needs
 `--trust-request-chat-template`; otherwise ears falls back to `repeat`.
-Continuous previews run up to 90 s per recording (the server's context).
+Recordings longer than the server's context (about 90 s) are decoded in segments: after 60 s the current segment is finished at the next pause (at 80 s at the latest) and a new one starts there, so long dictation keeps its live preview.
 With `final_correction = true` (the default) the committed text still comes
 from a full transcription.
 
