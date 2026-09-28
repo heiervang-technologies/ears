@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Text input method for typing transcribed text
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -451,25 +453,319 @@ impl AudioFeedback {
     }
 }
 
+/// Cached result of the desktop capability probe (`None` = not probed yet).
+static CAPABILITY_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Upper bound for a single desktop capability probe (`hyprctl`, `which`).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Upper bound for a single key/clipboard helper (`ydotool key`, `wl-copy`).
+const KEY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Base allowance for a typing child, before the per-character budget.
+const TYPING_BASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Per-character allowance for a typing child. wtype runs with a 4 ms
+/// inter-key delay, so 20 ms per character is a generous multiple.
+const TYPING_PER_CHAR: Duration = Duration::from_millis(20);
+
+/// Deadline for typing `text`: a base allowance plus a per-character budget.
+pub(crate) fn typing_timeout(text: &str) -> Duration {
+    TYPING_BASE_TIMEOUT + TYPING_PER_CHAR * (text.chars().count() as u32)
+}
+
+/// Spawn `cmd` and wait for it with a deadline.
+///
+/// If the child has not exited by `timeout`, it is killed and reaped and an
+/// error is returned. Callers therefore never leak a wedged child, and a
+/// stuck helper (e.g. `wtype` with no focused surface) cannot block the
+/// caller forever. Note that for typing children a timeout means the text
+/// may have been partially delivered; callers must not blindly retry.
+pub(crate) fn run_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::ExitStatus> {
+    let mut child = cmd.spawn().context("Failed to spawn child process")?;
+    wait_bounded(&mut child, timeout)
+}
+
+/// Wait for an already-spawned child with a deadline; kill and reap on expiry.
+pub(crate) fn wait_bounded(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    loop {
+        if let Some(status) = child.try_wait().context("Failed to poll child process")? {
+            return Ok(status);
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "child process timed out after {:?}; killed and reaped (output may be partially delivered)",
+                timeout
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+}
+
+/// Spawn `cmd` with piped stdout, collect its output, and enforce a deadline.
+///
+/// The pipe is switched to non-blocking mode and drained in the same loop
+/// that polls the child for exit, so no helper thread can be left waiting on
+/// a pipe that a forked descendant still holds open. On expiry the child is
+/// killed and reaped and the pipe is dropped. Once the child has exited, any
+/// bytes it already wrote are drained without waiting for other holders of
+/// the write end to close.
+pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+    use std::os::unix::io::AsRawFd;
+
+    cmd.stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("Failed to spawn child process")?;
+    let mut stdout = child.stdout.take().context("child stdout unavailable")?;
+    set_nonblocking(stdout.as_raw_fd()).context("Failed to set pipe non-blocking")?;
+
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut status = None;
+    while status.is_none() {
+        // Drain whatever is available right now without blocking, up to a
+        // per-iteration budget so a child that writes continuously cannot
+        // keep us in this inner loop past the deadline.
+        if drain_available(&mut stdout, &mut buf, &mut chunk, DRAIN_BUDGET_PER_PASS).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(stdout);
+            anyhow::bail!(
+                "child process produced more than {} bytes of output; killed and reaped",
+                OUTPUT_CAP
+            );
+        }
+        if let Some(st) = child.try_wait().context("Failed to poll child process")? {
+            status = Some(st);
+            break;
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(stdout);
+            anyhow::bail!(
+                "child process timed out after {:?}; killed and reaped (output may be partially delivered)",
+                timeout
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+
+    // Child has exited: take everything it left in the pipe. The read is
+    // non-blocking, so this ends at EOF or as soon as nothing more is
+    // buffered, regardless of whether a descendant still holds the write end.
+    let overflow = drain_available(&mut stdout, &mut buf, &mut chunk, usize::MAX).is_err();
+    drop(stdout);
+    if overflow {
+        anyhow::bail!(
+            "child process produced more than {} bytes of output",
+            OUTPUT_CAP
+        );
+    }
+
+    Ok(std::process::Output {
+        status: status.expect("loop exits only with a status"),
+        stdout: buf,
+        stderr: Vec::new(),
+    })
+}
+
+/// Bytes read from a non-blocking pipe per drain pass before we go back to
+/// checking the child and the deadline.
+const DRAIN_BUDGET_PER_PASS: usize = 64 * 1024;
+
+/// Hard cap on collected output. Exceeding it is an error, never a silent
+/// truncation: a caller such as the clipboard restore must not act on a
+/// partial value.
+const OUTPUT_CAP: usize = 1024 * 1024;
+
+/// Read what is available on a non-blocking pipe, up to `budget` bytes.
+/// Returns `Err(())` if the collected output would exceed [`OUTPUT_CAP`].
+fn drain_available(
+    stdout: &mut impl std::io::Read,
+    buf: &mut Vec<u8>,
+    chunk: &mut [u8],
+    budget: usize,
+) -> Result<(), ()> {
+    let mut read_this_pass = 0usize;
+    while read_this_pass < budget {
+        match stdout.read(chunk) {
+            Ok(0) => break, // write end fully closed
+            Ok(n) => {
+                read_this_pass += n;
+                if buf.len() + n > OUTPUT_CAP {
+                    return Err(());
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// Write `data` to a spawned child's piped stdin, close it, and wait for the
+/// child, all under one deadline.
+///
+/// The write is non-blocking and interleaved with polling the child, so a
+/// child that stops reading (or never reads) cannot block us once the pipe
+/// buffer fills. On expiry the child is killed and reaped.
+pub(crate) fn feed_stdin_bounded(
+    child: &mut std::process::Child,
+    data: &[u8],
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    use std::io::Write;
+    use std::os::unix::io::AsRawFd;
+
+    let mut stdin = child.stdin.take().context("child stdin unavailable")?;
+    set_nonblocking(stdin.as_raw_fd()).context("Failed to set stdin non-blocking")?;
+
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(2);
+    let mut written = 0usize;
+    while written < data.len() {
+        if start.elapsed() >= timeout {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "child stopped reading stdin; timed out after {:?} with {} of {} bytes written; killed and reaped",
+                timeout,
+                written,
+                data.len()
+            );
+        }
+        match stdin.write(&data[written..]) {
+            Ok(0) => break, // read end closed: nothing more will be accepted
+            Ok(n) => {
+                written += n;
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e).context("Failed to write to child stdin");
+            }
+        }
+        // Pipe is full: give the child a chance, but respect the deadline.
+        if let Some(status) = child.try_wait().context("Failed to poll child process")? {
+            drop(stdin);
+            anyhow::bail!(
+                "child exited ({}) before accepting all input ({} of {} bytes)",
+                status,
+                written,
+                data.len()
+            );
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(50));
+    }
+    drop(stdin); // EOF for the child
+
+    if written < data.len() {
+        // Read end closed under us (EPIPE / zero-length write): the child
+        // went away before accepting everything. Reap it and report.
+        let status = wait_bounded(child, Duration::from_millis(500))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "not reaped".to_string());
+        anyhow::bail!(
+            "child closed stdin ({}) before accepting all input ({} of {} bytes)",
+            status,
+            written,
+            data.len()
+        );
+    }
+
+    let remaining = timeout.saturating_sub(start.elapsed());
+    wait_bounded(child, remaining.max(Duration::from_millis(50)))
+}
+
+/// Put a file descriptor into O_NONBLOCK mode.
+fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
+    // SAFETY: fcntl on a valid, owned fd with well-formed flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Text input automation
 pub struct TextInput;
 
 impl TextInput {
     /// Detect if running on Omarchy (Arch + Hyprland)
+    ///
+    /// The probe result is cached for the lifetime of the process. Each probe
+    /// is bounded so a wedged compositor cannot stall the caller. Call
+    /// [`TextInput::refresh_capabilities`] to force a re-probe (e.g. after a
+    /// typing backend failure).
     pub(crate) fn is_omarchy() -> bool {
-        // Check if hyprctl exists (Hyprland compositor)
-        if Command::new("hyprctl").arg("version").output().is_ok() {
-            // Check if wtype is available (preferred on Hyprland)
-            if Command::new("which")
-                .arg("wtype")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                return true;
+        if let Ok(guard) = CAPABILITY_CACHE.lock() {
+            if let Some(cached) = *guard {
+                return cached;
             }
         }
-        false
+        let detected = Self::probe_omarchy();
+        if let Ok(mut guard) = CAPABILITY_CACHE.lock() {
+            *guard = Some(detected);
+        }
+        detected
+    }
+
+    /// Forget the cached desktop capability probe so the next call re-probes.
+    pub fn refresh_capabilities() {
+        if let Ok(mut guard) = CAPABILITY_CACHE.lock() {
+            *guard = None;
+        }
+    }
+
+    /// Uncached probe: hyprctl answers and wtype is on PATH.
+    fn probe_omarchy() -> bool {
+        use std::process::Stdio;
+
+        let mut hyprctl = Command::new("hyprctl");
+        hyprctl
+            .arg("version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let hyprland = run_bounded(hyprctl, PROBE_TIMEOUT)
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !hyprland {
+            return false;
+        }
+
+        let mut which = Command::new("which");
+        which
+            .arg("wtype")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        run_bounded(which, PROBE_TIMEOUT)
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 
     /// Send an Enter/Return key press
@@ -483,13 +779,13 @@ impl TextInput {
         // Brief delay to ensure the target app has processed previously typed text
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let status = Command::new("ydotool")
-            .args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+        let mut cmd = Command::new("ydotool");
+        cmd.args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run ydotool for Enter key")?;
+            .stderr(Stdio::null());
+        let status =
+            run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for Enter key")?;
         if !status.success() {
             anyhow::bail!("ydotool Enter failed with status: {}", status);
         }
@@ -505,11 +801,16 @@ impl TextInput {
     pub fn type_text(text: &str, mode: TypingMode) -> Result<()> {
         match mode {
             TypingMode::Auto => {
-                if Self::is_omarchy() {
+                let result = if Self::is_omarchy() {
                     Self::type_with_wtype(text)
                 } else {
                     Self::paste_text(text)
+                };
+                if result.is_err() {
+                    // Either auto-selected backend may have become unavailable.
+                    Self::refresh_capabilities();
                 }
+                result
             }
             TypingMode::Wtype => Self::type_with_wtype(text),
             TypingMode::Paste => Self::paste_text(text),
@@ -525,16 +826,15 @@ impl TextInput {
     fn type_with_wtype(text: &str) -> Result<()> {
         use std::process::Stdio;
 
-        let status = Command::new("wtype")
-            .arg("-d")
+        let mut cmd = Command::new("wtype");
+        cmd.arg("-d")
             .arg("4")
             .arg("--")
             .arg(text)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run wtype")?;
+            .stderr(Stdio::null());
+        let status = run_bounded(cmd, typing_timeout(text)).context("Failed to run wtype")?;
 
         if !status.success() {
             anyhow::bail!("wtype failed with status: {}", status);
@@ -550,19 +850,16 @@ impl TextInput {
         use std::process::Stdio;
 
         // Save current clipboard contents
-        let original_clipboard = Command::new("wl-paste")
+        let mut read_clip = Command::new("wl-paste");
+        read_clip
             .arg("--no-newline")
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(o.stdout)
-                } else {
-                    None
-                }
-            });
+            .stderr(Stdio::null());
+        // A timeout/overflow is not an empty clipboard. Abort before changing
+        // it rather than lose an original value that could not be preserved.
+        let clipboard = output_bounded(read_clip, KEY_TIMEOUT)
+            .context("Cannot safely preserve clipboard; paste aborted")?;
+        let original_clipboard = clipboard.status.success().then_some(clipboard.stdout);
 
         // Copy text to clipboard using wl-copy
         let mut child = Command::new("wl-copy")
@@ -574,19 +871,19 @@ impl TextInput {
             .spawn()
             .context("Failed to run wl-copy")?;
 
-        child.wait().context("wl-copy failed")?;
+        wait_bounded(&mut child, KEY_TIMEOUT).context("wl-copy failed")?;
 
         // Small delay to ensure clipboard is ready
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Simulate Ctrl+V to paste
-        let status = Command::new("ydotool")
+        let mut paste = Command::new("ydotool");
+        paste
             .args(["key", "ctrl+v"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run ydotool key")?;
+            .stderr(Stdio::null());
+        let status = run_bounded(paste, KEY_TIMEOUT).context("Failed to run ydotool key")?;
 
         if !status.success() {
             anyhow::bail!("ydotool key failed with status: {}", status);
@@ -605,11 +902,9 @@ impl TextInput {
                 .spawn()
                 .context("Failed to restore clipboard")?;
 
-            if let Some(mut stdin) = restore.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(&original);
+            if let Err(e) = feed_stdin_bounded(&mut restore, &original, KEY_TIMEOUT) {
+                tracing::warn!("Clipboard restore did not complete: {}", e);
             }
-            let _ = restore.wait();
         }
 
         Ok(())
@@ -652,12 +947,10 @@ impl TextInput {
 
         // Use .status() to wait for completion, preventing concurrent processes
         // from interleaving output (fixes #57)
-        let status = cmd
-            .stdin(std::process::Stdio::null())
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to run ydotool")?;
+            .stderr(std::process::Stdio::null());
+        let status = run_bounded(cmd, typing_timeout(text)).context("Failed to run ydotool")?;
 
         if !status.success() {
             anyhow::bail!("ydotool failed with status: {}", status);
@@ -670,6 +963,179 @@ impl TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_run_bounded_kills_and_reaps_hung_child() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let start = Instant::now();
+        let err = run_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must not wait for sleep"
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_run_bounded_returns_status_of_fast_child() {
+        let mut cmd = Command::new("true");
+        cmd.stdin(std::process::Stdio::null());
+        let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(status.success());
+
+        let cmd = Command::new("false");
+        let status = run_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn test_output_bounded_collects_stdout() {
+        let mut cmd = Command::new("printf");
+        cmd.arg("Volume: 0.42");
+        let out = output_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "Volume: 0.42");
+    }
+
+    #[test]
+    fn test_output_bounded_kills_hung_child_holding_pipe() {
+        // Child writes then hangs with the pipe open: must be killed, not awaited.
+        // The trailing `exit` defeats shells that exec the last command, so
+        // the shell itself (our direct child) is the one that hangs.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf partial; sleep 30; exit 0");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_returns_when_child_exits_but_grandchild_holds_pipe() {
+        // The direct child exits at once, but a backgrounded descendant keeps
+        // the write end of stdout open for 30s. A blocking read-to-end would
+        // hang here; we must return with the child's status and its bytes.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & printf partial; exit 0");
+        let start = Instant::now();
+        let out = output_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "must not wait for the grandchild"
+        );
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "partial");
+    }
+
+    #[test]
+    fn test_output_bounded_firehose_child_still_times_out() {
+        // A child that never stops writing must not keep us in the drain
+        // loop past the deadline, and must not blow memory.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("cat /dev/zero; exit 0");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(300)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_oversized_output_is_an_error_not_truncation() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("head -c 3000000 /dev/zero; exit 0");
+        let err = output_bounded(cmd, Duration::from_secs(10)).unwrap_err();
+        assert!(err.to_string().contains("more than"), "{}", err);
+    }
+
+    #[test]
+    fn test_output_bounded_keeps_everything_an_exited_child_wrote() {
+        // More than one pipe buffer and more than one drain budget, written
+        // by a child that exits immediately: nothing may be lost.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("head -c 300000 /dev/zero; exit 0");
+        let out = output_bounded(cmd, Duration::from_secs(10)).unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 300000);
+    }
+
+    #[test]
+    fn test_output_bounded_timeout_with_grandchild_holding_pipe() {
+        // Direct child hangs AND a descendant holds the pipe: kill must not
+        // be followed by any wait on the pipe.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & sleep 30; exit 0");
+        let start = Instant::now();
+        let err = output_bounded(cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(err.to_string().contains("timed out"), "{}", err);
+    }
+
+    fn spawn_with_stdin(script: &str) -> std::process::Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_delivers_more_than_a_pipe_buffer() {
+        // 300 KB is well past the 64 KB default pipe buffer.
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("n=$(wc -c); [ \"$n\" -eq 300000 ]");
+        let status = feed_stdin_bounded(&mut child, &data, Duration::from_secs(10)).unwrap();
+        assert!(status.success(), "child must have received every byte");
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_times_out_when_child_never_reads() {
+        // Child holds stdin open but never reads: the pipe fills and a
+        // blocking write would hang here forever.
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("sleep 30; exit 0");
+        let start = Instant::now();
+        let err = feed_stdin_bounded(&mut child, &data, Duration::from_millis(300)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(err.to_string().contains("timed out"), "{}", err);
+        assert!(child.try_wait().unwrap().is_some(), "child must be reaped");
+    }
+
+    #[test]
+    fn test_feed_stdin_bounded_reports_child_that_exits_early() {
+        let data = vec![b'x'; 300_000];
+        let mut child = spawn_with_stdin("exit 3");
+        let err = feed_stdin_bounded(&mut child, &data, Duration::from_secs(5)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("before accepting"), "{}", msg);
+        assert!(child.try_wait().unwrap().is_some(), "child must be reaped");
+    }
+
+    #[test]
+    fn test_typing_timeout_scales_with_length() {
+        assert!(typing_timeout("") < typing_timeout(&"a".repeat(500)));
+        assert_eq!(typing_timeout(""), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_refresh_capabilities_forces_reprobe() {
+        TextInput::refresh_capabilities();
+        assert!(CAPABILITY_CACHE.lock().unwrap().is_none());
+        let first = TextInput::is_omarchy();
+        assert_eq!(*CAPABILITY_CACHE.lock().unwrap(), Some(first));
+        assert_eq!(TextInput::is_omarchy(), first);
+    }
 
     // 5.1 Notifications Tests
     #[test]
