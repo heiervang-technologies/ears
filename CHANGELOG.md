@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-28
+
+Reconciles the package, CLI, tag, and release versions after the historical
+generated-build `v1.1.x` series, and ships everything below.
+
 ### Fixed
 - VAD pipeline could freeze forever after a transcription: typing helpers (`wtype`, `ydotool`) and desktop probes (`hyprctl`, `which`) were run synchronously on the async worker with no deadline. Every such child is now spawned with a bounded wait that kills and reaps it on expiry, and typing runs via `block_in_place` so the capture reader and event loop keep running. A typing timeout is reported as an error (text may be partially delivered) and is never retried.
 - Volume stayed ducked when a probable-speech candidate was rejected before confirmation. The engine now emits `SpeechRejected` on that edge (no audio cue) and the ducker restores on it. Duck/restore operations are serialized and epoch-guarded so a late duck can never run after a restore.
@@ -16,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bash mode without a configured model fails immediately instead of retrying a permanent configuration error.
 
 ### Added
+- Ghost completion: `ears ghost` (hands-free) and `ears toggle --ghost` (push-to-talk) show the transcript so far as inline preedit text via the `earsghost` fcitx5 addon and commit it when the utterance ends.
+- Continuous live decoding for Qwen3-ASR on vLLM (`live_decoding = "continuous"`): the preview decodes only new audio against a settled prefix instead of re-transcribing the whole clip every tick (#144).
+- Persistent streaming over the `ears_stream` protocol, with a vLLM endpoint plugin in `vllm-plugin/`; ears falls back to per-tick decoding when the stream is unavailable.
 - Independent desktop VAD health supervision with atomic `vad-health.json` snapshots: exact owner identity, microphone and detector progress, probability/rejection measurements, processing stage, backlog, and typing suspension. Opt-in periodic debug summaries help distinguish capture loss, rejected speech, and stalled downstream work without recording audio or transcripts. Only one desktop health owner per state directory may start.
 - Typing or Enter failure pauses further keyboard input while transcription continues; check the target and restart listening to resume. Clipboard preservation failures abort paste before mutation.
 - `StreamingEvent::SpeechRejected` and `StreamingEvent::CaptureStopped { reason }` (additive; existing variants and payloads unchanged).
@@ -25,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded Ratatui to 0.30.2 and Crossterm to 0.29.0, removing the transitive `lru` 0.12.5 and `paste` 1.0.15 RustSec findings.
 - Declared and continuously checks Rust 1.88 as the minimum supported Rust version.
 - Default `vad.max_silence_duration_ms` raised from 700 ms to 1200 ms so natural mid-sentence pauses no longer split one request into several utterances. Explicit values in existing configs are unchanged; lower it for faster dispatch.
+- Reconciled the Cargo package, CLI, Git tag, and GitHub release version at `1.2.0` after the historical generated-build `v1.1.x` series (latest `v1.1.144` was built from package version `1.0.0`).
+- Releases now use intentional Semantic Versioning bumps, validate tag and package agreement, and verify the built binary reports the published version. See `docs/RELEASING.md`.
 
 ## [1.0.0] - 2026-05-09
 
