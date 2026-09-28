@@ -221,6 +221,27 @@ Events emitted by the engine:
 | `Error(String)` | Error in the pipeline |
 | `StatsUpdate { segments_processed, avg_latency_ms }` | Performance statistics |
 
+### Ghost Completion and Live Decoding
+
+With ghost completion (`ears ghost`, `ears toggle --ghost`) the text in progress is shown as inline preedit ("ghost text") at the cursor instead of being typed. It is committed when final.
+
+- **Display.** The fcitx5 addon `fcitx5-addon/earsghost.cpp` listens on `$XDG_RUNTIME_DIR/ears/ghost.sock`. Its commands are `P` (show), `C` (commit), `X` (clear) and `S` (status). `src/ghost.rs` (`GhostClient`) talks to it. Before showing or committing, it checks that the addon's focused program matches Hyprland's active window class, and it types the text instead when they differ. A commit is `Delivered`, `NotDelivered` (type it) or `Unknown` (never retype).
+- **Push-to-talk preview.** `ears toggle --ghost` spawns a hidden `ears ghost-preview` process. It is bound to the recorder by PID plus start time, and tails the growing `recording.wav`. The stop path kills it, then commits the final text through the addon.
+- **VAD ghost.** `StreamingEngine` runs partials for the utterance in progress. Each result is tagged with its utterance, so partials from an older utterance are dropped.
+
+How partials are decoded (`live_decoding`):
+
+| Mode | How | Cost per update |
+|---|---|---|
+| `repeat` (default) | Re-transcribe the whole growing clip every 300 ms | Grows with length |
+| `continuous` | Qwen3-ASR on vLLM only. Tries the ears stream first, then per-request HTTP, then `repeat` | Roughly constant |
+
+Continuous decoding (`src/continuous.rs`) relies on Qwen3-ASR's audio encoder attending within fixed 8 s windows. The audio is sent as 8 s items inside one `<|audio_start|>…<|audio_end|>` block, using a per-request chat template, which needs `--trust-request-chat-template` on the server. Closed windows are therefore byte-identical between updates, and vLLM's encoder and prefix caches serve them. The settled transcript, meaning everything but the last 3 words, is forced as the start of the assistant turn, so only new words are decoded.
+
+- **Per-request HTTP.** `ContinuousDecoder` makes one `/v1/chat/completions` call per update.
+- **Ears stream.** `src/stream_client.rs` connects to `WS /v1/ears/stream`, served by a vLLM endpoint plugin (`vllm-plugin/`, protocol in `docs/STREAM_PROTOCOL.md`). Ears sends only new audio, and the server keeps per-utterance state, decoding whenever 150 ms of new audio has arrived.
+- **Handover to the stop path.** The push-to-talk preview writes the settled state, tagged with its recorder, to `ghost-continuous.json`. With `final_correction = false`, the stop path finishes from it with one more decode instead of a full transcription.
+
 ## 6. IPC Protocol
 
 ears exposes two Unix domain sockets for inter-process communication.
@@ -347,6 +368,8 @@ auto_enter = true                    # Send Enter after each transcription
 progressive_typing = false           # Type text as it becomes stable
 # auto_correction = true             # Backspace and retype on corrections (defaults to progressive_typing value)
 cue_volume = 100                     # Audio cue volume (0-100)
+live_decoding = "repeat"             # Ghost partials: repeat | continuous (Qwen3-ASR on vLLM)
+final_correction = true              # Continuous: re-transcribe in full on stop (false = finish the live result)
 
 [text_filters]
 lowercase = false                    # Convert output to lowercase
