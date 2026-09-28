@@ -397,6 +397,7 @@ impl StreamingEngine {
 
     /// Apply finished partial transcriptions for the utterance in progress.
     fn ghost_poll_partials(&mut self) {
+        let muted = self.typing_mode == TypingMode::None;
         let filters = self.text_filters.clone();
         let language = self.language.clone();
         let bash = self.guided_grammar.is_some();
@@ -408,6 +409,9 @@ impl StreamingEngine {
             ghost.partial_in_flight = false;
             if utterance != ghost.utterance || !speaking {
                 continue; // stale: that utterance already ended
+            }
+            if muted {
+                continue; // typing switched off: show nothing in the target
             }
             let text = match result {
                 Ok(text) => text,
@@ -482,6 +486,12 @@ impl StreamingEngine {
     /// Deliver a final transcript through the ghost addon. Falls back to
     /// ordinary typing when the addon cannot deliver it.
     fn ghost_commit(&mut self, text: &str) {
+        if self.typing_mode == TypingMode::None {
+            // Typing switched off (e.g. `ears typing off`): the transcript is
+            // still published on IPC, but nothing reaches the focused app.
+            self.ghost_clear();
+            return;
+        }
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
@@ -1099,6 +1109,98 @@ mod tests {
         assert_eq!(engine.committed_text(), "hello");
         assert_eq!(engine.stats().chars_typed, 5);
         assert!(drain(&mut rx).is_empty());
+    }
+
+    /// Fake `earsghost` addon: records every line, answers "OK preedit".
+    fn fake_ghost_addon(dir: &std::path::Path) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let path = dir.join("ghost.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut w = stream.try_clone().unwrap();
+                for line in std::io::BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let _ = tx.send(line);
+                    let _ = w.write_all(b"OK preedit\n");
+                }
+            }
+        });
+        (path, rx)
+    }
+
+    fn ghost_engine(dir: &std::path::Path) -> (StreamingEngine, std::sync::mpsc::Receiver<String>) {
+        let (mut engine, _rx) = seq_engine();
+        engine.typing_mode = TypingMode::Wtype;
+        let (path, lines) = fake_ghost_addon(dir);
+        engine.set_ghost_client(Some(crate::ghost::GhostClient::new(path)));
+        assert_eq!(lines.recv().unwrap(), "S", "probe on enable");
+        (engine, lines)
+    }
+
+    #[test]
+    fn test_ghost_commits_are_spaced_and_clear_nothing_extra() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.ghost_commit("hello world");
+        engine.ghost_commit("second one");
+        assert_eq!(lines.recv().unwrap(), "C hello world");
+        assert_eq!(lines.recv().unwrap(), "C  second one");
+        assert_eq!(engine.stats().chars_typed, 11 + 11);
+    }
+
+    #[test]
+    fn test_ghost_rejected_candidate_clears_visible_ghost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        // Simulate a visible partial, then a rejected candidate.
+        engine.ghost.as_mut().unwrap().showing = true;
+        feed(&mut engine, &[0.9]);
+        feed(&mut engine, &[0.0]);
+        assert_eq!(lines.recv().unwrap(), "X");
+        assert!(!engine.ghost.as_ref().unwrap().showing);
+    }
+
+    #[test]
+    fn test_ghost_stale_partials_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+        let ghost = engine.ghost.as_mut().unwrap();
+        let current = ghost.utterance;
+        ghost
+            .partial_tx
+            .send((current + 7, Ok("old".into())))
+            .unwrap();
+        ghost
+            .partial_tx
+            .send((current, Ok("fresh".into())))
+            .unwrap();
+        engine.ghost_poll_partials();
+        assert_eq!(lines.recv().unwrap(), "P fresh");
+        assert!(lines.try_recv().is_err(), "stale partial must not be shown");
+    }
+
+    #[test]
+    fn test_ghost_respects_typing_switch_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.typing_mode = TypingMode::None;
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        let current = engine.ghost.as_ref().unwrap().utterance;
+        engine
+            .ghost
+            .as_ref()
+            .unwrap()
+            .partial_tx
+            .send((current, Ok("secret".into())))
+            .unwrap();
+        engine.ghost_poll_partials();
+        engine.ghost_commit("secret");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(lines.try_recv().is_err(), "nothing may reach the app");
     }
 
     #[test]

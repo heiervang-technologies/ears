@@ -96,7 +96,13 @@ public:
         listenEvent_.reset();
         if (listenFd_ >= 0) {
             ::close(listenFd_);
-            ::unlink(path_.c_str());
+            // Only remove the socket if it is still ours: during `fcitx5 -r`
+            // the replacement instance has already bound a new one at the
+            // same path, and unlinking that would orphan it.
+            struct stat st {};
+            if (::stat(path_.c_str(), &st) == 0 && st.st_ino == socketIno_) {
+                ::unlink(path_.c_str());
+            }
         }
     }
 
@@ -134,6 +140,10 @@ private:
             return;
         }
         ::chmod(path_.c_str(), 0600);
+        struct stat st {};
+        if (::stat(path_.c_str(), &st) == 0) {
+            socketIno_ = st.st_ino;
+        }
         setNonBlocking(listenFd_);
         listenEvent_ = instance_->eventLoop().addIOEvent(
             listenFd_, fcitx::IOEventFlag::In,
@@ -280,7 +290,9 @@ private:
     void showOn(fcitx::InputContext *ic, const std::string &text) {
         fcitx::Text t;
         t.append(text, fcitx::TextFormatFlag::Underline);
-        t.setCursor(static_cast<int>(text.size()));
+        // Ghost semantics: the caret stays where the user is; the suggested
+        // text trails after it instead of pushing the cursor along.
+        t.setCursor(0);
         if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
             ic->inputPanel().setClientPreedit(t);
         } else {
@@ -308,6 +320,7 @@ private:
     fcitx::Instance *instance_;
     std::string path_;
     int listenFd_ = -1;
+    ino_t socketIno_ = 0;
     std::unique_ptr<fcitx::EventSourceIO> listenEvent_;
     std::map<int, std::unique_ptr<Client>> clients_;
     fcitx::TrackableObjectReference<fcitx::InputContext> ghostIc_;

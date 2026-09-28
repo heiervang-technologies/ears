@@ -256,6 +256,34 @@ ears vad    # Start VAD (or stop if already running)
 
 Continuously listens and auto-transcribes when speech is detected. Toggle on/off by running the command again.
 
+### Ghost Completion (inline preview)
+
+`ears ghost` listens hands-free like `ears vad`, but nothing is typed while
+you speak. The transcript so far appears as inline *ghost text* at the cursor
+of the focused app and is committed when you stop talking. It uses the
+Wayland input-method preedit, delivered through a small fcitx5 addon, so it
+works in any app with input-method support (terminals, browsers, GTK, Qt).
+
+```bash
+fcitx5-addon/install.sh   # build + install the earsghost addon (needs fcitx5 headers)
+ears ghost                # toggle listening with ghost completion
+```
+
+Hyprland binding example:
+
+```
+bindd = , F14, Ears ghost completion, exec, ears ghost
+```
+
+Notes:
+- Apps draw preedit themselves. Most underline it; alacritty needs a small
+  patch adding `[colors.preedit] foreground/underline` to render grey,
+  non-underlined ghost text.
+- If the addon is not reachable, final text is typed as usual.
+- `ears typing off` also silences ghost output.
+- `ears ghost` and `ears vad` share the toggle: either one stops the other.
+- Auto-Enter is not sent in ghost mode.
+
 ### All Commands
 
 ```
