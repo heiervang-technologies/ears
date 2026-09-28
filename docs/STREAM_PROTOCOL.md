@@ -45,12 +45,13 @@ the server will decode (bounded by the model's context).
 
 ```json
 {"type": "partial", "utterance": 7, "seq": 12, "text": "Okay, so here is the",
- "stable_chars": 13, "audio_ms": 2700, "decode_ms": 64}
+ "stable_chars": 13, "language": "English", "audio_ms": 2700, "decode_ms": 64}
 ```
 The full hypothesis for the utterance so far (not a delta). `text[..stable_chars]`
 (byte offset, UTF-8) is settled and will prefix every later partial and the
 final of this utterance; the rest may still change. `seq` increases per
-utterance. `audio_ms` is the audio the hypothesis covers.
+utterance. `audio_ms` is the audio the hypothesis covers. `language` is the
+Qwen3-ASR language name in use (forced or detected), null while unknown.
 
 ```json
 {"type": "final", "utterance": 7, "text": "Okay, so here is the plan.",
@@ -134,7 +135,8 @@ decoder, then repeated previews:
    `unsupported` → per-tick HTTP continuous for the rest of the process.
 2. Push-to-talk (`ears toggle --ghost`): the preview process tails the
    growing `recording.wav` every 50 ms and sends new samples, and after each
-   partial writes the settled state (`header`, `text[..stable_chars]`) to
+   partial writes the settled state (`header` =
+   `language {language}<asr_text>`, `stable` = `text[..stable_chars]`) to
    `ghost-continuous.json` as the HTTP decoder does. The stop path is
    unchanged: it kills the preview and, with `final_correction = false`,
    finishes with one HTTP continuous decode forcing that settled text.
