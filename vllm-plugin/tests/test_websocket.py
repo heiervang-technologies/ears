@@ -27,7 +27,7 @@ def test_ready_partial_final_over_websocket():
         ws.send_bytes(np.zeros(4800, dtype="<i2").tobytes())
         p = ws.receive_json()
         assert p["type"] == "partial" and p["text"] == "hello world"
-        assert p["language"] == "English"
+        assert p["language"] is None  # pinned only after 2 s of agreeing decodes
         ws.send_json({"type": "end", "utterance": 1})
         f = ws.receive_json()
         assert f["type"] == "final" and f["utterance"] == 1
