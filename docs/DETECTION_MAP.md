@@ -163,7 +163,7 @@ pipeline start.
 - Confirm: not in speech and `speech_frames*32 >= min_speech_duration_ms`
   (300 → 10 frames).
 - End: in speech and `silence_frames*32 >= max_silence_duration_ms`
-  (700 → 22 frames).
+  (1200 → 38 frames).
 - Probable: `!in_speech && speech_frames > 0`. Rejected candidate:
   probable and the frame is below threshold. One dip resets the candidate.
 - Every frame reports to health.
@@ -281,7 +281,7 @@ A typing failure suspends injection until listening restarts.
 | `bash_mode`, `guided_grammar` | false, built-in | — |
 | `cue_volume` | 100 | — |
 | `language_servers.<lang>.{server,model}` | empty | — |
-| `vad.{speech_threshold,min_speech_duration_ms,max_silence_duration_ms,pre_speech_buffer_ms}` | 0.5, 300, 700, 500 | — |
+| `vad.{speech_threshold,min_speech_duration_ms,max_silence_duration_ms,pre_speech_buffer_ms}` | 0.5, 300, 1200, 500 | — |
 | `vad.{duck_enabled,duck_percent}` | false, 50 | — |
 
 Runtime typing switch state: `$XDG_STATE_HOME/ears/typing` (`EARS_TYPING_STATE`).
