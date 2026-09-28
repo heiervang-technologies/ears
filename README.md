@@ -273,7 +273,7 @@ ears toggle --ghost       # push-to-talk: ghost text while recording, commit on 
 Hyprland binding example:
 
 ```
-bindd = , F14, Ears ghost completion, exec, ears ghost
+bindd = , F14, Ears ghost completion, exec, ears toggle --ghost
 ```
 
 Notes:
@@ -281,6 +281,13 @@ Notes:
   patch adding `[colors.preedit] foreground/underline` to render grey,
   non-underlined ghost text.
 - If the addon is not reachable, final text is typed as usual.
+- Before showing or committing, ears checks that the input method's app
+  matches Hyprland's active window class. If they differ or either is unknown
+  (e.g. a field that never enabled the input method), the ghost is cleared and
+  the text is typed instead. This is an app-level check, not window identity:
+  two windows of the same app (say two Hover windows) are indistinguishable.
+- If fcitx5 stops answering mid-commit, ears cannot tell whether the text
+  arrived, so it does not retype it (no duplicates, no Enter) and pauses typing.
 - `ears typing off` also silences ghost output.
 - `ears ghost` and `ears vad` share the toggle: either one stops the other.
 - Auto-Enter is not sent in VAD ghost mode; push-to-talk keeps `auto_enter`.

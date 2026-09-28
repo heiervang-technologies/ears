@@ -924,6 +924,12 @@ impl StreamingEngine {
         if let Some(ref health) = self.health {
             health.set_typing_paused(false);
         }
+        // Partials still in flight belong to the old session.
+        if let Some(ghost) = self.ghost.as_mut() {
+            ghost.clear();
+            ghost.next_utterance();
+            ghost.committed_any = false;
+        }
     }
 
     /// Update configuration
@@ -953,6 +959,10 @@ impl StreamingEngine {
             auto_correction,
             typing_mode,
         });
+        if typing_mode == TypingMode::None {
+            // Muted: take down a ghost that is already on screen.
+            self.ghost_clear();
+        }
     }
 
     /// Update text filters and language
@@ -1213,6 +1223,39 @@ mod tests {
         assert!(
             lines.try_iter().all(|l| l == "S"),
             "stale partial must not be shown"
+        );
+    }
+
+    #[test]
+    fn test_ghost_muting_clears_visible_ghost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.ghost.as_mut().unwrap().showing = true;
+        engine.set_typing_enabled(false, false, TypingMode::None, false);
+        assert_eq!(next_cmd(&lines), "X");
+    }
+
+    #[test]
+    fn test_ghost_reset_drops_old_partials() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = ghost_engine(dir.path());
+        engine.ghost.as_mut().unwrap().showing = true;
+        let old = engine.ghost.as_ref().unwrap().utterance;
+        engine.reset();
+        assert_eq!(next_cmd(&lines), "X");
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        engine
+            .ghost
+            .as_ref()
+            .unwrap()
+            .partial_tx
+            .send((old, Ok("stale".into())))
+            .unwrap();
+        engine.ghost_poll_partials();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            lines.try_iter().all(|l| l == "S"),
+            "pre-reset partial shown"
         );
     }
 

@@ -79,8 +79,13 @@ const FOCUS_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 /// Class of the window Hyprland has focused, if it can be asked in time.
 pub fn hyprland_active_class() -> Option<String> {
     let mut cmd = std::process::Command::new("hyprctl");
-    cmd.args(["activewindow", "-j"])
-        .stdin(std::process::Stdio::null())
+    cmd.args(["activewindow", "-j"]);
+    active_class_from(cmd)
+}
+
+/// Run a Hyprland `activewindow -j` style command and read its `class`.
+fn active_class_from(mut cmd: std::process::Command) -> Option<String> {
+    cmd.stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let out = crate::desktop::output_bounded(cmd, FOCUS_PROBE_TIMEOUT).ok()?;
     if !out.status.success() {
@@ -433,6 +438,22 @@ mod tests {
         assert_eq!(client.preedit("hi").unwrap(), GhostDisplay::None);
         assert_eq!(client.commit("hi"), Delivery::NotDelivered);
         assert_eq!(commands(&rx), ["X", "X"]);
+    }
+
+    #[test]
+    fn hung_focus_probe_gives_up_quickly() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+        let start = std::time::Instant::now();
+        assert_eq!(active_class_from(cmd), None);
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn focus_probe_reads_class() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", r#"echo '{"class":"hover","pid":1}'"#]);
+        assert_eq!(active_class_from(cmd).as_deref(), Some("hover"));
     }
 
     #[test]

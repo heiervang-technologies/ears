@@ -1347,6 +1347,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_process_identity_rejects_recycled_pid() {
+        let me = std::process::id() as i32;
+        let start = proc_start_time(me).expect("own start time");
+        assert!(same_process(me, start));
+        // Same PID, different start: a recycled PID is not the recorder.
+        assert!(!same_process(me, start + 1));
+        assert!(!same_process(0, start));
+        assert!(!same_process(-1, start));
+    }
+
+    #[test]
+    fn test_preview_stops_when_its_recorder_is_replaced() {
+        // A preview is bound to one recorder: once that process is gone, a
+        // new recording (whatever its PID) does not keep the preview alive.
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let start = proc_start_time(pid).unwrap();
+        assert!(same_process(pid, start));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!same_process(pid, start));
+    }
+
+    #[test]
     fn test_set_server_validation() {
         // Test URL validation without calling Config::load/save
         let test_url = "http://localhost:9999";
