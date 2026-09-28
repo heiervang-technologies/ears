@@ -378,6 +378,13 @@ impl VadSegmentDetector {
         self.vad.is_probably_speaking()
     }
 
+    /// Audio of the speech segment currently being collected (replay buffer
+    /// plus confirmed speech so far), or `None` outside confirmed speech.
+    /// Used by ghost mode to transcribe partial utterances while speaking.
+    pub fn current_segment_samples(&self) -> Option<&[f32]> {
+        self.current_segment.as_deref()
+    }
+
     /// Reset the detector
     pub fn reset(&mut self) {
         self.vad.reset();

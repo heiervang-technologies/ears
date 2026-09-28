@@ -51,7 +51,10 @@ async fn main() -> Result<()> {
             handle_toggle(&config).await?;
         }
         Some(Commands::Vad) => {
-            handle_vad(&config).await?;
+            handle_vad(&config, false).await?;
+        }
+        Some(Commands::Ghost) => {
+            handle_vad(&config, true).await?;
         }
         Some(Commands::WsListen { host, port, socket }) => {
             handle_ws_listen(&config, &host, port, socket).await?;
@@ -399,7 +402,7 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
 }
 
 /// Toggle VAD mode: start or stop headless voice activity detection
-async fn handle_vad(config: &Config) -> Result<()> {
+async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     AudioFeedback::set_volume(config.cue_volume);
     let vad_pid_file = config.state_dir.join("vad.pid");
     let vad_lock_path = config.state_dir.join("vad.lock");
@@ -474,6 +477,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
             text_filters: config.text_filters.clone(),
             language,
             guided_grammar: config.active_grammar(),
+            ghost,
         }
     };
 
@@ -481,7 +485,11 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let _ = settings_tx.send(make_settings(config.auto_enter));
 
     AudioFeedback::beep_vad_open().ok();
-    eprintln!("VAD started - listening...");
+    if ghost {
+        eprintln!("VAD started (ghost completion) - listening...");
+    } else {
+        eprintln!("VAD started - listening...");
+    }
 
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
     ears::ipc::start_ipc_server(ipc_rx);
@@ -664,6 +672,7 @@ async fn handle_ws_listen(
                 text_filters: config.text_filters.clone(),
                 language: config.language.clone(),
                 guided_grammar: config.active_grammar(),
+                ghost: false,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();

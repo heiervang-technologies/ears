@@ -15,7 +15,7 @@ use crate::vad::{SpeechSegment, VadConfig, VadSegmentDetector};
 use crate::whisper::WhisperClient;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -176,6 +176,96 @@ pub struct StreamingEngine {
     /// an explicit [`StreamingEngine::resume_typing`] or a fresh engine
     /// (i.e. restarting listening).
     typing_suspended: bool,
+
+    /// Ghost completion state; `Some` when output goes to the fcitx5 ghost
+    /// addon as inline preedit instead of being typed.
+    ghost: Option<GhostState>,
+}
+
+/// Minimum spacing between partial transcriptions of the utterance in progress.
+const GHOST_PARTIAL_INTERVAL: Duration = Duration::from_millis(600);
+
+/// A partial slower than this is dropped; the next one will be fresher.
+const GHOST_PARTIAL_DEADLINE: Duration = Duration::from_secs(4);
+
+/// Minimum audio (replay buffer included) before the first partial is worth it.
+const GHOST_MIN_PARTIAL_SAMPLES: usize = 16_000 * 8 / 10;
+
+/// Longest utterance we keep re-transcribing for partials; beyond this the
+/// ghost simply waits for the final transcript.
+const GHOST_MAX_PARTIAL_SAMPLES: usize = 16_000 * 30;
+
+/// Ghost completion bookkeeping.
+struct GhostState {
+    client: crate::ghost::GhostClient,
+    /// Identifies the utterance being spoken. Bumped whenever an utterance
+    /// ends (segment complete or candidate rejected) so that partial results
+    /// for an older utterance are discarded.
+    utterance: u64,
+    partial_in_flight: bool,
+    last_partial_at: Option<Instant>,
+    partial_seq: u64,
+    partial_tx: mpsc::UnboundedSender<(u64, Result<String, String>)>,
+    partial_rx: mpsc::UnboundedReceiver<(u64, Result<String, String>)>,
+    /// Something is currently drawn as a ghost.
+    showing: bool,
+    /// At least one utterance was committed this session (for spacing).
+    committed_any: bool,
+    /// The addon was unreachable last time; avoid log spam.
+    warned_unavailable: bool,
+}
+
+impl GhostState {
+    fn new(client: crate::ghost::GhostClient) -> Self {
+        let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+        Self {
+            client,
+            utterance: 0,
+            partial_in_flight: false,
+            last_partial_at: None,
+            partial_seq: 0,
+            partial_tx,
+            partial_rx,
+            showing: false,
+            committed_any: false,
+            warned_unavailable: false,
+        }
+    }
+
+    /// Text as it should appear in the target: utterances after the first
+    /// are separated from the previous one by a space.
+    fn spaced(&self, text: &str) -> String {
+        if self.committed_any {
+            format!(" {}", text)
+        } else {
+            text.to_string()
+        }
+    }
+
+    fn note_result<T>(&mut self, r: &Result<T, crate::ghost::GhostError>) {
+        match r {
+            Ok(_) => self.warned_unavailable = false,
+            Err(e) if !self.warned_unavailable => {
+                warn!("Ghost addon: {}", e);
+                self.warned_unavailable = true;
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// End the current utterance: stale partials are ignored from now on.
+    fn next_utterance(&mut self) {
+        self.utterance += 1;
+        self.last_partial_at = None;
+    }
+
+    fn clear(&mut self) {
+        if self.showing {
+            let r = self.client.clear();
+            self.note_result(&r);
+            self.showing = false;
+        }
+    }
 }
 
 impl StreamingEngine {
@@ -214,6 +304,7 @@ impl StreamingEngine {
             language: None,
             guided_grammar: None,
             typing_suspended: false,
+            ghost: None,
         })
     }
 
@@ -250,11 +341,185 @@ impl StreamingEngine {
             }
         };
 
-        if let Some(segment) = self.handle_vad_outcome(outcome) {
+        let segment = self.handle_vad_outcome(outcome);
+
+        if self.ghost.is_some() {
+            self.ghost_poll_partials();
+            if segment.is_none() {
+                self.ghost_maybe_start_partial();
+            }
+        }
+
+        if let Some(segment) = segment {
             self.process_segment(segment).await?;
         }
 
         Ok(())
+    }
+
+    /// Enable or disable ghost completion. When enabled, partial transcripts
+    /// are shown as inline preedit via the fcitx5 `earsghost` addon while
+    /// speaking and the final transcript is committed through it instead of
+    /// being typed.
+    pub fn set_ghost(&mut self, enabled: bool) {
+        self.set_ghost_client(
+            enabled.then(|| crate::ghost::GhostClient::new(crate::ghost::default_socket_path())),
+        );
+    }
+
+    /// Enable ghost completion with an explicit client (tests, custom paths).
+    pub fn set_ghost_client(&mut self, client: Option<crate::ghost::GhostClient>) {
+        match (client, self.ghost.is_some()) {
+            (Some(mut client), false) => {
+                match client.probe() {
+                    Ok(shown) => info!("Ghost completion enabled ({:?})", shown),
+                    Err(e) => warn!(
+                        "Ghost completion enabled but the fcitx5 addon is not reachable ({}); \
+                         final text will be typed instead",
+                        e
+                    ),
+                }
+                self.ghost = Some(GhostState::new(client));
+            }
+            (None, true) => {
+                if let Some(mut ghost) = self.ghost.take() {
+                    ghost.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether ghost completion is active.
+    pub fn ghost_enabled(&self) -> bool {
+        self.ghost.is_some()
+    }
+
+    /// Apply finished partial transcriptions for the utterance in progress.
+    fn ghost_poll_partials(&mut self) {
+        let filters = self.text_filters.clone();
+        let language = self.language.clone();
+        let bash = self.guided_grammar.is_some();
+        let speaking = self.vad_detector.is_speaking();
+        let Some(ghost) = self.ghost.as_mut() else {
+            return;
+        };
+        while let Ok((utterance, result)) = ghost.partial_rx.try_recv() {
+            ghost.partial_in_flight = false;
+            if utterance != ghost.utterance || !speaking {
+                continue; // stale: that utterance already ended
+            }
+            let text = match result {
+                Ok(text) => text,
+                Err(e) => {
+                    debug!("Partial transcription failed: {}", e);
+                    continue;
+                }
+            };
+            let text = if bash {
+                text
+            } else {
+                filters.apply(&text, language.as_deref())
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let shown = ghost.spaced(&text);
+            let r = ghost.client.preedit(&shown);
+            ghost.note_result(&r);
+            if r.is_ok() {
+                ghost.showing = true;
+            }
+        }
+    }
+
+    /// Start a partial transcription of the utterance so far, if due.
+    fn ghost_maybe_start_partial(&mut self) {
+        let Some(ghost) = self.ghost.as_ref() else {
+            return;
+        };
+        if ghost.partial_in_flight
+            || !self.vad_detector.is_speaking()
+            || ghost
+                .last_partial_at
+                .is_some_and(|t| t.elapsed() < GHOST_PARTIAL_INTERVAL)
+        {
+            return;
+        }
+        let Some(samples) = self.vad_detector.current_segment_samples() else {
+            return;
+        };
+        if samples.len() < GHOST_MIN_PARTIAL_SAMPLES || samples.len() > GHOST_MAX_PARTIAL_SAMPLES {
+            return;
+        }
+        let samples = samples.to_vec();
+
+        let ghost = self.ghost.as_mut().expect("checked above");
+        ghost.partial_seq += 1;
+        let path = self
+            .temp_dir
+            .join(format!("ghost_partial_{}.wav", ghost.partial_seq));
+        if let Err(e) = write_wav(&path, &samples) {
+            debug!("Cannot write partial WAV: {}", e);
+            return;
+        }
+        ghost.partial_in_flight = true;
+        ghost.last_partial_at = Some(Instant::now());
+        let utterance = ghost.utterance;
+        let tx = ghost.partial_tx.clone();
+        let client = self.whisper_client.clone();
+        let grammar = self.guided_grammar.clone();
+        tokio::spawn(async move {
+            let result = client
+                .transcribe_preview(&path, grammar.as_deref(), GHOST_PARTIAL_DEADLINE)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = std::fs::remove_file(&path);
+            let _ = tx.send((utterance, result));
+        });
+    }
+
+    /// Deliver a final transcript through the ghost addon. Falls back to
+    /// ordinary typing when the addon cannot deliver it.
+    fn ghost_commit(&mut self, text: &str) {
+        let Some(ghost) = self.ghost.as_mut() else {
+            return;
+        };
+        let spaced = ghost.spaced(text);
+        let r = ghost.client.commit(&spaced);
+        ghost.note_result(&r);
+        ghost.showing = false;
+        match r {
+            Ok(crate::ghost::GhostDisplay::None) | Err(_) => {
+                info!("Ghost addon could not deliver the text; typing it instead");
+                let mode = self.typing_mode;
+                let typing_start = Instant::now();
+                let outcome = run_blocking(|| TextInput::type_text(&spaced, mode))
+                    .map(|_| 0)
+                    .map_err(|e| {
+                        crate::progressive_typing::ProgressiveTypingError::TextInputError(
+                            e.to_string(),
+                        )
+                    });
+                if self.handle_typing_outcome(outcome, typing_start) {
+                    self.stats.chars_typed += spaced.chars().count();
+                    if let Some(ghost) = self.ghost.as_mut() {
+                        ghost.committed_any = true;
+                    }
+                }
+            }
+            Ok(_) => {
+                self.stats.chars_typed += spaced.chars().count();
+                ghost.committed_any = true;
+            }
+        }
+    }
+
+    /// Remove the ghost (utterance produced nothing to commit).
+    fn ghost_clear(&mut self) {
+        if let Some(ghost) = self.ghost.as_mut() {
+            ghost.clear();
+        }
     }
 
     /// Translate the detector's state after a chunk into transition events.
@@ -291,6 +556,10 @@ impl StreamingEngine {
         if self.was_probably_speaking && !is_probable && !is_speaking && !self.was_speaking {
             debug!("Speech candidate rejected before confirmation");
             self.send_event(StreamingEvent::SpeechRejected);
+            if let Some(ghost) = self.ghost.as_mut() {
+                ghost.next_utterance();
+                ghost.clear();
+            }
         }
 
         self.was_probably_speaking = is_probable;
@@ -305,8 +574,13 @@ impl StreamingEngine {
     ) -> Result<(), StreamingEngineError> {
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
+        if let Some(ghost) = self.ghost.as_mut() {
+            // Partials still in flight belong to this finished utterance.
+            ghost.next_utterance();
+        }
         if segment.samples.is_empty() {
             debug!("Skipping empty speech segment");
+            self.ghost_clear();
             return Ok(());
         }
 
@@ -349,6 +623,7 @@ impl StreamingEngine {
             Err(e) => {
                 warn!("Transcription error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("Transcription error: {}", e)));
+                self.ghost_clear();
                 return Err(StreamingEngineError::TranscriptionError(e.to_string()));
             }
         };
@@ -361,6 +636,7 @@ impl StreamingEngine {
 
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");
+            self.ghost_clear();
             return Ok(());
         }
 
@@ -375,6 +651,7 @@ impl StreamingEngine {
         };
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
+            self.ghost_clear();
             return Ok(());
         }
 
@@ -401,7 +678,14 @@ impl StreamingEngine {
             .map(|h| h.enter(crate::health::Stage::Typing));
 
         // Update progressive typing with the full accumulated text
-        if self.typing_suspended {
+        if self.ghost.is_some() {
+            if self.typing_suspended {
+                debug!("Typing suspended after earlier failure; ghost cleared, nothing committed");
+                self.ghost_clear();
+            } else {
+                self.ghost_commit(&transcript);
+            }
+        } else if self.typing_suspended {
             debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
         } else if self.config.progressive_typing && !newly_committed.is_empty() {
             let typing_start = Instant::now();
@@ -534,7 +818,14 @@ impl StreamingEngine {
     }
 
     /// Save audio samples to WAV file
-    fn save_wav(&self, path: &PathBuf, samples: &[f32]) -> Result<(), std::io::Error> {
+    fn save_wav(&self, path: &std::path::Path, samples: &[f32]) -> Result<(), std::io::Error> {
+        write_wav(path, samples)
+    }
+}
+
+/// Write mono 16 kHz 16-bit PCM WAV.
+fn write_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), std::io::Error> {
+    {
         use std::fs::File;
         use std::io::Write;
 
@@ -576,7 +867,9 @@ impl StreamingEngine {
 
         Ok(())
     }
+}
 
+impl StreamingEngine {
     /// Send an event to listeners
     fn send_event(&self, event: StreamingEvent) {
         if let Some(tx) = &self.event_tx {

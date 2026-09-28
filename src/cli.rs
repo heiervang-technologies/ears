@@ -23,6 +23,13 @@ pub enum Commands {
     #[command(alias = "v")]
     Vad,
 
+    /// Toggle VAD with ghost completion: while you speak, the transcript is
+    /// shown as inline preedit ("ghost text") in the focused app via the
+    /// fcitx5 `earsghost` addon, and committed when the utterance ends.
+    /// Shares the VAD toggle: running either command again stops listening.
+    #[command(alias = "g")]
+    Ghost,
+
     /// Start WebSocket server for remote audio input (VAD pipeline)
     #[command(alias = "ws")]
     WsListen {
