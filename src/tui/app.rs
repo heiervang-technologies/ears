@@ -221,6 +221,8 @@ pub struct App {
     pub device_picker_error: Option<String>,
     /// Audio cue volume (0-100)
     pub cue_volume: u8,
+    /// How ghost text looks (`[ghost]` config).
+    pub ghost_style: crate::ghost_style::GhostStyle,
     /// Text input method (auto/wtype/paste)
     pub typing_mode: TypingMode,
     /// Active config profile name (None = default)
@@ -283,6 +285,7 @@ impl App {
         let progressive_typing = config.progressive_typing;
         let auto_correction = config.effective_auto_correction();
         let cue_volume = config.cue_volume;
+        let ghost_style = config.ghost.clone();
         let bash_mode = config.bash_mode;
         let guided_grammar = config.guided_grammar.clone();
         let active_profile = config.active_profile.clone();
@@ -334,6 +337,7 @@ impl App {
             avg_latency_ms: 0,
             text_filters,
             cue_volume,
+            ghost_style,
             typing_mode,
             clickable_regions: Vec::new(),
             device_picker_open: false,
@@ -554,6 +558,13 @@ impl App {
                 if self.current_panel == Panel::Configuration =>
             {
                 self.adjust_cue_volume(-10);
+            }
+
+            // 'o' to cycle the ghost text colour (in Configuration panel)
+            (KeyCode::Char('o'), KeyModifiers::NONE)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_ghost_color();
             }
 
             // 'c' to go to configuration panel
@@ -1188,6 +1199,23 @@ impl App {
         self.save_config();
     }
 
+    /// Next ghost colour preset, written into the supported apps.
+    pub fn cycle_ghost_color(&mut self) {
+        self.ghost_style.color = Some(self.ghost_style.next_preset().to_string());
+        let applied = crate::ghost_style::apply(&self.ghost_style);
+        let apps: Vec<&str> = applied.iter().map(|a| a.app).collect();
+        self.add_log(&format!(
+            "Ghost colour: {} ({})",
+            self.ghost_style.label(),
+            if apps.is_empty() {
+                "no supported app found".to_string()
+            } else {
+                apps.join(", ")
+            }
+        ));
+        self.save_config();
+    }
+
     /// Toggle lowercase filter
     pub fn toggle_lowercase_filter(&mut self) {
         self.text_filters.lowercase = !self.text_filters.lowercase;
@@ -1293,6 +1321,7 @@ impl App {
         config.auto_correction = Some(self.auto_correction);
         config.auto_enter = self.auto_enter;
         config.cue_volume = self.cue_volume;
+        config.ghost = self.ghost_style.clone();
         config.save_to_clipboard = self.save_to_clipboard;
         config.vad.duck_enabled = self.duck_enabled;
         config.vad.duck_percent = self.duck_percent;

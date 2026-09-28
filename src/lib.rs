@@ -28,6 +28,7 @@ pub mod continuous;
 pub mod continuous_capture;
 pub mod ducker;
 pub mod ghost;
+pub mod ghost_style;
 pub mod health;
 pub mod progressive_typing;
 pub mod stream_client;

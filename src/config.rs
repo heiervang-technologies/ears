@@ -191,6 +191,9 @@ pub struct Config {
     /// hypothesis finished off in one more tick, which is faster. Default: true.
     #[serde(default = "default_final_correction")]
     pub final_correction: bool,
+    /// How ghost text looks, written into supported apps (`[ghost]`).
+    #[serde(default)]
+    pub ghost: crate::ghost_style::GhostStyle,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -245,6 +248,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             final_correction: default_final_correction(),
+            ghost: Default::default(),
             config_dir,
             active_profile: None,
             state_dir,
@@ -380,6 +384,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             final_correction: default_final_correction(),
+            ghost: Default::default(),
             config_dir: PathBuf::new(),
             active_profile: None,
             state_dir: PathBuf::new(),
