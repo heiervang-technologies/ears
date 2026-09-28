@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ears-vllm-stream"
+version = "0.1.0"
+description = "ears stream protocol (live dictation over WebSocket) as a vLLM endpoint plugin for Qwen3-ASR"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# fastapi, starlette and numpy come with vLLM; vLLM itself is not declared so
+# installing into a vLLM image never touches its pinned stack.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["fastapi", "starlette", "numpy", "httpx", "pytest"]
+
+[project.entry-points."vllm.endpoint_plugins"]
+ears_stream = "ears_vllm_stream:EarsStreamPlugin"
+
+[tool.setuptools]
+packages = ["ears_vllm_stream"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

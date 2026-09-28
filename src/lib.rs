@@ -30,6 +30,7 @@ pub mod ducker;
 pub mod ghost;
 pub mod health;
 pub mod progressive_typing;
+pub mod stream_client;
 pub mod streaming;
 pub mod streaming_engine;
 pub mod vad;

@@ -314,6 +314,19 @@ Continuous previews run up to 90 s per recording (the server's context).
 With `final_correction = true` (the default) the committed text still comes
 from a full transcription.
 
+When the server runs the `ears_stream` vLLM plugin, ears streams instead of
+re-sending the audio on every tick: one WebSocket to `/v1/ears/stream` (the
+server URL with `ws://`/`wss://`, same API key), over which only new audio
+goes out and the growing transcript comes back as soon as each decode is done
+(protocol: [docs/STREAM_PROTOCOL.md](docs/STREAM_PROTOCOL.md)). Push-to-talk
+sends the recording every 50 ms; VAD mode streams one utterance per speech
+segment, starting with the pre-speech buffer and cancelling it when the
+segment is dropped. Nothing to configure: without the plugin (404, no answer
+within 2 s, or a model it cannot serve) ears decodes per tick as above, and if
+the connection drops mid-utterance that utterance is finished per tick from
+the text already settled. The committed text comes from the same final path
+either way, so nothing is ever committed twice.
+
 ### All Commands
 
 ```

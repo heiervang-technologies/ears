@@ -38,7 +38,8 @@ pub const DEFAULT_ROLLBACK_WORDS: usize = 3;
 /// word, and the encoder rejects items that produce no features.
 const MIN_ITEM: usize = SAMPLE_RATE / 10;
 
-const ASR_TAG: &str = "<asr_text>";
+/// Ends the `language X` header Qwen3-ASR writes before the transcript.
+pub const ASR_TAG: &str = "<asr_text>";
 
 /// One audio block whose `<|audio_pad|>` placeholders are filled by the
 /// window items in order, followed by the assistant prefix. With a single
@@ -368,7 +369,7 @@ fn classify_error(status: reqwest::StatusCode, body: &str) -> ContinuousError {
     }
 }
 
-fn truncate(s: &str, max: usize) -> &str {
+pub(crate) fn truncate(s: &str, max: usize) -> &str {
     match s.char_indices().nth(max) {
         Some((i, _)) => &s[..i],
         None => s,

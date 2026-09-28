@@ -141,6 +141,50 @@ pub fn growing_wav_payload(bytes: &[u8]) -> Option<&[u8]> {
     None
 }
 
+/// Follows a WAV file that is still being written and hands out only the PCM
+/// bytes added since the last read, in whole 16-bit samples.
+pub struct WavTail {
+    path: PathBuf,
+    /// Open at the next unread byte once the data chunk has been found.
+    file: Option<std::fs::File>,
+    /// Odd byte of a sample whose other half has not been written yet.
+    carry: Option<u8>,
+}
+
+impl WavTail {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            file: None,
+            carry: None,
+        }
+    }
+
+    /// PCM bytes written since the last call (empty until the header is).
+    pub fn read_new(&mut self) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        if self.file.is_none() {
+            let bytes = std::fs::read(&self.path)?;
+            let Some(payload) = growing_wav_payload(&bytes) else {
+                return Ok(Vec::new());
+            };
+            let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
+            let mut file = std::fs::File::open(&self.path)?;
+            file.seek(SeekFrom::Start(offset as u64))?;
+            self.file = Some(file);
+        }
+        let mut out: Vec<u8> = self.carry.take().into_iter().collect();
+        self.file
+            .as_mut()
+            .expect("opened above")
+            .read_to_end(&mut out)?;
+        if out.len() % 2 == 1 {
+            self.carry = out.pop();
+        }
+        Ok(out)
+    }
+}
+
 /// Write mono 16-bit PCM as a WAV file.
 pub fn write_pcm16_wav(
     path: &std::path::Path,
@@ -390,6 +434,28 @@ mod tests {
         bytes.extend_from_slice(&[5, 6]);
         assert_eq!(growing_wav_payload(&bytes).unwrap(), &[5, 6]);
         assert!(growing_wav_payload(b"nope").is_none());
+    }
+
+    #[test]
+    fn wav_tail_hands_out_each_sample_once() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.wav");
+        let mut tail = WavTail::new(&path);
+        assert!(tail.read_new().is_err(), "no file yet");
+        std::fs::write(&path, b"RIFF\0\0\0\0WA").unwrap();
+        assert!(tail.read_new().unwrap().is_empty(), "header incomplete");
+        write_pcm16_wav(&path, &[1, 0, 2], 16000).unwrap();
+        assert_eq!(tail.read_new().unwrap(), vec![1, 0]);
+        assert!(tail.read_new().unwrap().is_empty());
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&[0, 3]).unwrap();
+        assert_eq!(tail.read_new().unwrap(), vec![2, 0]);
+        file.write_all(&[0]).unwrap();
+        assert_eq!(tail.read_new().unwrap(), vec![3, 0]);
     }
 
     #[test]
