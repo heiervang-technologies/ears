@@ -44,8 +44,11 @@ const ASR_TAG: &str = "<asr_text>";
 /// window items in order, followed by the assistant prefix. With a single
 /// item this renders exactly like the stock template.
 const CHAT_TEMPLATE: &str = concat!(
-    "{%- set ns = namespace(n=0, asst='') -%}",
+    "{%- set ns = namespace(n=0, asst='', sys='') -%}",
     "{%- for m in messages -%}",
+    "{%- if m.role == 'system' -%}",
+    "{%- set ns.sys = m.content if m.content is string else (m.content | map(attribute='text') | join('')) -%}",
+    "{%- endif -%}",
     // vLLM hands string content to a template that iterates content as a
     // list of text parts.
     "{%- if m.role == 'assistant' -%}",
@@ -59,7 +62,7 @@ const CHAT_TEMPLATE: &str = concat!(
     "{%- endfor -%}",
     "{%- endif -%}",
     "{%- endfor -%}",
-    "{{- '<|im_start|>system\\n<|im_end|>\\n<|im_start|>user\\n<|audio_start|>' -}}",
+    "{{- '<|im_start|>system\\n' + ns.sys + '<|im_end|>\\n<|im_start|>user\\n<|audio_start|>' -}}",
     "{{- '<|audio_pad|>' * ns.n -}}",
     "{{- '<|audio_end|><|im_end|>\\n<|im_start|>assistant\\n' + ns.asst -}}",
 );
@@ -81,12 +84,15 @@ pub struct ContinuousSpec {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub language: Option<String>,
+    /// Context-biasing text (the `prompt` config).
+    pub context: Option<String>,
 }
 
 impl ContinuousSpec {
     pub fn decoder(&self) -> ContinuousDecoder {
         ContinuousDecoder::new(&self.server_url, self.api_key.clone(), self.model.clone())
             .with_language(self.language.as_deref())
+            .with_context(self.context.clone())
     }
 }
 
@@ -97,6 +103,8 @@ pub struct ContinuousDecoder {
     api_key: Option<String>,
     model: Option<String>,
     rollback_words: usize,
+    /// Context-biasing text, sent as the system turn like the stock template.
+    context: Option<String>,
     /// `language X<asr_text>`, fixed up front or learned from the first reply.
     header: Option<String>,
     /// Transcript text the next tick forces as prefix.
@@ -116,6 +124,7 @@ impl ContinuousDecoder {
             api_key,
             model,
             rollback_words: DEFAULT_ROLLBACK_WORDS,
+            context: None,
             header: None,
             stable: String::new(),
             closed: Vec::new(),
@@ -128,6 +137,11 @@ impl ContinuousDecoder {
         self.header = code
             .and_then(language_name)
             .map(|name| format!("language {name}{ASR_TAG}"));
+        self
+    }
+
+    pub fn with_context(mut self, context: Option<String>) -> Self {
+        self.context = context.filter(|c| !c.trim().is_empty());
         self
     }
 
@@ -163,6 +177,11 @@ impl ContinuousDecoder {
         deadline: Duration,
     ) -> Result<String, ContinuousError> {
         let model = match &self.model {
+            Some(m) if !is_qwen3_asr(m) => {
+                return Err(ContinuousError::Unsupported(format!(
+                    "model {m:?} is not Qwen3-ASR"
+                )));
+            }
             Some(m) => m.clone(),
             None => {
                 let m = self.server_model(deadline).await?;
@@ -205,12 +224,15 @@ impl ContinuousDecoder {
                                    "input_audio": {"data": data, "format": "wav"}})
             })
             .collect();
+        let mut messages = Vec::with_capacity(3);
+        if let Some(context) = &self.context {
+            messages.push(serde_json::json!({"role": "system", "content": context}));
+        }
+        messages.push(serde_json::json!({"role": "user", "content": content}));
+        messages.push(serde_json::json!({"role": "assistant", "content": prefix}));
         let body = serde_json::json!({
             "model": model,
-            "messages": [
-                {"role": "user", "content": content},
-                {"role": "assistant", "content": prefix},
-            ],
+            "messages": messages,
             "add_generation_prompt": false,
             "continue_final_message": true,
             "chat_template": CHAT_TEMPLATE,
@@ -274,7 +296,7 @@ impl ContinuousDecoder {
             .await
             .map_err(|e| ContinuousError::Failed(e.to_string()))?;
         let id = reply["data"][0]["id"].as_str().unwrap_or_default();
-        if !id.to_ascii_lowercase().contains("qwen3-asr") {
+        if !is_qwen3_asr(id) {
             return Err(ContinuousError::Unsupported(format!(
                 "model {id:?} is not Qwen3-ASR"
             )));
@@ -288,6 +310,10 @@ impl ContinuousDecoder {
 pub struct DecoderState {
     pub header: Option<String>,
     pub stable: String,
+}
+
+fn is_qwen3_asr(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("qwen3-asr")
 }
 
 fn classify_error(status: reqwest::StatusCode, body: &str) -> ContinuousError {
@@ -462,8 +488,8 @@ mod tests {
             .respond_with(reply(" my friend."))
             .mount(&server)
             .await;
-        let mut d =
-            ContinuousDecoder::new(&server.uri(), None, Some("m".into())).with_rollback_words(1);
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_rollback_words(1);
         let pcm = vec![0i16; SAMPLE_RATE];
         assert_eq!(
             d.step(&pcm, false, TICK).await.unwrap(),
@@ -493,8 +519,8 @@ mod tests {
             .respond_with(reply("hi"))
             .mount(&server)
             .await;
-        let mut d =
-            ContinuousDecoder::new(&server.uri(), None, Some("m".into())).with_language(Some("en"));
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"));
         let mut pcm: Vec<i16> = (0..ENCODER_WINDOW + SAMPLE_RATE)
             .map(|i| i as i16)
             .collect();
@@ -523,7 +549,7 @@ mod tests {
             .respond_with(reply(" a b c"))
             .mount(&server)
             .await;
-        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("m".into()))
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
             .with_language(Some("en"))
             .resume(DecoderState {
                 header: None,
@@ -544,7 +570,7 @@ mod tests {
             ))
             .mount(&server)
             .await;
-        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("m".into()));
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()));
         let err = d
             .step(&vec![0i16; SAMPLE_RATE], false, TICK)
             .await
@@ -572,9 +598,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_non_qwen_model_is_unsupported_without_a_request() {
+        let server = MockServer::start().await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("whisper-1".into()));
+        let err = d
+            .step(&vec![0i16; SAMPLE_RATE], false, TICK)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ContinuousError::Unsupported(_)));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_goes_in_the_system_turn() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("hi"))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"))
+            .with_context(Some("vLLM, Hyprland".into()));
+        d.step(&vec![0i16; SAMPLE_RATE], false, TICK).await.unwrap();
+        let sent = bodies(&server).await;
+        assert_eq!(sent[0]["messages"][0]["role"], "system");
+        assert_eq!(sent[0]["messages"][0]["content"], "vLLM, Hyprland");
+        // Blank context sends no system turn.
+        let d = ContinuousDecoder::new("http://x", None, None).with_context(Some("  ".into()));
+        assert!(d.context.is_none());
+    }
+
+    #[tokio::test]
     async fn short_tail_is_left_out() {
         let server = MockServer::start().await;
-        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("m".into()));
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()));
         // Nothing worth sending: no request at all.
         assert_eq!(d.step(&[0i16; 100], false, TICK).await.unwrap(), "");
         assert!(bodies(&server).await.is_empty());

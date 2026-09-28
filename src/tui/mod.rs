@@ -106,6 +106,7 @@ pub async fn start_vad_pipeline(
             api_key: config.api_key.clone(),
             model: model.clone(),
             language: language.clone(),
+            context: config.prompt.clone(),
         }
     });
     let whisper_client = Arc::new(

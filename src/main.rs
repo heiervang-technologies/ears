@@ -898,6 +898,8 @@ async fn start_recording(
             tracing::warn!("Failed to remove old recording file: {}", e);
         }
     }
+    // Settled text of an older recording must never prefix this one.
+    let _ = std::fs::remove_file(ghost_continuous_state_file(config));
 
     state_mgr
         .transition(StateEnum::Recording)
@@ -1002,7 +1004,6 @@ fn spawn_ghost_preview(config: &Config, recorder_pid: u32) -> Result<()> {
         return Err(e);
     }
     let _ = std::fs::remove_file(ghost_preview_text_file(config));
-    let _ = std::fs::remove_file(ghost_continuous_state_file(config));
     // Reap it from a detached thread if we are still around when it exits.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -1100,6 +1101,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     .then(|| {
         ContinuousDecoder::new(server_url.as_str(), config.api_key.clone(), model)
             .with_language(language.as_deref())
+            .with_context(config.prompt.clone())
     });
     let state_file = ghost_continuous_state_file(config);
 
@@ -1214,6 +1216,7 @@ async fn finish_continuous(
     let started = std::time::Instant::now();
     let mut decoder = ContinuousDecoder::new(server_url, config.api_key.clone(), model)
         .with_language(language)
+        .with_context(config.prompt.clone())
         .resume(state);
     match decoder.step(&samples(pcm), true, DEADLINE).await {
         Ok(text) if !text.is_empty() => {
@@ -1332,7 +1335,10 @@ async fn stop_and_transcribe(
         .with_model(model.clone())
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
-    let continuous_final = if config.live_decoding == ears::config::LiveDecoding::Continuous
+    // Only a recording that had a live preview has settled text to finish;
+    // without one a full transcription is just as fast.
+    let continuous_final = if ghost_session.is_some()
+        && config.live_decoding == ears::config::LiveDecoding::Continuous
         && !config.final_correction
         && grammar.is_none()
     {
@@ -1347,6 +1353,7 @@ async fn stop_and_transcribe(
     } else {
         None
     };
+    let _ = std::fs::remove_file(ghost_continuous_state_file(config));
     let result = match continuous_final {
         Some(text) => Ok(text),
         None => {

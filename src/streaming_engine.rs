@@ -1314,8 +1314,9 @@ mod tests {
         crate::continuous::ContinuousSpec {
             server_url: "http://127.0.0.1:9".into(),
             api_key: None,
-            model: Some("m".into()),
+            model: Some("Qwen/Qwen3-ASR-1.7B".into()),
             language: Some("en".into()),
+            context: None,
         }
     }
 
