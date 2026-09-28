@@ -24,6 +24,7 @@ from .protocol import (
     DEFAULT_MIN_STEP_MS,
     DEFAULT_ROLLBACK_WORDS,
     ENCODER_WINDOW,
+    MIN_PIN_SAMPLES,
     SAMPLE_RATE,
     header_for,
     header_language,
@@ -65,6 +66,7 @@ class Utterance:
     min_step: int  # samples
     max_samples: int
     header: str | None = None
+    candidate: str | None = None  # language detected last while unpinned
     stable: str = ""
     pcm: bytearray = field(default_factory=bytearray)  # PCM16 LE, capped
     odd: bytes = b""  # trailing odd byte kept for the next frame
@@ -314,7 +316,7 @@ class StreamSession:
                         self.active = None
                     await self._error("internal", f"decode failed: {e}", utt.id)
                 return
-            text = self._absorb(utt, continuation, final)
+            text = self._absorb(utt, continuation, final, n)
         decode_ms = int((time.monotonic() - t0) * 1000)
         if self.active is not utt:
             return  # cancelled or superseded meanwhile: send nothing
@@ -349,12 +351,17 @@ class StreamSession:
         )
 
     @staticmethod
-    def _absorb(utt: Utterance, continuation: str, final: bool) -> str:
+    def _absorb(utt: Utterance, continuation: str, final: bool, n: int) -> str:
         """Fold a decode's continuation into the utterance; return the text.
 
         Mirrors `ContinuousDecoder::step`, plus two guards the protocol's
         promises need: settled text only ever grows, and a detected
         `language None` (no speech yet) is not locked in as the header.
+
+        A detected language is pinned only after MIN_PIN_SAMPLES of audio
+        and two decodes in a row agreeing: forcing a misdetection from the
+        first fraction of a second turns the utterance into a translation
+        (English espeak came out as Arabic, ears#153).
         """
         if utt.header is not None:
             hypothesis = utt.stable + continuation
@@ -362,8 +369,13 @@ class StreamSession:
             lang, tag, rest = continuation.partition(ASR_TAG)
             if tag:
                 header = f"{lang.strip()}{ASR_TAG}"
-                if header_language(header) not in (None, "None"):
+                if header_language(header) in (None, "None"):
+                    utt.candidate = None
+                elif n >= MIN_PIN_SAMPLES and utt.candidate == header:
                     utt.header = header
+                    utt.candidate = None
+                else:
+                    utt.candidate = header
                 hypothesis = rest
             else:
                 hypothesis = continuation

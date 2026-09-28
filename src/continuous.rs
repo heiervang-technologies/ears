@@ -39,6 +39,9 @@ pub const DEFAULT_ROLLBACK_WORDS: usize = 3;
 const MIN_ITEM: usize = SAMPLE_RATE / 10;
 
 /// Ends the `language X` header Qwen3-ASR writes before the transcript.
+/// Audio needed before a detected language may be pinned.
+pub const MIN_PIN_SAMPLES: usize = 2 * SAMPLE_RATE;
+
 pub const ASR_TAG: &str = "<asr_text>";
 
 /// One audio block whose `<|audio_pad|>` placeholders are filled by the
@@ -108,6 +111,8 @@ pub struct ContinuousDecoder {
     context: Option<String>,
     /// `language X<asr_text>`, fixed up front or learned from the first reply.
     header: Option<String>,
+    /// Language detected by the last decode while none is pinned.
+    candidate: Option<String>,
     /// Transcript text the next tick forces as prefix.
     stable: String,
     /// Base64 WAV of each closed window, so it is encoded once.
@@ -127,6 +132,7 @@ impl ContinuousDecoder {
             rollback_words: DEFAULT_ROLLBACK_WORDS,
             context: None,
             header: None,
+            candidate: None,
             stable: String::new(),
             closed: Vec::new(),
         }
@@ -293,11 +299,7 @@ impl ContinuousDecoder {
         } else {
             match continuation.split_once(ASR_TAG) {
                 Some((lang, rest)) => {
-                    // Silence is detected as "language None"; pinning that
-                    // would force it on the speech that follows.
-                    if lang.trim() != "language None" {
-                        self.header = Some(format!("{}{ASR_TAG}", lang.trim()));
-                    }
+                    self.learn_language(lang.trim(), pcm.len());
                     rest.to_string()
                 }
                 None => continuation.to_string(),
@@ -308,6 +310,25 @@ impl ContinuousDecoder {
             self.stable = settled_prefix(&hypothesis, self.rollback_words).to_string();
         }
         Ok(hypothesis.trim_end().to_string())
+    }
+
+    /// Pin the detected language once it is trustworthy. Forcing a wrong
+    /// one turns the rest of the utterance into a translation, and a fraction
+    /// of a second of audio is easily misdetected (English espeak came out as
+    /// Arabic, #153). So pin only after [`MIN_PIN_SAMPLES`] of audio and two
+    /// decodes in a row agreeing; "language None" (silence) never counts.
+    fn learn_language(&mut self, lang: &str, samples: usize) {
+        if lang == "language None" {
+            self.candidate = None;
+            return;
+        }
+        let header = format!("{lang}{ASR_TAG}");
+        if samples >= MIN_PIN_SAMPLES && self.candidate.as_deref() == Some(header.as_str()) {
+            self.header = Some(header);
+            self.candidate = None;
+        } else {
+            self.candidate = Some(header);
+        }
     }
 
     async fn server_model(&self) -> Result<String, ContinuousError> {
@@ -608,9 +629,10 @@ mod tests {
     #[tokio::test]
     async fn settled_text_is_forced_as_prefix() {
         let server = MockServer::start().await;
+        // Two agreeing detections on 2 s of audio pin the language.
         Mock::given(path("/v1/chat/completions"))
             .respond_with(reply("language English<asr_text>Hello there friend"))
-            .up_to_n_times(1)
+            .up_to_n_times(2)
             .mount(&server)
             .await;
         Mock::given(path("/v1/chat/completions"))
@@ -619,23 +641,26 @@ mod tests {
             .await;
         let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
             .with_rollback_words(1);
-        let pcm = vec![0i16; SAMPLE_RATE];
-        assert_eq!(
-            d.step(&pcm, false, TICK).await.unwrap(),
-            "Hello there friend"
-        );
+        let pcm = vec![0i16; MIN_PIN_SAMPLES];
+        for _ in 0..2 {
+            assert_eq!(
+                d.step(&pcm, false, TICK).await.unwrap(),
+                "Hello there friend"
+            );
+        }
         assert_eq!(
             d.step(&pcm, false, TICK).await.unwrap(),
             "Hello there my friend."
         );
         let sent = bodies(&server).await;
         assert_eq!(sent[0]["messages"][1]["content"], "");
+        assert_eq!(sent[1]["messages"][1]["content"], "");
         assert_eq!(
-            sent[1]["messages"][1]["content"],
+            sent[2]["messages"][1]["content"],
             "language English<asr_text>Hello there"
         );
-        assert_eq!(sent[1]["continue_final_message"], true);
-        assert!(sent[1]["chat_template"]
+        assert_eq!(sent[2]["continue_final_message"], true);
+        assert!(sent[2]["chat_template"]
             .as_str()
             .unwrap()
             .contains("audio_pad"));
@@ -824,14 +849,49 @@ mod tests {
             .mount(&server)
             .await;
         let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()));
-        let pcm = vec![0i16; SAMPLE_RATE];
+        let pcm = vec![0i16; MIN_PIN_SAMPLES];
         assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "");
         assert_eq!(d.snapshot().header, None);
         assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "Hei der");
+        assert_eq!(d.snapshot().header, None, "one detection is not enough");
+        d.step(&pcm, false, TICK).await.unwrap();
         assert_eq!(
             d.snapshot().header.as_deref(),
             Some("language Norwegian<asr_text>")
         );
+    }
+
+    #[tokio::test]
+    async fn early_misdetection_is_not_pinned() {
+        // #153: the first fraction of a second came back as Arabic.
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("language Arabic<asr_text>هذا"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply("language English<asr_text>This is a longer test"))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()));
+        d.step(&vec![0i16; SAMPLE_RATE / 2], false, TICK)
+            .await
+            .unwrap();
+        assert_eq!(d.snapshot().header, None, "too little audio to pin");
+        let long = vec![0i16; MIN_PIN_SAMPLES];
+        d.step(&long, false, TICK).await.unwrap();
+        assert_eq!(d.snapshot().header, None, "disagrees with the last decode");
+        assert_eq!(
+            d.step(&long, false, TICK).await.unwrap(),
+            "This is a longer test"
+        );
+        assert_eq!(
+            d.snapshot().header.as_deref(),
+            Some("language English<asr_text>")
+        );
+        // Settling starts only once the language is pinned.
+        assert_eq!(d.snapshot().stable, "This is");
     }
 
     #[tokio::test]

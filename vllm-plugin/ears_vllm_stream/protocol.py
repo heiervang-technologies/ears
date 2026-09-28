@@ -11,6 +11,8 @@ import re
 PROTOCOL_VERSION = 1
 
 SAMPLE_RATE = 16_000
+# Audio needed before a detected language may be pinned (ears#153).
+MIN_PIN_SAMPLES = 2 * SAMPLE_RATE
 # Qwen3-ASR encoder attention window: `n_window_infer` 800 mel frames at 10 ms.
 ENCODER_WINDOW = 8 * SAMPLE_RATE
 # A tail shorter than this is left out: too short to carry a word, and the

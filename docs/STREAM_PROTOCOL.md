@@ -51,7 +51,10 @@ The full hypothesis for the utterance so far (not a delta). `text[..stable_chars
 (byte offset, UTF-8) is settled and will prefix every later partial and the
 final of this utterance; the rest may still change. `seq` increases per
 utterance. `audio_ms` is the audio the hypothesis covers. `language` is the
-Qwen3-ASR language name in use (forced or detected), null while unknown.
+Qwen3-ASR language name in use: forced by `start`, or detected and pinned.
+A detected language is pinned only once at least 2 s of audio has been
+decoded and two decodes in a row agree (a misdetection forced as the prefix
+turns the utterance into a translation, #153); null until then.
 
 ```json
 {"type": "final", "utterance": 7, "text": "Okay, so here is the plan.",

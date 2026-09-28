@@ -110,19 +110,45 @@ def test_partial_final_flow_with_forced_language():
     run(go())
 
 
-def test_language_detected_from_first_decode():
+def test_language_pinned_after_two_agreeing_decodes_on_enough_audio():
     async def go():
-        d = FakeDecoder("language German<asr_text>Grüße du da", " da drüben")
+        d = FakeDecoder(
+            "language German<asr_text>Grüße",
+            "language German<asr_text>Grüße du da",
+            " da drüben",
+        )
         h = Harness(d)
         await h.text(type="start", utterance=1, rollback_words=1)
+        await h.audio(1.0)  # too little audio to pin
+        await h.audio(1.0)  # 2 s: agrees with the last decode -> pinned
         await h.audio(0.2)
+        assert [c["prefix"] for c in d.calls[:2]] == ["", ""]
+        assert d.calls[2]["prefix"] == "language German<asr_text>Grüße du"
+        partials = h.of("partial")
+        assert partials[0]["language"] is None, "only a pinned language is reported"
+        assert partials[-1]["text"] == "Grüße du da drüben"
+        assert partials[-1]["language"] == "German"
+        assert partials[-1]["stable_chars"] == len("Grüße du da".encode()) == 13  # bytes
+    run(go())
+
+
+def test_early_misdetection_is_not_pinned():
+    # ears#153: English espeak came out as Arabic on the first 0.4 s.
+    async def go():
+        d = FakeDecoder(
+            "language Arabic<asr_text>هذا",
+            "language English<asr_text>This is",
+            "language English<asr_text>This is a test",
+            " a test of it",
+        )
+        h = Harness(d)
+        await h.text(type="start", utterance=1)
+        await h.audio(0.4)  # Arabic: too little audio to pin
+        await h.audio(1.6)  # English at 2 s: disagrees with the last decode
+        await h.audio(0.2)  # English again: pinned
         await h.audio(0.2)
-        assert d.calls[0]["prefix"] == ""
-        assert d.calls[1]["prefix"] == "language German<asr_text>Grüße du"
-        p1, p2 = h.of("partial")
-        assert p1["text"] == "Grüße du da" and p1["language"] == "German"
-        assert p2["text"] == "Grüße du da drüben"
-        assert p2["stable_chars"] == len("Grüße du da".encode()) == 13  # bytes
+        assert [c["prefix"] for c in d.calls[:3]] == ["", "", ""]
+        assert d.calls[3]["prefix"].startswith("language English<asr_text>")
     run(go())
 
 
@@ -135,7 +161,7 @@ def test_no_speech_header_is_not_locked_in():
         await h.audio(0.2)
         assert [c["prefix"] for c in d.calls] == ["", ""]
         (p,) = h.of("partial")  # the empty first hypothesis is not sent
-        assert p["text"] == "Hi" and p["language"] == "English"
+        assert p["text"] == "Hi" and p["language"] is None  # not pinned yet
     run(go())
 
 
