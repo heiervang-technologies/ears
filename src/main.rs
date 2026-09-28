@@ -47,11 +47,20 @@ async fn main() -> Result<()> {
     AudioFeedback::set_volume(config.cue_volume);
 
     match cli.command {
-        Some(Commands::Toggle) => {
-            handle_toggle(&config).await?;
+        Some(Commands::Toggle { ghost }) => {
+            handle_toggle(&config, ghost).await?;
+        }
+        Some(Commands::GhostPreview {
+            recorder_pid,
+            recorder_start,
+        }) => {
+            run_ghost_preview(&config, recorder_pid, recorder_start).await?;
         }
         Some(Commands::Vad) => {
-            handle_vad(&config).await?;
+            handle_vad(&config, false).await?;
+        }
+        Some(Commands::Ghost) => {
+            handle_vad(&config, true).await?;
         }
         Some(Commands::WsListen { host, port, socket }) => {
             handle_ws_listen(&config, &host, port, socket).await?;
@@ -425,7 +434,7 @@ fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
 }
 
 /// Toggle VAD mode: start or stop headless voice activity detection
-async fn handle_vad(config: &Config) -> Result<()> {
+async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     AudioFeedback::set_volume(config.cue_volume);
     let vad_pid_file = config.state_dir.join("vad.pid");
     let vad_lock_path = config.state_dir.join("vad.lock");
@@ -501,6 +510,7 @@ async fn handle_vad(config: &Config) -> Result<()> {
             text_filters: config.text_filters.clone(),
             language,
             guided_grammar: config.active_grammar(),
+            ghost,
         }
     };
 
@@ -509,7 +519,11 @@ async fn handle_vad(config: &Config) -> Result<()> {
     let _ = settings_tx.send(make_settings(config.auto_enter, typing));
 
     AudioFeedback::beep_vad_open().ok();
-    eprintln!("VAD started - listening...");
+    if ghost {
+        eprintln!("VAD started (ghost completion) - listening...");
+    } else {
+        eprintln!("VAD started - listening...");
+    }
 
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
     ears::ipc::start_ipc_server(ipc_rx);
@@ -711,6 +725,7 @@ async fn handle_ws_listen(
                 text_filters: config.text_filters.clone(),
                 language: config.language.clone(),
                 guided_grammar: config.active_grammar(),
+                ghost: false,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();
@@ -805,7 +820,7 @@ async fn handle_ws_listen(
 }
 
 /// Main toggle logic: start recording or stop and transcribe
-async fn handle_toggle(config: &Config) -> Result<()> {
+async fn handle_toggle(config: &Config, ghost: bool) -> Result<()> {
     // Serialize toggle operations across processes to prevent races on the
     // state file and audio file when the keybind is pressed rapidly.
     let lock_path = config.state_dir.join("toggle.lock");
@@ -846,7 +861,7 @@ async fn handle_toggle(config: &Config) -> Result<()> {
     if is_recording {
         stop_and_transcribe(config, &mut state_mgr, &process_mgr).await
     } else {
-        start_recording(config, &mut state_mgr, &process_mgr).await
+        start_recording(config, &mut state_mgr, &process_mgr, ghost).await
     }
 }
 
@@ -855,6 +870,7 @@ async fn start_recording(
     config: &Config,
     state_mgr: &mut StateManager,
     process_mgr: &ProcessManager,
+    ghost: bool,
 ) -> Result<()> {
     let toggle_start = std::time::Instant::now();
     tracing::info!("Starting recording");
@@ -893,12 +909,238 @@ async fn start_recording(
 
     AudioFeedback::beep_start().ok();
 
+    // Typing disabled in the config: nothing may reach the focused window,
+    // ghost text included.
+    if ghost && config.typing_mode != ears::desktop::TypingMode::None {
+        if let Err(e) = spawn_ghost_preview(config, pid) {
+            // Recording still works; the text is just typed at the end.
+            tracing::warn!("Ghost preview not started: {}", e);
+        }
+    }
+
     tracing::info!(
         "Recording started (PID: {}) total start_recording: {:?}",
         pid,
         toggle_start.elapsed()
     );
 
+    Ok(())
+}
+
+/// File holding the PID of a running push-to-talk ghost preview.
+fn ghost_preview_pid_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("ghost-preview.pid")
+}
+
+/// File holding the text the ghost preview is currently showing.
+fn ghost_preview_text_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("ghost-preview.txt")
+}
+
+/// Start time of a process in clock ticks since boot (field 22 of
+/// `/proc/PID/stat`). Together with the PID this identifies one process:
+/// a recycled PID gets a different start time.
+fn proc_start_time(pid: i32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+    // The command name may contain spaces or parentheses; fields resume
+    // after the last ')'. starttime is the 20th field from there.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+/// Whether `pid` is still the process that started at `start`.
+fn same_process(pid: i32, start: u64) -> bool {
+    pid > 0 && proc_start_time(pid) == Some(start)
+}
+
+/// Start the ghost preview loop for the recording that just started.
+fn spawn_ghost_preview(config: &Config, recorder_pid: u32) -> Result<()> {
+    let recorder_pid = recorder_pid as i32;
+    let recorder_start =
+        proc_start_time(recorder_pid).context("recorder exited before the preview started")?;
+    // At most one preview: a leftover one would fight over the ghost.
+    let _ = stop_ghost_preview(config);
+
+    let exe = std::env::current_exe().context("cannot locate ears executable")?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("ghost-preview")
+        .arg("--recorder-pid")
+        .arg(recorder_pid.to_string())
+        .arg("--recorder-start")
+        .arg(recorder_start.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(ref profile) = config.active_profile {
+        cmd.env("EARS_PROFILE", profile);
+    }
+    // New session: the preview must outlive this short-lived toggle process.
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+    let mut child = cmd.spawn().context("cannot spawn ghost preview")?;
+    let pid = child.id() as i32;
+    let record = proc_start_time(pid)
+        .map(|start| format!("{} {}", pid, start))
+        .context("ghost preview exited immediately")
+        .and_then(|line| {
+            std::fs::write(ghost_preview_pid_file(config), line)
+                .context("cannot record ghost preview PID")
+        });
+    if let Err(e) = record {
+        // Uncontrollable without its PID file: do not leave it running.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(ghost_preview_text_file(config));
+    // Reap it from a detached thread if we are still around when it exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Stop a running ghost preview. Returns `Some(last shown text)` when this
+/// recording was a ghost session, `None` otherwise.
+///
+/// Only signals the process recorded in the PID file if it is still that
+/// same process (PID plus start time); a stale file never kills a stranger.
+fn stop_ghost_preview(config: &Config) -> Option<String> {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    let pid_file = ghost_preview_pid_file(config);
+    let record = std::fs::read_to_string(&pid_file).ok()?;
+    let _ = std::fs::remove_file(&pid_file);
+    let mut fields = record.split_whitespace().map(|f| f.parse::<u64>().ok());
+    if let (Some(Some(pid)), Some(Some(start))) = (fields.next(), fields.next()) {
+        let pid = pid as i32;
+        if same_process(pid, start) {
+            let target = Pid::from_raw(pid);
+            let _ = kill(target, Signal::SIGTERM);
+            let deadline = std::time::Instant::now() + Duration::from_millis(800);
+            while same_process(pid, start) && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if same_process(pid, start) {
+                let _ = kill(target, Signal::SIGKILL);
+            }
+        }
+    }
+    let text_file = ghost_preview_text_file(config);
+    let last = std::fs::read_to_string(&text_file).unwrap_or_default();
+    let _ = std::fs::remove_file(&text_file);
+    let _ = std::fs::remove_file(config.state_dir.join("ghost_toggle_partial.wav"));
+    Some(last)
+}
+
+/// Commit the final push-to-talk text through the ghost addon.
+fn deliver_via_ghost(last_ghost: &str, text: &str) -> ears::ghost::Delivery {
+    use ears::ghost::{default_socket_path, Delivery, GhostClient};
+    let mut client = GhostClient::new(default_socket_path());
+    if !last_ghost.is_empty() {
+        // Bridge the gap left by the stopped preview's disconnect.
+        let _ = client.preedit(last_ghost);
+    }
+    let delivery = client.commit(text);
+    match delivery {
+        Delivery::Delivered => {}
+        Delivery::NotDelivered => {
+            tracing::info!("Ghost addon did not deliver the text; typing instead")
+        }
+        Delivery::Unknown => {
+            tracing::warn!("Ghost commit outcome unknown; not typing it again")
+        }
+    }
+    delivery
+}
+
+/// Ghost preview for push-to-talk: while the recording grows, transcribe it
+/// every few hundred milliseconds and show the result as inline ghost text.
+/// Exits when the recording ends (or on SIGTERM from the stopping toggle);
+/// closing the addon connection clears the ghost.
+async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u64) -> Result<()> {
+    use ears::ghost::{default_socket_path, growing_wav_payload, write_pcm16_wav, GhostClient};
+
+    const INTERVAL: Duration = Duration::from_millis(300);
+    const MIN_BYTES: usize = 16_000 * 2 * 4 / 10; // 0.4 s
+    const MAX_BYTES: usize = 16_000 * 2 * 60; // stop previewing past 60 s
+    const DEADLINE: Duration = Duration::from_secs(4);
+
+    let audio_file = config.state_dir.join("recording.wav");
+    let partial = config.state_dir.join("ghost_toggle_partial.wav");
+    let text_file = ghost_preview_text_file(config);
+
+    let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
+    let (server_url, model) = config.resolve_server(language.as_deref());
+    let client = WhisperClient::new(server_url.to_string())
+        .with_language(language.clone())
+        .with_api_key(config.api_key.clone())
+        .with_model(model)
+        .with_prompt(config.prompt.clone());
+    let grammar = config.active_grammar();
+    let mut ghost = GhostClient::new(default_socket_path());
+
+    // Bound to the one recorder it was started for: a later recording (even
+    // one reusing the PID) is not ours to preview.
+    let recorder_alive = || same_process(recorder_pid, recorder_start);
+
+    let mut last_len = 0usize;
+    let mut last_shown = String::new();
+    while recorder_alive() {
+        tokio::time::sleep(INTERVAL).await;
+        let Ok(bytes) = std::fs::read(&audio_file) else {
+            continue;
+        };
+        let Some(pcm) = growing_wav_payload(&bytes) else {
+            continue;
+        };
+        if pcm.len() < MIN_BYTES || pcm.len() > MAX_BYTES || pcm.len() == last_len {
+            continue;
+        }
+        last_len = pcm.len();
+        if write_pcm16_wav(&partial, pcm, 16_000).is_err() {
+            continue;
+        }
+        let text = match client
+            .transcribe_preview(&partial, grammar.as_deref(), DEADLINE)
+            .await
+        {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::debug!("Ghost preview transcription: {}", e);
+                continue;
+            }
+        };
+        let text = if config.bash_mode {
+            text
+        } else {
+            config.text_filters.apply(&text, language.as_deref())
+        };
+        if text.is_empty() || text == last_shown || !recorder_alive() {
+            continue;
+        }
+        match ghost.preedit(&text) {
+            Ok(_) => {
+                last_shown = text;
+                let _ = std::fs::write(&text_file, &last_shown);
+            }
+            Err(e) => tracing::debug!("Ghost preview: {}", e),
+        }
+    }
+    let _ = std::fs::remove_file(&partial);
+    // Natural exit: drop our PID record so nothing signals a recycled PID.
+    let pid_file = ghost_preview_pid_file(config);
+    let me = std::process::id().to_string();
+    if std::fs::read_to_string(&pid_file)
+        .is_ok_and(|r| r.split_whitespace().next() == Some(me.as_str()))
+    {
+        let _ = std::fs::remove_file(&pid_file);
+    }
     Ok(())
 }
 
@@ -930,6 +1172,11 @@ async fn stop_and_transcribe(
         tracing::warn!("Recording process not alive (PID: {})", pid);
         return Ok(());
     }
+
+    // A ghost preview belongs to this recording: stop it first so no late
+    // partial can land after the final commit. Its last ghost is re-shown
+    // below and replaced by the committed text.
+    let ghost_session = stop_ghost_preview(config);
 
     let stop_start = std::time::Instant::now();
     process_mgr
@@ -1022,7 +1269,23 @@ async fn stop_and_transcribe(
             tracing::debug!("Filtered text: {}", filtered_text);
 
             let typing_start = std::time::Instant::now();
-            match TextInput::type_text(&filtered_text, config.typing_mode) {
+            use ears::ghost::Delivery;
+            let delivery = match ghost_session {
+                Some(last) if config.typing_mode != ears::desktop::TypingMode::None => {
+                    deliver_via_ghost(&last, &filtered_text)
+                }
+                _ => Delivery::NotDelivered,
+            };
+            let typed = match delivery {
+                Delivery::Delivered => Ok(()),
+                Delivery::NotDelivered => TextInput::type_text(&filtered_text, config.typing_mode),
+                // Possibly delivered already; typing again could duplicate it.
+                Delivery::Unknown => Err(anyhow::anyhow!(
+                    "ghost commit outcome unknown; text not retyped: {}",
+                    filtered_text
+                )),
+            };
+            match typed {
                 Ok(()) => {
                     if config.auto_enter {
                         if let Err(e) = TextInput::send_enter() {
@@ -1082,6 +1345,33 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_process_identity_rejects_recycled_pid() {
+        let me = std::process::id() as i32;
+        let start = proc_start_time(me).expect("own start time");
+        assert!(same_process(me, start));
+        // Same PID, different start: a recycled PID is not the recorder.
+        assert!(!same_process(me, start + 1));
+        assert!(!same_process(0, start));
+        assert!(!same_process(-1, start));
+    }
+
+    #[test]
+    fn test_preview_stops_when_its_recorder_is_replaced() {
+        // A preview is bound to one recorder: once that process is gone, a
+        // new recording (whatever its PID) does not keep the preview alive.
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let start = proc_start_time(pid).unwrap();
+        assert!(same_process(pid, start));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!same_process(pid, start));
+    }
 
     #[test]
     fn test_set_server_validation() {

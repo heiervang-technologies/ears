@@ -17,11 +17,35 @@ pub struct Cli {
 pub enum Commands {
     /// Toggle recording/transcription (for keyboard shortcuts)
     #[command(alias = "t")]
-    Toggle,
+    Toggle {
+        /// Show the transcript as inline ghost text while recording (via the
+        /// fcitx5 `earsghost` addon) and commit it on the second press.
+        #[arg(long)]
+        ghost: bool,
+    },
 
     /// Toggle VAD (Voice Activity Detection) mode (for keyboard shortcuts)
     #[command(alias = "v")]
     Vad,
+
+    /// Toggle VAD with ghost completion: while you speak, the transcript is
+    /// shown as inline preedit ("ghost text") in the focused app via the
+    /// fcitx5 `earsghost` addon, and committed when the utterance ends.
+    /// Shares the VAD toggle: running either command again stops listening.
+    #[command(alias = "g")]
+    Ghost,
+
+    /// Internal: ghost preview loop for a push-to-talk recording
+    #[command(hide = true)]
+    GhostPreview {
+        /// PID of the recorder this preview belongs to
+        #[arg(long)]
+        recorder_pid: i32,
+        /// Start time (clock ticks since boot) of that recorder, so a
+        /// recycled PID is not mistaken for it
+        #[arg(long)]
+        recorder_start: u64,
+    },
 
     /// Start WebSocket server for remote audio input (VAD pipeline)
     #[command(alias = "ws")]
@@ -119,13 +143,13 @@ mod tests {
     #[test]
     fn test_cli_toggle() {
         let cli = Cli::try_parse_from(["ears", "toggle"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Toggle)));
+        assert!(matches!(cli.command, Some(Commands::Toggle { .. })));
     }
 
     #[test]
     fn test_cli_toggle_alias() {
         let cli = Cli::try_parse_from(["ears", "t"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Toggle)));
+        assert!(matches!(cli.command, Some(Commands::Toggle { .. })));
     }
 
     #[test]
@@ -250,7 +274,7 @@ mod tests {
     fn test_cli_profile() {
         let cli = Cli::try_parse_from(["ears", "--profile", "groq", "toggle"]).unwrap();
         assert_eq!(cli.profile.as_deref(), Some("groq"));
-        assert!(matches!(cli.command, Some(Commands::Toggle)));
+        assert!(matches!(cli.command, Some(Commands::Toggle { .. })));
     }
 
     #[test]

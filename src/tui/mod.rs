@@ -66,6 +66,9 @@ pub struct TypingSettings {
     pub language: Option<String>,
     /// Active guided grammar (bash mode); `None` = plain transcription.
     pub guided_grammar: Option<String>,
+    /// Ghost completion: show partials as inline preedit via the fcitx5
+    /// `earsghost` addon and commit the final text through it.
+    pub ghost: bool,
 }
 
 impl Default for TypingSettings {
@@ -78,6 +81,7 @@ impl Default for TypingSettings {
             text_filters: crate::text_filters::TextFilters::default(),
             language: None,
             guided_grammar: None,
+            ghost: false,
         }
     }
 }
@@ -180,6 +184,7 @@ pub async fn start_vad_pipeline(
                     engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
                     engine.set_text_filters(s.text_filters, s.language);
                     engine.set_guided_grammar(s.guided_grammar.clone());
+                    engine.set_ghost(s.ghost);
                     tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
                 }
                 _ = shutdown_rx.changed() => {
@@ -336,6 +341,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         text_filters: app.text_filters.clone(),
                         language: app.language.clone(),
                         guided_grammar: app.active_grammar(),
+                        ghost: false,
                     });
                 }
             }
@@ -363,6 +369,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             text_filters: app.text_filters.clone(),
                             language: app.language.clone(),
                             guided_grammar: app.active_grammar(),
+                            ghost: false,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

@@ -335,6 +335,34 @@ impl WhisperClient {
         Ok(filtered)
     }
 
+    /// Single-attempt transcription for previews (ghost partials).
+    ///
+    /// No retries and a short deadline: a preview that is late is worthless,
+    /// and a retrying preview would hold up the next, fresher one.
+    pub async fn transcribe_preview(
+        &self,
+        audio_path: impl AsRef<Path>,
+        grammar: Option<&str>,
+        deadline: Duration,
+    ) -> Result<String, WhisperError> {
+        let path = audio_path.as_ref();
+        self.validate_audio_file(path).await?;
+        let attempt = async {
+            match grammar {
+                Some(g) => self.transcribe_chat_internal(path, g).await,
+                None => self.transcribe_internal(path).await,
+            }
+        };
+        let text = tokio::time::timeout(deadline, attempt)
+            .await
+            .map_err(|_| WhisperError::TranscriptionError("preview timed out".to_string()))??;
+        let filtered = self.filter_silence_artifacts(&text);
+        if filtered.is_empty() {
+            return Err(WhisperError::EmptyTranscription);
+        }
+        Ok(filtered)
+    }
+
     /// Validates that an audio file exists and contains audio data
     async fn validate_audio_file(&self, path: &Path) -> Result<(), WhisperError> {
         if !path.exists() {
