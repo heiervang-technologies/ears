@@ -12,8 +12,8 @@
 //!
 //! ```text
 //! P <text>   show <text> as the ghost (replaces the previous one)
-//! F <n> <text>  as P, marking the first <n> bytes as frozen (settled:
-//!            they will not change); apps can colour them differently
+//! F <bytes> <text>   show with a frozen live prefix and mutable tail
+//! T          read snapshot: "OK state <bytes> <escaped text>"
 //! C <text>   clear the ghost and commit <text>
 //! X          clear the ghost
 //! S          status
@@ -46,6 +46,48 @@ pub enum GhostError {
     Io(#[from] std::io::Error),
     #[error("ghost addon replied with an error: {0}")]
     Rejected(String),
+}
+
+/// Displayed ghost text and its live forced-prefix boundary. A snapshot
+/// never commits text and makes no promise about an optional final correction.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GhostSnapshot {
+    pub scope: &'static str,
+    pub text: String,
+    pub frozen_bytes: usize,
+}
+
+impl GhostSnapshot {
+    fn parse(line: &str) -> Result<Self, GhostError> {
+        let (count, escaped) = line
+            .strip_prefix("OK state ")
+            .and_then(|s| s.split_once(' '))
+            .ok_or_else(|| GhostError::Rejected(line.to_string()))?;
+        let frozen_bytes: usize = count
+            .parse()
+            .map_err(|_| GhostError::Rejected("invalid freeze boundary".into()))?;
+        let mut text = String::new();
+        let mut chars = escaped.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => text.push('\n'),
+                    Some(c) => text.push(c),
+                    None => return Err(GhostError::Rejected("truncated escape".into())),
+                }
+            } else {
+                text.push(c);
+            }
+        }
+        if frozen_bytes > text.len() || !text.is_char_boundary(frozen_bytes) {
+            return Err(GhostError::Rejected("invalid freeze boundary".into()));
+        }
+        Ok(Self {
+            scope: "live_decode",
+            text,
+            frozen_bytes,
+        })
+    }
 }
 
 /// How the addon displayed or delivered the last command.
@@ -220,7 +262,7 @@ pub struct GhostClient {
     path: PathBuf,
     conn: Option<(UnixStream, BufReader<UnixStream>)>,
     active_class: fn() -> Option<String>,
-    /// The addon predates `F`; send plain `P` instead.
+    /// Remember an addon that does not understand frozen boundaries.
     no_frozen: bool,
 }
 
@@ -242,6 +284,18 @@ impl GhostClient {
     /// Is the addon reachable right now?
     pub fn probe(&mut self) -> Result<GhostDisplay, GhostError> {
         self.send("S").map(|(shown, _)| shown)
+    }
+
+    /// Observe without claiming the ghost, changing focus, or entering text.
+    pub fn snapshot(&mut self) -> Result<GhostSnapshot, GhostError> {
+        self.connect()?;
+        let result = self
+            .exchange_line("T")
+            .and_then(|s| GhostSnapshot::parse(&s));
+        if result.is_err() {
+            self.conn = None;
+        }
+        result
     }
 
     /// Does the addon's input context plausibly belong to the focused window?
@@ -271,25 +325,28 @@ impl GhostClient {
         self.preedit_frozen(text, 0)
     }
 
-    /// Like [`Self::preedit`], with the first `frozen` bytes of `text`
-    /// marked as settled. An addon without `F` gets plain `P`.
+    /// Show the exact forced-prefix boundary (UTF-8 bytes). Frozen text is
+    /// highlighted preedit; the revisable suffix is underlined. This freezes live
+    /// decoding only, not application delivery or an optional final correction.
     pub fn preedit_frozen(
         &mut self,
         text: &str,
-        frozen: usize,
+        frozen_bytes: usize,
     ) -> Result<GhostDisplay, GhostError> {
         if !self.focus_matches()? {
             self.send("X")?;
             return Ok(GhostDisplay::None);
         }
-        let frozen = floor_char_boundary(text, frozen);
-        if frozen > 0 && !self.no_frozen {
-            match self.send(&format!("F {} {}", frozen, escape(text))) {
-                Err(GhostError::Rejected(reply)) if reply.starts_with("ERR unknown") => {
-                    tracing::info!("Ghost addon has no frozen text; reinstall it for colours");
+        let frozen_bytes = crate::freeze::boundary(text, frozen_bytes);
+        // The wire protocol drops CR; count bytes in the unescaped text the
+        // addon will actually receive, not in the original transcript.
+        let frozen_bytes = text[..frozen_bytes].bytes().filter(|b| *b != b'\r').count();
+        if frozen_bytes > 0 && !self.no_frozen {
+            match self.send(&format!("F {} {}", frozen_bytes, escape(text))) {
+                Err(GhostError::Rejected(reply)) if reply == "ERR unknown command" => {
                     self.no_frozen = true;
                 }
-                other => return other.map(|(shown, _)| shown),
+                result => return result.map(|(shown, _)| shown),
             }
         }
         self.send(&format!("P {}", escape(text)))
@@ -347,6 +404,10 @@ impl GhostClient {
     }
 
     fn exchange(&mut self, line: &str) -> Result<(GhostDisplay, Option<String>), GhostError> {
+        parse_reply(&self.exchange_line(line)?)
+    }
+
+    fn exchange_line(&mut self, line: &str) -> Result<String, GhostError> {
         let (stream, reader) = self.conn.as_mut().expect("connected above");
         stream.write_all(line.as_bytes())?;
         stream.write_all(b"\n")?;
@@ -357,16 +418,8 @@ impl GhostClient {
                 "addon closed the connection",
             )));
         }
-        parse_reply(reply.trim_end())
+        Ok(reply.trim_end_matches('\n').to_string())
     }
-}
-
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    let mut end = index.min(text.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
 }
 
 /// Bytes at the start of `shown` that are settled: the longest prefix it
@@ -410,11 +463,7 @@ mod tests {
     /// Minimal stand-in for the addon: records lines, reports "TestApp" as
     /// focused and answers "OK preedit". With `drop_on_commit` it hangs up
     /// on `C` without replying, like an addon that crashed mid-commit.
-    fn fake_addon_with(
-        path: PathBuf,
-        drop_on_commit: bool,
-        legacy: bool,
-    ) -> mpsc::Receiver<String> {
+    fn fake_addon_with(path: PathBuf, drop_on_commit: bool) -> mpsc::Receiver<String> {
         let listener = UnixListener::bind(&path).unwrap();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -427,8 +476,6 @@ mod tests {
                     let commit = line.starts_with('C');
                     let reply: &[u8] = if line == "S" {
                         b"OK preedit TestApp\n"
-                    } else if legacy && line.starts_with("F ") {
-                        b"ERR unknown command\n"
                     } else {
                         b"OK preedit\n"
                     };
@@ -444,7 +491,7 @@ mod tests {
     }
 
     fn fake_addon(path: PathBuf) -> mpsc::Receiver<String> {
-        fake_addon_with(path, false, false)
+        fake_addon_with(path, false)
     }
 
     fn focus_on_test_app() -> Option<String> {
@@ -462,6 +509,94 @@ mod tests {
     /// Commands the client sent, minus the status queries around them.
     fn commands(rx: &mpsc::Receiver<String>) -> Vec<String> {
         rx.try_iter().filter(|l| l != "S").collect()
+    }
+
+    #[test]
+    fn snapshot_observer_never_claims_focus_or_ghost_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for reply in ["OK state 5 hello tail\n", "OK state 0 \n"] {
+                let mut command = String::new();
+                reader.read_line(&mut command).unwrap();
+                assert_eq!(command, "T\n");
+                stream.write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        let mut observer = GhostClient::with_focus_probe(path, || panic!("observer probed focus"));
+        assert_eq!(observer.snapshot().unwrap().frozen_bytes, 5);
+        assert!(observer.snapshot().unwrap().text.is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn snapshot_boundaries_roundtrip_and_reject_malformed_frames() {
+        let state = GhostSnapshot::parse("OK state 4 blå\\nrevisable\\\\tail").unwrap();
+        assert_eq!(&state.text[..state.frozen_bytes], "blå");
+        assert_eq!(state.text, "blå\nrevisable\\tail");
+        assert_eq!(GhostSnapshot::parse("OK state 0 ").unwrap().text, "");
+        for bad in [
+            "OK state 3 blå",
+            "OK state 999 x",
+            "OK state no x",
+            "ERR unknown command",
+        ] {
+            assert!(GhostSnapshot::parse(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn frozen_preedit_keeps_utf8_boundary_and_escapes_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let rx = fake_addon(path.clone());
+        let mut client = client(path);
+        client.preedit_frozen("blå\nnext", 4).unwrap();
+        client.preedit_frozen("blå\nnext", 3).unwrap();
+        assert_eq!(commands(&rx), ["F 4 blå\\nnext", "P blå\\nnext"]);
+    }
+
+    #[test]
+    fn frozen_preedit_falls_back_with_an_older_addon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            // Rejected replies discard the connection; the retry reconnects.
+            for stream in listener.incoming() {
+                let stream = stream.unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                for line in BufReader::new(stream).lines() {
+                    let line = line.unwrap();
+                    let response = if line == "S" {
+                        "OK preedit TestApp\n"
+                    } else if line.starts_with("F ") {
+                        "ERR unknown command\n"
+                    } else {
+                        "OK preedit\n"
+                    };
+                    writer.write_all(response.as_bytes()).unwrap();
+                    let done = line.starts_with("P ");
+                    seen.push(line);
+                    if done {
+                        return seen;
+                    }
+                }
+            }
+            seen
+        });
+        assert_eq!(
+            client(path).preedit_frozen("hello tail", 5).unwrap(),
+            GhostDisplay::Preedit
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            ["S", "F 5 hello tail", "S", "P hello tail"]
+        );
     }
 
     #[test]
@@ -549,35 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn frozen_text_is_marked_and_falls_back_for_old_addons() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ghost.sock");
-        let rx = fake_addon(path.clone());
-        let mut new = client(path);
-        new.preedit_frozen("hello wor", 5).unwrap();
-        new.preedit_frozen("hé", 2).unwrap(); // mid-character: floor
-        new.preedit_frozen("hi", 0).unwrap();
-        assert_eq!(commands(&rx), ["F 5 hello wor", "F 1 hé", "P hi"]);
-
-        let path = dir.path().join("old.sock");
-        let rx = fake_addon_with(path.clone(), false, true);
-        let mut old = client(path);
-        assert_eq!(old.preedit_frozen("ab", 1).unwrap(), GhostDisplay::Preedit);
-        assert_eq!(old.preedit_frozen("abc", 1).unwrap(), GhostDisplay::Preedit);
-        assert_eq!(commands(&rx), ["F 1 ab", "P ab", "P abc"]);
-    }
-
-    #[test]
-    fn frozen_len_is_the_shared_prefix() {
-        assert_eq!(frozen_len("Hello world, how", "Hello world,"), 12);
-        assert_eq!(frozen_len("Hello world", "Hello there"), 6);
-        assert_eq!(frozen_len("héllo", "hé"), 3);
-        assert_eq!(frozen_len("hello", ""), 0);
-        assert_eq!(frozen_len("hello", "  "), 0);
-        assert_eq!(frozen_len("hello", "hello there"), 5);
-    }
-
-    #[test]
     fn focus_mismatch_types_instead_of_committing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
@@ -620,7 +726,7 @@ mod tests {
     fn lost_commit_reply_is_unknown_not_retried() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
-        let _rx = fake_addon_with(path.clone(), true, false);
+        let _rx = fake_addon_with(path.clone(), true);
         let mut client = client(path);
         assert_eq!(client.commit("hi"), Delivery::Unknown);
     }

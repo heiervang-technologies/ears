@@ -82,10 +82,7 @@ pub struct StreamPartial {
 impl StreamPartial {
     /// Settled prefix; a bad offset from the server settles less, never more.
     pub fn stable(&self) -> &str {
-        let mut end = self.stable_chars.min(self.text.len());
-        while !self.text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = crate::freeze::boundary(&self.text, self.stable_chars);
         self.text[..end].trim_end()
     }
 
@@ -782,13 +779,13 @@ mod tests {
             language: None,
             ..p
         };
-        assert_eq!(p.stable(), "bl");
+        assert_eq!(p.stable(), "");
         assert_eq!(p.snapshot().header, None);
         let p = StreamPartial {
             stable_chars: 99,
             ..p
         };
-        assert_eq!(p.stable(), "blåbær");
+        assert_eq!(p.stable(), "");
     }
 
     #[tokio::test]

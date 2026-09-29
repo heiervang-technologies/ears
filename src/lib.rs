@@ -27,6 +27,7 @@ pub mod tui;
 pub mod continuous;
 pub mod continuous_capture;
 pub mod ducker;
+pub mod freeze;
 pub mod ghost;
 pub mod ghost_style;
 pub mod health;

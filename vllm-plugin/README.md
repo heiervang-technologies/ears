@@ -92,6 +92,10 @@ python tools/check_prompt.py http://localhost:30189   # 36/36 token-identical
 ```
 
 `|` marks `stable_chars`: text left of it is settled for the utterance.
+Add `--tokens` to display the model tokenizer's frozen/mutable spans and
+8-second encoder-window state. See [token freeze tracking](../docs/TOKEN_FREEZE.md)
+for the additive `stability` fields and the distinction between live freezing
+and final correction.
 
 ## Develop
 

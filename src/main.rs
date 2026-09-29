@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
             ears::ghost_style::apply(&config.ghost);
             handle_vad(&config, true).await?;
         }
+        Some(Commands::GhostWatch { json }) => {
+            watch_ghost(json).await?;
+        }
         Some(Commands::GhostStyle {
             color,
             underline,
@@ -939,6 +942,35 @@ async fn start_recording(
     Ok(())
 }
 
+/// Read-only visualization independent of the target app's preedit styling.
+async fn watch_ghost(json: bool) -> Result<()> {
+    let mut client = ears::ghost::GhostClient::new(ears::ghost::default_socket_path());
+    let mut previous = None;
+    let mut interval = tokio::time::interval(Duration::from_millis(150));
+    if !json {
+        eprintln!("Live decoding: FROZEN | revisable. Full final correction may replace the prefix. Ctrl-C to stop.");
+    }
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = interval.tick() => {
+                let state = client.snapshot().context("ghost-watch requires the updated fcitx5 earsghost addon")?;
+                if previous.as_ref() == Some(&state) { continue; }
+                if json {
+                    println!("{}", serde_json::to_string(&state)?);
+                } else if state.text.is_empty() {
+                    println!("[no ghost]");
+                } else {
+                    // Debug strings escape terminal control characters in ASR output.
+                    println!("FROZEN {:?} | revisable {:?}", &state.text[..state.frozen_bytes], &state.text[state.frozen_bytes..]);
+                }
+                previous = Some(state);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `ears ghost-style`: show or change the ghost style and write it into the
 /// apps that support it.
 fn ghost_style_command(
@@ -1174,23 +1206,23 @@ struct PreviewGhost<'a> {
 }
 
 impl PreviewGhost<'_> {
-    /// Show `text`, of which the `settled` prefix will not change.
-    fn show(&mut self, text: String, settled: &str) {
-        let filter = |t: &str| {
-            if self.config.bash_mode {
-                t.to_string()
-            } else {
-                self.config.text_filters.apply(t, self.language.as_deref())
-            }
+    fn show(&mut self, text: String, frozen_bytes: usize) {
+        let (text, frozen_bytes) = if self.config.bash_mode {
+            (text, 0)
+        } else {
+            ears::freeze::filtered(
+                &text,
+                frozen_bytes,
+                &self.config.text_filters,
+                self.language.as_deref(),
+            )
         };
-        let text = filter(&text);
-        let frozen = ears::ghost::frozen_len(&text, &filter(settled));
-        if text.is_empty() || (text == self.last_shown && frozen == self.last_frozen) {
+        if text == self.last_shown && frozen_bytes == self.last_frozen {
             return;
         }
-        match self.client.preedit_frozen(&text, frozen) {
+        match self.client.preedit_frozen(&text, frozen_bytes) {
             Ok(_) => {
-                self.last_frozen = frozen;
+                self.last_frozen = frozen_bytes;
                 self.last_shown = text;
                 let _ = std::fs::write(&self.text_file, &self.last_shown);
             }
@@ -1291,10 +1323,9 @@ async fn stream_ghost_preview(
                     state.offset = offset;
                     state.owner = Some(owner.to_string());
                     write_continuous_state(&state_file, &state);
-                    ghost.show(
-                        join_segments(&state.prefix, partial.text.trim()),
-                        &join_segments(&state.prefix, partial.stable()),
-                    );
+                    let text = join_segments(&state.prefix, partial.text.trim());
+                    let frozen = join_segments(&state.prefix, &state.stable);
+                    ghost.show(text.clone(), if text.starts_with(&frozen) { frozen.len() } else { 0 });
                 }
                 Some(StreamEvent::Final { utterance: done, text }) if done == utterance && ending => {
                     // The finished segment's text is now fixed; the next one
@@ -1307,7 +1338,7 @@ async fn stream_ghost_preview(
                         ..DecoderState::default()
                     };
                     write_continuous_state(&state_file, &state);
-                    ghost.show(state.prefix.clone(), &state.prefix);
+                    ghost.show(state.prefix.clone(), state.prefix.len());
                     utterance += 1;
                     segment = 0;
                     ending = false;
@@ -1436,7 +1467,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
             continue;
         }
         last_len = pcm.len();
-        let (text, settled) = if let Some(decoder) = continuous.as_mut() {
+        let text = if let Some(decoder) = continuous.as_mut() {
             let all = samples(pcm);
             let segment = &all[offset.min(all.len())..];
             // Finish the segment at a pause before it outgrows the context.
@@ -1469,16 +1500,15 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
                         ..decoder.snapshot()
                     };
                     write_continuous_state(&state_file, &state);
-                    (prefix.clone(), prefix.clone())
+                    prefix.clone()
                 }
                 Ok(text) => {
                     let mut state = decoder.snapshot();
                     state.owner = Some(owner.clone());
                     state.prefix = prefix.clone();
                     state.offset = offset;
-                    let settled = join_segments(&prefix, &state.stable);
                     write_continuous_state(&state_file, &state);
-                    (join_segments(&prefix, &text), settled)
+                    join_segments(&prefix, &text)
                 }
                 Err(ContinuousError::Unsupported(e)) => {
                     let state = ears::continuous::DecoderState {
@@ -1505,7 +1535,7 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
                 .transcribe_preview(&partial, grammar.as_deref(), DEADLINE)
                 .await
             {
-                Ok(text) => (text, String::new()),
+                Ok(text) => text,
                 Err(e) => {
                     tracing::debug!("Ghost preview transcription: {}", e);
                     continue;
@@ -1515,7 +1545,16 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
         if !recorder_alive() {
             continue;
         }
-        ghost.show(text, &settled);
+        let frozen = continuous
+            .as_ref()
+            .map(|d| join_segments(&prefix, &d.snapshot().stable))
+            .unwrap_or_default();
+        let frozen_bytes = if text.starts_with(&frozen) {
+            frozen.len()
+        } else {
+            0
+        };
+        ghost.show(text, frozen_bytes);
     }
     let _ = std::fs::remove_file(&partial);
     // Natural exit: drop our PID record so nothing signals a recycled PID.

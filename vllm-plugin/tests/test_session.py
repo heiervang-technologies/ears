@@ -99,7 +99,7 @@ def test_partial_final_flow_with_forced_language():
         assert p1 == {"type": "partial", "utterance": 7, "seq": 1,
                       "text": "Hello there friend", "stable_chars": 11,
                       "language": "English", "audio_ms": 300,
-                      "decode_ms": p1["decode_ms"]}
+                      "decode_ms": p1["decode_ms"], "stability": p1["stability"]}
         assert p2["seq"] == 2 and p2["text"] == "Hello there my friend."
         assert p2["stable_chars"] == len("Hello there my")
         (final,) = h.of("final")
@@ -363,7 +363,10 @@ def test_short_final_without_audio_needs_no_decode():
         await h.text(type="end", utterance=1)
         assert not d.calls
         assert h.sent == [{"type": "final", "utterance": 1, "text": "",
-                           "audio_ms": 0, "decode_ms": 0}]
+                           "audio_ms": 0, "decode_ms": 0, "stability": {
+                               "profile": "qwen3_asr_forced_prefix_v1", "scope": "final",
+                               "frozen_bytes": 0, "rollback_words": 3, "encoder_window_ms": 8000,
+                               "closed_audio_windows": 0, "open_audio_ms": 0}}]
     run(go())
 
 
@@ -489,4 +492,46 @@ def test_decode_failure_then_recovery():
         await h.text(type="start", utterance=3, language="en")
         await h.audio(0.2)
         assert h.sent[-1]["type"] == "partial" and h.sent[-1]["utterance"] == 3
+    run(go())
+
+
+def test_freeze_advances_even_when_the_transcript_does_not_change():
+    async def go():
+        text = "blå one two three four"
+        d = FakeDecoder(EN + text, EN + text, " two three four")
+        h = Harness(d)
+        await h.text(type="start", utterance=1)
+        await h.audio(1.0)
+        await h.audio(1.0)  # same text, language now pinned
+        first, second = h.of("partial")
+        assert first["text"] == second["text"]
+        assert first["stability"]["frozen_bytes"] == 0
+        assert second["stability"]["frozen_bytes"] == len("blå one".encode())
+        assert second["stability"]["scope"] == "live_decode"
+        await h.text(type="end", utterance=1)
+        final, = h.of("final")
+        assert final["stability"]["scope"] == "final"
+        assert final["stability"]["frozen_bytes"] == len(final["text"].encode())
+        assert d.calls[-1]["prefix"] == EN + "blå one"
+    run(go())
+
+
+def test_freeze_window_metadata_and_optional_token_spans():
+    async def go():
+        class TokenDecoder(FakeDecoder):
+            def transcript_tokens(self, text, frozen_bytes):
+                return [{"id": 42, "start_byte": 0, "end_byte": 5, "state": "frozen"}]
+        h = Harness(TokenDecoder("hello one two three"))
+        await h.text(type="start", utterance=1, language="en")
+        await h.audio(8.5)
+        partial, = h.of("partial")
+        state = partial["stability"]
+        assert state["profile"] == "qwen3_asr_forced_prefix_v1"
+        assert state["frozen_bytes"] == partial["stable_chars"] == 5
+        assert state["closed_audio_windows"] == 1
+        assert state["open_audio_ms"] == 500
+        assert state["encoder_window_ms"] == 8000
+        assert state["token_basis"] == "retokenized_transcript"
+        assert state["tokens"][0]["id"] == 42
+        await h.session.close()
     run(go())

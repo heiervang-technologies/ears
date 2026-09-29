@@ -369,6 +369,14 @@ the connection drops mid-utterance that utterance is finished per tick from
 the text already settled. The committed text comes from the same final path
 either way, so nothing is ever committed twice.
 
+The Qwen continuous path also tracks the exact frozen text prefix. Updated
+ghost addons underline only the revisable tail; the stream plugin supplies
+model-tokenizer spans for inspection with `stream_wav.py --tokens`.
+Use `ears ghost-watch` for the live split in any app, or `--json` for other visualizers.
+Frozen means fixed during live decoding; full final correction can replace
+it. See [token freeze tracking](docs/TOKEN_FREEZE.md) for the guarantees,
+visualization, and protocol fields.
+
 ### All Commands
 
 ```
