@@ -544,11 +544,11 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     }
 
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);
-    ears::ipc::start_ipc_server(ipc_rx);
+    let ipc_server = ears::ipc::start_ipc_server(ipc_rx);
 
     // Start command server for remote control (e.g. `ears auto-enter`)
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
-    ears::ipc::start_cmd_server(cmd_tx);
+    let cmd_server = ears::ipc::start_cmd_server(cmd_tx);
 
     // Track mutable settings for command updates
     let mut auto_enter = config.auto_enter;
@@ -655,8 +655,8 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     // Restore audio volume if we shut down mid-speech.
     ducker.on_speech_ended();
     drop(ducker);
-    ears::ipc::cleanup_socket();
-    ears::ipc::cleanup_cmd_socket();
+    ipc_server.shutdown().await;
+    cmd_server.shutdown().await;
     if let Err(e) = std::fs::remove_file(&vad_pid_file) {
         tracing::debug!("Failed to remove VAD PID file: {}", e);
     }
@@ -791,7 +791,7 @@ async fn handle_ws_listen(
         });
 
         // IPC server on custom socket path (avoids conflict with desktop ears)
-        ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
+        let ipc_server = ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
 
         let ws_save_to_clipboard = config.save_to_clipboard;
         tokio::spawn(async move {
@@ -830,9 +830,8 @@ async fn handle_ws_listen(
         let _ = shutdown_tx.send(true);
         let _ = pipeline_handle.await;
         ws_handle.abort();
+        ipc_server.shutdown().await;
     }
-
-    ears::ipc::cleanup_socket_at(&socket_path);
 
     Ok(())
 }

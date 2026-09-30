@@ -246,11 +246,24 @@ Continuous decoding (`src/continuous.rs`) relies on Qwen3-ASR's audio encoder at
 
 ears exposes two Unix domain sockets for inter-process communication.
 
+Each listener holds a per-path flock (`<socket>.lock`) for its lifetime. A
+second owner cannot unlink or replace it. Startup probes an existing socket
+before reclaiming a dead listener from an older version; timeouts and unknown
+errors fail closed. Regular files and symlinks are never removed. Shutdown
+checks the socket's device/inode before unlinking, so a late owner cannot remove
+a replacement. Lock files intentionally persist to preserve flock identity.
+
+Callers retain an `ipc::IpcServer` handle and await `shutdown()` when stopping.
+Dropping the handle cancels the listener and its connection tasks. Event and
+command servers share this ownership implementation; explicit-path variants
+support independent desktop and WebSocket instances. The old path-only cleanup
+functions have been removed because they could not prove ownership.
+
 ### Event Socket (read-only broadcast)
 
 **Path**: `$XDG_RUNTIME_DIR/ears.sock` (or `/tmp/ears.sock` fallback)
 
-Broadcasts `StreamingEvent`s as newline-delimited JSON (NDJSON). Each connected client receives all events via a `tokio::sync::broadcast` channel. Clients that fall behind receive a "lagged" notification and skip missed events.
+Broadcasts `StreamingEvent`s as newline-delimited JSON (NDJSON). Each connected client receives all events via a `tokio::sync::broadcast` channel. When a client falls behind, the server logs the skipped-event count; no separate notification frame is sent.
 
 Protocol: connect, then read lines. Each line is a JSON-serialized `StreamingEvent`.
 
