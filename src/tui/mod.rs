@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use crate::config::Config;
-use crate::continuous_capture::{CaptureStatus, ContinuousCapture, ContinuousCaptureConfig};
+use crate::continuous_capture::{ContinuousCapture, ContinuousCaptureConfig};
 use crate::progressive_typing::ProgressiveTypingConfig;
 use crate::state::{State as EarsState, StateManager};
 use crate::streaming::StreamingConfig;
@@ -128,7 +128,7 @@ pub async fn start_vad_pipeline(
     health.device(&config.device);
 
     // Audio channel
-    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+    let (audio_tx, mut audio_rx) = crate::pipeline::audio_channel();
 
     // Start continuous capture
     let capture_config = ContinuousCaptureConfig {
@@ -140,7 +140,7 @@ pub async fn start_vad_pipeline(
     capture.set_health(health.clone());
     capture.set_audio_sender(audio_tx);
     capture.start().await?;
-    let mut capture_status = capture.status_rx();
+    let capture_status = capture.status_rx();
 
     // Create streaming engine with VAD settings from config
     let streaming_config = StreamingConfig::default();
@@ -171,48 +171,41 @@ pub async fn start_vad_pipeline(
     let (settings_tx, mut settings_rx) = watch::channel(TypingSettings::default());
 
     // Spawn audio processing task
-    let handle = tokio::spawn(crate::pipeline::until_shutdown(shutdown_rx, async move {
-        let _health_monitor = health_monitor;
-        loop {
-            tokio::select! {
-                audio = audio_rx.recv() => {
-                    match audio {
-                        Some(samples) => {
-                            health.queue(audio_rx.len());
-                            if let Err(e) = engine.process_audio(&samples).await {
-                                tracing::warn!("Audio processing error: {}", e);
+    let handle = tokio::spawn(crate::pipeline::until_shutdown(
+        shutdown_rx,
+        crate::pipeline::until_capture_stops(capture_status, engine_event_tx, async move {
+            let _health_monitor = health_monitor;
+            loop {
+                tokio::select! {
+                    audio = audio_rx.recv() => {
+                        match audio {
+                            Some(samples) => {
+                                health.queue(audio_rx.len());
+                                if let Err(e) = engine.process_audio(&samples).await {
+                                    tracing::warn!("Audio processing error: {}", e);
+                                }
+                            }
+                            None => {
+                                tracing::debug!("Audio channel closed");
+                                break;
                             }
                         }
-                        None => {
-                            tracing::debug!("Audio channel closed");
-                            break;
-                        }
                     }
-                }
-                Ok(()) = settings_rx.changed() => {
-                    let s = settings_rx.borrow_and_update().clone();
-                    engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
-                    engine.set_text_filters(s.text_filters, s.language);
-                    engine.set_guided_grammar(s.guided_grammar.clone());
-                    engine.set_ghost(s.ghost);
-                    tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
-                }
-                changed = capture_status.changed() => {
-                    if changed.is_err() {
-                        break;
+                    Ok(()) = settings_rx.changed() => {
+                        let s = settings_rx.borrow_and_update().clone();
+                        engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                        engine.set_text_filters(s.text_filters, s.language);
+                        engine.set_guided_grammar(s.guided_grammar.clone());
+                        engine.set_ghost(s.ghost);
+                        tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
                     }
-                    let status = capture_status.borrow_and_update().clone();
-                    if let CaptureStatus::Stopped { reason } = status {
-                        tracing::warn!("VAD pipeline ending: capture stopped ({})", reason);
-                        let _ = engine_event_tx.send(StreamingEvent::CaptureStopped { reason });
-                        break;
-                    }
+
                 }
             }
-        }
-        // Capture is dropped here, which calls stop() via Drop
-        drop(capture);
-    }));
+            // Capture is dropped here, which calls stop() via Drop
+            drop(capture);
+        }),
+    ));
 
     Ok((shutdown_tx, settings_tx, handle))
 }

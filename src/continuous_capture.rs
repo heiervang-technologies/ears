@@ -54,7 +54,7 @@ impl Default for ContinuousCaptureConfig {
         Self {
             device: "default".to_string(),
             sample_rate: 16000,
-            chunk_size: 1600, // 100ms at 16kHz
+            chunk_size: crate::pipeline::AUDIO_CHUNK_SAMPLES, // 100ms at 16kHz
         }
     }
 }
@@ -96,7 +96,7 @@ pub struct ContinuousCapture {
     config: ContinuousCaptureConfig,
 
     /// Channel for sending audio samples
-    audio_tx: Option<mpsc::UnboundedSender<Vec<f32>>>,
+    audio_tx: Option<mpsc::Sender<Vec<f32>>>,
 
     /// Liveness publisher (reader task writes, owners subscribe)
     status_tx: watch::Sender<CaptureStatus>,
@@ -121,7 +121,7 @@ impl ContinuousCapture {
     }
 
     /// Set audio sample sender
-    pub fn set_audio_sender(&mut self, tx: mpsc::UnboundedSender<Vec<f32>>) {
+    pub fn set_audio_sender(&mut self, tx: mpsc::Sender<Vec<f32>>) {
         self.audio_tx = Some(tx);
     }
 
@@ -228,7 +228,7 @@ impl ContinuousCapture {
     fn spawn_reader_task(
         &mut self,
         mut stdout: std::process::ChildStdout,
-        audio_tx: mpsc::UnboundedSender<Vec<f32>>,
+        audio_tx: mpsc::Sender<Vec<f32>>,
         generation: u64,
     ) {
         let chunk_size = self.config.chunk_size;
@@ -265,9 +265,19 @@ impl ContinuousCapture {
                         }
 
                         // Send samples
-                        if audio_tx.send(samples).is_err() {
-                            debug!("Audio receiver dropped, stopping capture");
-                            break None;
+                        match audio_tx.try_send(samples) {
+                            Ok(()) => {
+                                if let Some(ref health) = health {
+                                    health.queue(audio_tx.max_capacity() - audio_tx.capacity());
+                                }
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                debug!("Audio receiver dropped, stopping capture");
+                                break None;
+                            }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                break Some("audio backlog limit reached; restart listening when transcription is responsive".into());
+                            }
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -407,6 +417,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_audio_queue_stops_and_reaps_capture() {
+        let root = TempDir::new().unwrap();
+        let mut capture =
+            ContinuousCapture::new(ContinuousCaptureConfig::default(), root.path().into());
+        let (tx, rx) = mpsc::channel(2);
+        capture.set_audio_sender(tx);
+        install_fake(&mut capture, sh("cat /dev/zero"));
+        let mut status = capture.status_rx();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let CaptureStatus::Stopped { reason } = status.borrow_and_update().clone() {
+                    assert!(reason.contains("audio backlog limit"));
+                    break;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(rx.len(), 2, "queue must not grow or overwrite older audio");
+        assert!(capture.process.lock().unwrap().is_none(), "producer reaped");
+    }
+
+    #[tokio::test]
     async fn test_reader_eof_publishes_stopped() {
         let temp_dir = TempDir::new().unwrap();
         let config = ContinuousCaptureConfig {
@@ -414,7 +448,7 @@ mod tests {
             ..ContinuousCaptureConfig::default()
         };
         let mut capture = ContinuousCapture::new(config, temp_dir.path().into());
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = crate::pipeline::audio_channel();
         capture.set_audio_sender(tx);
 
         // Two full chunks, then EOF.
@@ -476,7 +510,7 @@ mod tests {
             ..ContinuousCaptureConfig::default()
         };
         let mut capture = ContinuousCapture::new(config, temp_dir.path().into());
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = crate::pipeline::audio_channel();
         capture.set_audio_sender(tx);
 
         // Generation 1: writes one chunk, then holds the pipe open a while
@@ -486,7 +520,10 @@ mod tests {
 
         // "Restart": stop() then install generation 2 (an endless producer).
         capture.stop().unwrap();
-        let gen2 = install_fake(&mut capture, sh("cat /dev/zero"));
+        let gen2 = install_fake(
+            &mut capture,
+            sh("while head -c 200 /dev/zero; do sleep 0.02; done"),
+        );
         assert_ne!(gen1, gen2);
         assert!(capture.is_running());
 
@@ -515,13 +552,13 @@ mod tests {
             ..ContinuousCaptureConfig::default()
         };
         let mut capture = ContinuousCapture::new(config, temp_dir.path().into());
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = crate::pipeline::audio_channel();
         capture.set_audio_sender(tx);
 
         // A producer that never ends on its own.
         let mut child = Command::new("sh")
             .arg("-c")
-            .arg("cat /dev/zero")
+            .arg("while head -c 200 /dev/zero; do sleep 0.02; done")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
