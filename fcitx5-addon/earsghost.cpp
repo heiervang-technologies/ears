@@ -50,12 +50,35 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <vector>
 
 FCITX_DEFINE_LOG_CATEGORY(ears_ghost, "ears-ghost");
 #define GHOST_INFO() FCITX_LOGC(ears_ghost, Info)
 #define GHOST_WARN() FCITX_LOGC(ears_ghost, Warn)
 
 namespace {
+
+// Classic UI preedit is single-line. Read-only candidate rows provide real
+// wrapping; selecting a preview row must never commit transcript text.
+class PreviewRow : public fcitx::CandidateWord {
+public:
+    explicit PreviewRow(fcitx::Text text) : CandidateWord(std::move(text)) {}
+    void select(fcitx::InputContext *) const override {}
+};
+
+class PreviewLines : public fcitx::CandidateList {
+public:
+    std::vector<std::unique_ptr<PreviewRow>> rows;
+    const fcitx::Text &label(int) const override { return empty_; }
+    const fcitx::CandidateWord &candidate(int i) const override { return *rows.at(i); }
+    int size() const override { return static_cast<int>(rows.size()); }
+    int cursorIndex() const override { return -1; }
+    fcitx::CandidateLayoutHint layoutHint() const override {
+        return fcitx::CandidateLayoutHint::Vertical;
+    }
+private:
+    fcitx::Text empty_;
+};
 
 std::string socketPath() {
     const char *runtime = std::getenv("XDG_RUNTIME_DIR");
@@ -350,35 +373,44 @@ private:
         ghostText_ = text;
         frozenBytes_ = frozen;
         fcitx::Text t;
-        // Wrapping affects only the popup layout. The observer and commit
-        // retain the exact transcript and its original byte boundary.
-        std::string prefix, suffix;
+        auto lines = std::make_unique<PreviewLines>();
         int columns = 0;
+        auto finishLine = [&] {
+            lines->rows.push_back(std::make_unique<PreviewRow>(std::move(t)));
+            t = fcitx::Text();
+            columns = 0;
+        };
         for (size_t i = 0; i < text.size();) {
             size_t end = i + 1;
             while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) ++end;
-            auto &part = i < frozen ? prefix : suffix;
             const auto codepoint = fcitx::utf8::getChar(text.begin() + i, text.begin() + end);
-            const int width = std::max(0, ::wcwidth(static_cast<wchar_t>(codepoint)));
-            if (panel && columns + width > 48) {
-                part += '\n';
-                columns = 0;
+            const int width = codepoint == '\t' ? 4 : std::max(0, ::wcwidth(static_cast<wchar_t>(codepoint)));
+            if (panel && (codepoint == '\n' || codepoint == '\r')) {
+                finishLine();
+                i = end;
+                continue;
             }
-            part.append(text, i, end - i);
-            columns = codepoint == '\n' ? 0 : columns + width;
+            if (panel && columns + width > 48) finishLine();
+            const auto part = panel && codepoint == '\t' ? std::string(4, ' ') : text.substr(i, end - i);
+            if (i < frozen) {
+                t.append(part, {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::HighLight});
+            } else {
+                t.append(part, fcitx::TextFormatFlag::Underline);
+            }
+            columns += width;
             i = end;
         }
-        if (!prefix.empty()) {
-            t.append(prefix, {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::HighLight});
-        }
-        if (!suffix.empty()) t.append(suffix, fcitx::TextFormatFlag::Underline);
         // Ghost semantics: the caret stays where the user is; the suggested
         // text trails after it instead of pushing the cursor along.
         t.setCursor(0);
         // Remove the previous surface when changing between inline and popup.
         ic->inputPanel().setClientPreedit(fcitx::Text());
         ic->inputPanel().setPreedit(fcitx::Text());
-        if (!panel && ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+        ic->inputPanel().setCandidateList(nullptr);
+        if (panel) {
+            finishLine();
+            ic->inputPanel().setCandidateList(std::move(lines));
+        } else if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
             ic->inputPanel().setClientPreedit(t);
         } else {
             // App cannot draw preedit: fcitx shows it in its own panel.
@@ -391,6 +423,7 @@ private:
     void clearOn(fcitx::InputContext *ic) {
         ghostText_.clear();
         frozenBytes_ = 0;
+        ic->inputPanel().setCandidateList(nullptr);
         ic->inputPanel().setClientPreedit(fcitx::Text());
         ic->inputPanel().setPreedit(fcitx::Text());
         ic->updatePreedit();
