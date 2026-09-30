@@ -112,3 +112,11 @@ The addon accepts `F <frozen_bytes> <escaped text>` alongside the existing
 `OK state <frozen_bytes> <escaped text>` without taking ghost ownership. Its byte boundary is measured after
 unescaping (and after CR removal), validated before slicing, and applies
 only to formatting. No marker characters are inserted into the transcript.
+
+## Continuous integration
+
+Pull requests run the Rust suite, the plugin's protocol/session/engine tests,
+and a build of the fcitx5 addon. Plugin tests use a deterministic decoder and
+need no GPU, model download, or installed vLLM. A live rollout still needs the
+synthetic WAV check above to verify the deployed model and tokenizer, and real
+application testing to verify preedit rendering.
