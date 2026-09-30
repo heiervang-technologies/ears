@@ -525,3 +525,14 @@ stream connection handling, partial previews and delivery methods live in
 `src/streaming_engine/ghost.rs`. Engine regression tests are in the sibling
 `tests.rs`. These private modules preserve the existing public API and decoding
 policy; they do not yet unify the distinct push-to-talk and VAD session loops.
+
+### Pipeline cancellation
+
+The microphone/TUI and WebSocket processing futures are cancelled when their
+shutdown watch becomes true or its sender disappears. This cancels an in-flight
+transcription and drops queued audio instead of waiting for the server to reply.
+Owned temporary segment WAVs are removed on success, error, and cancellation.
+Callers allow two seconds for cooperative exit, then abort and allow one second
+for task cleanup. Synchronous blocking code cannot be forcibly interrupted by
+Tokio; exceeding the abort deadline logs an error rather than holding the UI's
+join indefinitely. Stopping listening deliberately discards unfinished speech.
