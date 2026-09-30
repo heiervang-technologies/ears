@@ -437,7 +437,7 @@ On first run, if `config.toml` does not exist, ears checks for legacy single-fil
 | Binary | Package (Arch) | Used By | Purpose |
 |--------|---------------|---------|---------|
 | `pw-record` | `pipewire` | `ContinuousCapture`, `ProcessManager` | Audio capture (streaming or file) |
-| `pw-cli` | `pipewire` | `audio.rs` | Audio device discovery and listing |
+| `pw-dump` | `pipewire` | `audio.rs` | Structured JSON audio-device discovery |
 | `timeout` | `coreutils` | `ProcessManager` | Recording duration limit (wraps pw-record) |
 | `pkill` | `procps-ng` | `StateManager` | Signal waybar on state changes (SIGRTMIN+9) |
 | `notify-send` | `libnotify` | `Notifications` | Desktop notifications |
@@ -560,3 +560,14 @@ Permanent poll/read errors reach the main loop and trigger normal cleanup;
 interrupted system calls are retried. Unsupported terminal events are ignored,
 and periodic ticks are scheduled independently of keyboard/mouse traffic.
 Tests use an injected event source instead of reading the user's terminal.
+
+### Desktop helper deadlines
+
+Keyboard discovery uses 300 ms deadlines for each optional Hyprland/dconf probe.
+Hyprland device and option output is parsed as JSON, preferring the main keyboard.
+PipeWire discovery parses pw-dump JSON under a two-second deadline and the shared
+one-MiB output cap; malformed snapshots are errors, not an empty device list.
+Notifications have a two-second deadline and report unsuccessful exit status.
+Background sound playback and clipboard-copy helper parents are reaped with
+30-second and key-helper deadlines respectively. Interactive fzf selection waits for user input; user-supplied post-transcription
+hooks run asynchronously until they exit.

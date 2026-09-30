@@ -10,89 +10,45 @@ pub struct AudioDevice {
     pub description: String,
 }
 
-/// List all available audio input sources via PipeWire
-///
-/// Parses `pw-cli ls Node` output to find devices with media.class = "Audio/Source"
+/// List audio sources from PipeWire's structured snapshot.
 pub fn list_devices() -> Result<Vec<AudioDevice>> {
-    let output = Command::new("pw-cli")
-        .arg("ls")
-        .arg("Node")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .context("Failed to execute pw-cli")?;
-
+    let mut command = Command::new("pw-dump");
+    command.stdin(Stdio::null()).stderr(Stdio::null());
+    let output = crate::desktop::output_bounded(command, std::time::Duration::from_secs(2))
+        .context("Failed to query PipeWire devices")?;
     if !output.status.success() {
-        anyhow::bail!("pw-cli failed with status: {}", output.status);
+        anyhow::bail!("pw-dump failed with status: {}", output.status);
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_pw_cli_output(&stdout)
+    parse_pw_dump_output(&output.stdout)
 }
 
-/// Parse pw-cli output to extract audio source devices
-fn parse_pw_cli_output(output: &str) -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-    let mut current_device: Option<AudioDevice> = None;
-    let mut is_source = false;
-
-    for line in output.lines() {
-        let trimmed = line.trim();
-
-        // New node detected
-        if trimmed.starts_with("id ") && trimmed.contains(',') {
-            // Save previous device if it was a source
-            if is_source {
-                if let Some(device) = current_device.take() {
-                    if !device.name.is_empty() {
-                        devices.push(device);
-                    }
-                }
+fn parse_pw_dump_output(output: &[u8]) -> Result<Vec<AudioDevice>> {
+    let nodes: Vec<serde_json::Value> =
+        serde_json::from_slice(output).context("Invalid PipeWire JSON snapshot")?;
+    Ok(nodes
+        .iter()
+        .filter_map(|node| {
+            if node.get("type")?.as_str()? != "PipeWire:Interface:Node" {
+                return None;
             }
-            // Reset state
-            is_source = false;
-            current_device = Some(AudioDevice {
-                name: String::new(),
-                description: String::new(),
-            });
-        }
-
-        // Check if this node is an audio source
-        if trimmed.contains(r#"media.class = "Audio/Source""#) {
-            is_source = true;
-        }
-
-        // Extract node name
-        if let Some(name_start) = trimmed.find(r#"node.name = ""#) {
-            if let Some(ref mut device) = current_device {
-                let name_str = &trimmed[name_start + 13..]; // Skip 'node.name = "'
-                if let Some(end_quote) = name_str.find('"') {
-                    device.name = name_str[..end_quote].to_string();
-                }
+            let props = node.get("info")?.get("props")?;
+            if props.get("media.class")?.as_str()? != "Audio/Source" {
+                return None;
             }
-        }
-
-        // Extract node description
-        if let Some(desc_start) = trimmed.find(r#"node.description = ""#) {
-            if let Some(ref mut device) = current_device {
-                let desc_str = &trimmed[desc_start + 20..]; // Skip 'node.description = "'
-                if let Some(end_quote) = desc_str.find('"') {
-                    device.description = desc_str[..end_quote].to_string();
-                }
+            let name = props.get("node.name")?.as_str()?;
+            if name.is_empty() {
+                return None;
             }
-        }
-    }
-
-    // Don't forget the last device
-    if is_source {
-        if let Some(device) = current_device {
-            if !device.name.is_empty() {
-                devices.push(device);
-            }
-        }
-    }
-
-    Ok(devices)
+            Some(AudioDevice {
+                name: name.to_string(),
+                description: props
+                    .get("node.description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            })
+        })
+        .collect())
 }
 
 /// Display devices in a formatted list
@@ -173,52 +129,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_pw_cli_output() {
-        let sample_output = r#"
-        id 42, type PipeWire:Interface:Node/3
-                object.serial = "42"
-                object.path = "alsa:pcm:0:front:0:capture"
-                node.name = "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
-                node.description = "HyperX Cloud II Wireless Mono"
-                media.class = "Audio/Source"
-                node.nick = "HyperX Cloud II Wireless"
-
-        id 43, type PipeWire:Interface:Node/3
-                object.serial = "43"
-                object.path = "alsa:pcm:1:front:1:capture"
-                node.name = "alsa_input.pci-0000_00_1f.3.analog-stereo"
-                node.description = "Built-in Audio Analog Stereo"
-                media.class = "Audio/Source"
-                node.nick = "Built-in Audio"
-
-        id 44, type PipeWire:Interface:Node/3
-                object.serial = "44"
-                node.name = "some_output_device"
-                node.description = "Some Output Device"
-                media.class = "Audio/Sink"
-        "#;
-
-        let devices = parse_pw_cli_output(sample_output).unwrap();
-        assert_eq!(devices.len(), 2);
-
-        assert_eq!(
-            devices[0].name,
-            "alsa_input.usb-HP__Inc_HyperX_Cloud_II_Wireless_0-00.mono-fallback"
-        );
-        assert_eq!(devices[0].description, "HyperX Cloud II Wireless Mono");
-
-        assert_eq!(devices[1].name, "alsa_input.pci-0000_00_1f.3.analog-stereo");
-        assert_eq!(devices[1].description, "Built-in Audio Analog Stereo");
-    }
-
-    #[test]
-    fn test_parse_pw_cli_output_empty() {
-        let empty_output = "";
-        let devices = parse_pw_cli_output(empty_output).unwrap();
-        assert_eq!(devices.len(), 0);
-    }
-
-    #[test]
     fn test_format_device_list() {
         let devices = vec![
             AudioDevice {
@@ -244,70 +154,36 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_no_sources() {
-        // Only Audio/Sink nodes, no Audio/Source
-        let output = r#"
-        id 44, type PipeWire:Interface:Node/3
-                object.serial = "44"
-                node.name = "some_output_device"
-                node.description = "Some Output Device"
-                media.class = "Audio/Sink"
-
-        id 45, type PipeWire:Interface:Node/3
-                object.serial = "45"
-                node.name = "another_output"
-                node.description = "Another Output"
-                media.class = "Audio/Sink"
-        "#;
-
-        let devices = parse_pw_cli_output(output).unwrap();
-        assert_eq!(devices.len(), 0);
+    fn parses_sources_and_escaped_names_from_json() {
+        let snapshot = serde_json::json!([
+            {"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":"usb\\mic","node.description":"Mic \"studio\" – 北"}}},
+            {"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Sink","node.name":"output"}}},
+            {"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":"second"}}},
+            {"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":""}}},
+            {"type":"PipeWire:Interface:Client","info":{"props":{"media.class":"Audio/Source","node.name":"not-a-node"}}},
+            {"type":"PipeWire:Interface:Node","info":null}
+        ]);
+        let devices = parse_pw_dump_output(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            devices,
+            vec![
+                AudioDevice {
+                    name: "usb\\mic".into(),
+                    description: "Mic \"studio\" – 北".into()
+                },
+                AudioDevice {
+                    name: "second".into(),
+                    description: String::new()
+                }
+            ]
+        );
     }
 
     #[test]
-    fn test_parse_missing_description() {
-        // Node with name but no description line
-        let output = r#"
-        id 42, type PipeWire:Interface:Node/3
-                object.serial = "42"
-                node.name = "alsa_input.some_device"
-                media.class = "Audio/Source"
-        "#;
-
-        let devices = parse_pw_cli_output(output).unwrap();
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].name, "alsa_input.some_device");
-        assert_eq!(devices[0].description, "");
-    }
-
-    #[test]
-    fn test_parse_empty_name() {
-        // Node with empty node.name should be filtered out
-        let output = r#"
-        id 42, type PipeWire:Interface:Node/3
-                object.serial = "42"
-                node.name = ""
-                node.description = "Nameless Device"
-                media.class = "Audio/Source"
-        "#;
-
-        let devices = parse_pw_cli_output(output).unwrap();
-        assert_eq!(devices.len(), 0);
-    }
-
-    #[test]
-    fn test_parse_single_device() {
-        let output = r#"
-        id 50, type PipeWire:Interface:Node/3
-                object.serial = "50"
-                node.name = "alsa_input.usb-Blue_Yeti"
-                node.description = "Blue Yeti Stereo"
-                media.class = "Audio/Source"
-        "#;
-
-        let devices = parse_pw_cli_output(output).unwrap();
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].name, "alsa_input.usb-Blue_Yeti");
-        assert_eq!(devices[0].description, "Blue Yeti Stereo");
+    fn empty_snapshot_is_distinct_from_invalid_output() {
+        assert!(parse_pw_dump_output(b"[]").unwrap().is_empty());
+        for invalid in [b"".as_slice(), b"{}", b"not json", b"[{"] {
+            assert!(parse_pw_dump_output(invalid).is_err());
+        }
     }
 }
