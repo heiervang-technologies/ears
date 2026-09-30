@@ -551,3 +551,12 @@ Messages and frames are limited to 64 KiB and PCM is queued in chunks of at most
 1,600 samples. Clients must split larger uploads into messages under that limit;
 no queued samples are dropped or reordered. This bounds the shared audio queue
 and each connection's current message, not aggregate memory for unlimited clients.
+
+### Terminal event lifecycle
+
+The TUI owns and joins its event-reader thread before restoring terminal mode.
+Polling checks shutdown at most every 50 ms, independently of the UI tick rate.
+Permanent poll/read errors reach the main loop and trigger normal cleanup;
+interrupted system calls are retried. Unsupported terminal events are ignored,
+and periodic ticks are scheduled independently of keyboard/mouse traffic.
+Tests use an injected event source instead of reading the user's terminal.
