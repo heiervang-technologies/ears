@@ -1701,7 +1701,7 @@ mod tests {
             .send(Partial::plain(current, Ok("fresh".into())))
             .unwrap();
         engine.ghost_poll_partials();
-        assert_eq!(next_cmd(&lines), "F 0 fresh");
+        assert_eq!(next_cmd(&lines), "P fresh");
         assert!(
             lines.try_iter().all(|l| l == "S"),
             "stale partial must not be shown"
@@ -1739,7 +1739,7 @@ mod tests {
         fresh.decoder = Some(spec().decoder());
         ghost.partial_tx.send(fresh).unwrap();
         engine.ghost_poll_partials();
-        assert_eq!(next_cmd(&lines), "F 0 fresh");
+        assert_eq!(next_cmd(&lines), "P fresh");
         assert!(engine.ghost.as_ref().unwrap().decoder.is_some());
         // The next utterance starts from a fresh decoder.
         engine.ghost.as_mut().unwrap().next_utterance();
@@ -1950,10 +1950,7 @@ mod tests {
         assert!(fresh > old, "stream utterance ids only increase");
         server.say(stream_partial(old, "old words", 0));
         server.say(stream_partial(fresh, "fresh words", 0));
-        assert_eq!(
-            next_cmd_ticking(&mut engine, &lines).await,
-            "F 0 fresh words"
-        );
+        assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "P fresh words");
 
         // Muting cancels the stream utterance too.
         engine.set_typing_enabled(false, false, TypingMode::None, false);
@@ -1979,7 +1976,7 @@ mod tests {
         })
         .await;
         feed(&mut engine, &[0.9; 24]);
-        assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "F 0 over http");
+        assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "P over http");
     }
 
     #[tokio::test]
