@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -49,9 +49,13 @@ pub fn is_external_vad_alive(state_dir: &Path) -> bool {
 }
 
 fn atomic_write_state(path: &Path, content: &str) -> io::Result<()> {
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, content)?;
-    fs::rename(tmp_path, path)
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("State path has no parent"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content.as_bytes())?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 /// Best-effort reset of state to idle and waybar notification.
@@ -64,10 +68,22 @@ pub fn force_reset_to_idle(state_dir: &Path) {
         return;
     }
     let state_file = state_dir.join("state");
-    let _ = atomic_write_state(&state_file, "idle");
-    let _ = std::process::Command::new("pkill")
-        .args(["-RTMIN+9", "waybar"])
-        .spawn();
+    if let Err(error) = atomic_write_state(&state_file, "idle") {
+        tracing::warn!(path = %state_file.display(), %error, "Failed to reset recording state");
+        return;
+    }
+    notify_waybar();
+}
+
+/// Optional indicator refresh; always reap the helper, including on timeout.
+fn notify_waybar() {
+    let mut command = std::process::Command::new("pkill");
+    command.args(["-RTMIN+9", "waybar"]);
+    match crate::desktop::run_bounded(command, Duration::from_millis(300)) {
+        Ok(status) if status.success() || status.code() == Some(1) => {}
+        Ok(status) => tracing::debug!(%status, "Waybar refresh failed"),
+        Err(error) => tracing::debug!(%error, "Waybar refresh unavailable"),
+    }
 }
 
 /// Guard that resets state to Idle on drop.
@@ -135,30 +151,24 @@ impl StateManager {
         if self.current_state == State::Recording {
             if let Some(started) = self.recording_started {
                 if started.elapsed() > self.max_recording_duration {
-                    self.current_state = State::Idle;
-                    self.recording_started = None;
+                    self.commit_state(State::Idle)?;
                     return Err(StateError::RecordingTimeout);
                 }
             }
         }
 
-        // Update state
-        self.current_state = new_state;
+        self.commit_state(new_state)
+    }
 
-        // Track recording start time
-        match new_state {
-            State::Recording => {
-                self.recording_started = Some(Instant::now());
-            }
-            State::Idle => {
-                self.recording_started = None;
-            }
+    /// Publish to disk before changing memory, so failed writes preserve state.
+    fn commit_state(&mut self, state: State) -> Result<(), StateError> {
+        self.persist_state(state)?;
+        self.current_state = state;
+        match state {
+            State::Recording => self.recording_started = Some(Instant::now()),
+            State::Idle => self.recording_started = None,
             _ => {}
         }
-
-        // Persist state to disk
-        self.persist_state()?;
-
         Ok(())
     }
 
@@ -186,8 +196,8 @@ impl StateManager {
     }
 
     /// Persist the current state to disk and notify waybar
-    fn persist_state(&self) -> Result<(), StateError> {
-        let state_str = match self.current_state {
+    fn persist_state(&self, state: State) -> Result<(), StateError> {
+        let state_str = match state {
             State::Idle => "idle",
             State::Recording => "recording",
             State::Transcribing => "transcribing",
@@ -197,9 +207,7 @@ impl StateManager {
         atomic_write_state(&self.state_file_path(), state_str)?;
 
         // Signal waybar to refresh the ears indicator (signal 9 = SIGRTMIN+9)
-        let _ = std::process::Command::new("pkill")
-            .args(["-RTMIN+9", "waybar"])
-            .spawn();
+        notify_waybar();
 
         Ok(())
     }
@@ -208,13 +216,15 @@ impl StateManager {
     pub fn load_state(&mut self) -> Result<(), StateError> {
         let state_file = self.state_file_path();
 
-        if !state_file.exists() {
-            // No state file, default to Idle
-            self.current_state = State::Idle;
-            return Ok(());
-        }
-
-        let state_str = fs::read_to_string(&state_file)?;
+        let state_str = match fs::read_to_string(&state_file) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.current_state = State::Idle;
+                self.recording_started = None;
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let state = match state_str.trim() {
             "idle" => State::Idle,
             "recording" => State::Recording,
@@ -266,9 +276,7 @@ impl StateManager {
         // process crashed or exited before resetting to Idle
         if self.current_state == State::Transcribing {
             tracing::warn!("Stale Transcribing state detected on startup, resetting to Idle");
-            self.current_state = State::Idle;
-            self.recording_started = None;
-            self.persist_state()?;
+            self.commit_state(State::Idle)?;
             return Ok(true);
         }
 
@@ -288,9 +296,7 @@ impl StateManager {
             );
 
             // Reset to Idle without using transition() to avoid validation
-            self.current_state = State::Idle;
-            self.recording_started = None;
-            self.persist_state()?;
+            self.commit_state(State::Idle)?;
 
             return Ok(true);
         }
@@ -303,6 +309,47 @@ impl StateManager {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn failed_transition_and_reconciliation_preserve_memory() {
+        let dir = TempDir::new().unwrap();
+        let mut manager = StateManager::new(dir.path()).unwrap();
+        manager.transition(State::Recording).unwrap();
+        let started = manager.recording_started;
+        fs::remove_file(manager.state_file_path()).unwrap();
+        fs::create_dir(manager.state_file_path()).unwrap();
+        assert!(matches!(
+            manager.transition(State::Transcribing),
+            Err(StateError::Io(_))
+        ));
+        assert_eq!(manager.current_state(), State::Recording);
+        assert_eq!(manager.recording_started, started);
+        assert!(matches!(
+            manager.reconcile_state(|| Ok(false)),
+            Err(StateError::Io(_))
+        ));
+        assert_eq!(manager.current_state(), State::Recording);
+        assert_eq!(manager.recording_started, started);
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "failed writes leave no temporary files"
+        );
+    }
+
+    #[test]
+    fn state_write_does_not_follow_predictable_temporary_symlink() {
+        let dir = TempDir::new().unwrap();
+        let unrelated = dir.path().join("unrelated");
+        fs::write(&unrelated, "keep me").unwrap();
+        std::os::unix::fs::symlink(&unrelated, dir.path().join("state.tmp")).unwrap();
+        atomic_write_state(&dir.path().join("state"), "idle").unwrap();
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "keep me");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("state")).unwrap(),
+            "idle"
+        );
+    }
 
     #[test]
     fn test_state_transitions() {
@@ -377,6 +424,10 @@ mod tests {
         let result = manager.transition(State::Transcribing);
         assert!(matches!(result, Err(StateError::RecordingTimeout)));
         assert_eq!(manager.current_state(), State::Idle);
+        assert_eq!(
+            fs::read_to_string(manager.state_file_path()).unwrap(),
+            "idle"
+        );
     }
 
     #[test]
