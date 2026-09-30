@@ -86,7 +86,6 @@ pub struct WhisperClient {
     /// Prompt for context biasing (None = no prompt)
     prompt: Option<String>,
     /// Maximum number of retry attempts
-    #[allow(dead_code)]
     max_retries: u32,
     /// Initial backoff delay in milliseconds
     initial_backoff_ms: u64,
@@ -165,7 +164,7 @@ impl WhisperClient {
     ///
     /// # Arguments
     /// * `server_url` - Base URL of the whisper.cpp server
-    /// * `max_retries` - Maximum number of retry attempts
+    /// * `max_retries` - Retries after the initial attempt (zero sends once)
     /// * `initial_backoff_ms` - Initial backoff delay in milliseconds
     /// * `max_backoff_ms` - Maximum backoff delay in milliseconds
     pub fn with_retry_config(
@@ -188,6 +187,13 @@ impl WhisperClient {
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
+        }
+    }
+
+    fn authenticated(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
         }
     }
 
@@ -214,10 +220,7 @@ impl WhisperClient {
         let health_url = format!("{}/health", base);
         debug!("Performing health check on {}", health_url);
 
-        let mut request = self.client.get(&health_url);
-        if let Some(ref key) = self.api_key {
-            request = request.bearer_auth(key);
-        }
+        let request = self.authenticated(self.client.get(&health_url));
 
         match request.send().await {
             Ok(response) if response.status().is_success() => {
@@ -234,10 +237,7 @@ impl WhisperClient {
         let models_url = format!("{}/v1/models", base);
         debug!("Health check fallback: trying {}", models_url);
 
-        let mut request = self.client.get(&models_url);
-        if let Some(ref key) = self.api_key {
-            request = request.bearer_auth(key);
-        }
+        let request = self.authenticated(self.client.get(&models_url));
 
         let response = request
             .send()
@@ -316,18 +316,24 @@ impl WhisperClient {
 
         // Perform transcription with retry logic
         let backoff = self.create_backoff();
-        let text = retry(backoff, || async {
-            let result = match grammar {
-                Some(g) => self.transcribe_chat_internal(path, g).await,
-                None => self.transcribe_internal(path).await,
-            };
-            result.map_err(|e| {
-                warn!("Transcription attempt failed: {}", e);
-                match e {
-                    WhisperError::ConfigurationError(_) => backoff::Error::permanent(e),
-                    _ => backoff::Error::transient(e),
-                }
-            })
+        let mut attempt = 0u32;
+        let text = retry(backoff, || {
+            let last_attempt = attempt >= self.max_retries;
+            attempt = attempt.saturating_add(1);
+            async move {
+                let result = match grammar {
+                    Some(g) => self.transcribe_chat_internal(path, g).await,
+                    None => self.transcribe_internal(path).await,
+                };
+                result.map_err(|e| {
+                    warn!("Transcription attempt failed: {}", e);
+                    if last_attempt || matches!(e, WhisperError::ConfigurationError(_)) {
+                        backoff::Error::permanent(e)
+                    } else {
+                        backoff::Error::transient(e)
+                    }
+                })
+            }
         })
         .await?;
 
@@ -435,10 +441,7 @@ impl WhisperClient {
         }
 
         // Send request
-        let mut request = self.client.post(&url).multipart(form);
-        if let Some(ref key) = self.api_key {
-            request = request.bearer_auth(key);
-        }
+        let request = self.authenticated(self.client.post(&url).multipart(form));
 
         let response = request
             .send()
@@ -510,10 +513,7 @@ impl WhisperClient {
             "structured_outputs": {"grammar": grammar}
         });
 
-        let mut request = self.client.post(&url).json(&body);
-        if let Some(ref key) = self.api_key {
-            request = request.bearer_auth(key);
-        }
+        let request = self.authenticated(self.client.post(&url).json(&body));
 
         let response = request
             .send()
@@ -644,21 +644,10 @@ impl WhisperClient {
 
     /// Creates an exponential backoff configuration
     fn create_backoff(&self) -> ExponentialBackoff {
-        // Calculate a reasonable max_elapsed_time based on backoff settings
-        // For test scenarios with very small backoffs (< 100ms), fail faster
-        // For normal/production use, allow 30 seconds
-        let max_elapsed = if self.max_backoff_ms < 100 {
-            // Very short timeout for error case tests
-            Duration::from_millis(500)
-        } else {
-            // Normal timeout for success and retry tests
-            Duration::from_secs(30)
-        };
-
         ExponentialBackoff {
             initial_interval: Duration::from_millis(self.initial_backoff_ms),
             max_interval: Duration::from_millis(self.max_backoff_ms),
-            max_elapsed_time: Some(max_elapsed),
+            max_elapsed_time: Some(Duration::from_secs(30)),
             ..Default::default()
         }
     }
