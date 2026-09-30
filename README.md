@@ -418,6 +418,10 @@ Place an executable script at `~/.config/ears/hooks/post-transcribe`. It receive
 - `$1` - Path to a copy of the audio file
 - `$2` - The transcribed text
 
+The hook runs asynchronously and may outlive the Ears command. Its private audio
+copy is removed when the hook exits, including failure. A hook that delegates
+work to another background process must copy the audio before returning.
+
 ## Custom Sounds
 
 Place custom WAV files in `~/.local/share/ears-sounds/`:
