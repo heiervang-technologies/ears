@@ -300,14 +300,14 @@ Notes:
 
 #### Ghost text style
 
-The input method passes only the text; each app draws the ghost itself. Set
+The input method passes text and formatting hints; each app draws the ghost. Set
 the style once and ears writes it into the apps that support it:
 
 ```toml
 [ghost]
 color = "yellow"   # #rrggbb, #rgb, or grey | blue-grey | orange | yellow | green-yellow
 underline = false
-frozen_color = "#ffffff"   # the settled start, which will no longer change
+frozen_color = "#ffffff"   # the settled start, fixed during live decoding
 ```
 
 ```
@@ -321,7 +321,9 @@ With continuous live decoding, the start of the ghost settles while the last
 few words are still open to correction. ears marks the settled part as the
 input method's highlighted range (the fcitx5 addon must be current:
 `fcitx5-addon/install.sh`), and `frozen_color` colours it, so you can see
-what is final while you speak.
+what is fixed during live decoding while you speak. It remains uncommitted
+preedit; with `final_correction = true`, a separate final transcription can
+still replace it.
 
 In the TUI's Configuration panel, `o` cycles the ghost colour presets and `O`
 the frozen ones. Supported apps:
@@ -375,7 +377,8 @@ the text already settled. The committed text comes from the same final path
 either way, so nothing is ever committed twice.
 
 The Qwen continuous path also tracks the exact frozen text prefix. Updated
-ghost addons underline only the revisable tail; the stream plugin supplies
+ghost addons highlight the frozen prefix and underline both parts for inline
+preedit; the app decides how those hints are rendered. The stream plugin supplies
 model-tokenizer spans for inspection with `stream_wav.py --tokens`.
 Use `ears ghost-watch` for the live split in any app, or `--json` for other visualizers.
 Frozen means fixed during live decoding; full final correction can replace
