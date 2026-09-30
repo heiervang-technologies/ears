@@ -164,7 +164,7 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-fn alacritty_config() -> Option<PathBuf> {
+pub(crate) fn alacritty_config() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| home().map(|h| h.join(".config")))?;
@@ -224,10 +224,12 @@ fn profile_dirs(root: &Path, ini: &str) -> Vec<PathBuf> {
 /// Set `[colors.preedit]` in an alacritty.toml, keeping everything else.
 fn apply_alacritty(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
     let old = std::fs::read_to_string(path)?;
-    // Ghost text is drawn over the terminal, without a background box.
+    // Ghost text is drawn over the terminal, without a background box, and
+    // wraps onto the rows below instead of being cut off.
     let mut keys: Vec<(&str, String)> = vec![
         ("underline", style.underline.to_string()),
         ("background", "false".to_string()),
+        ("wrap", "true".to_string()),
     ];
     // Without a colour the section keeps whatever foreground it has.
     if let Some(hex) = style.hex() {
@@ -497,7 +499,7 @@ size = 11
         assert!(apply_alacritty(&path, &style).unwrap());
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains(
-            "underline = false\nbackground = false\nhighlight_foreground = \"#ffffff\"\n"
+            "underline = false\nbackground = false\nwrap = true\nhighlight_foreground = \"#ffffff\"\n"
         ));
         style.frozen_color = None;
         assert!(apply_alacritty(&path, &style).unwrap());

@@ -327,7 +327,9 @@ In the TUI's Configuration panel, `o` cycles the ghost colour presets and `O`
 the frozen ones. Supported apps:
 - **Alacritty** with the preedit-colors patch: `[colors.preedit]`
   (`foreground`, `highlight_foreground`) in `alacritty.toml`. Alacritty
-  reloads it immediately.
+  reloads it immediately. With `wrap = true` (which `ears ghost-style`
+  sets), a ghost too long for its tmux pane row wraps over the pane's rows
+  below instead of opening the fcitx popup.
 - **Hover**: the `hover.ime.ghost_preedit_color` and
   `hover.ime.ghost_frozen_color` prefs in each profile's `user.js`, which
   apply from the next Hover start.
