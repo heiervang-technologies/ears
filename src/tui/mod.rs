@@ -416,6 +416,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
         let _ = state_mgr.transition(EarsState::Idle);
     }
 
+    drop(event_handler); // No reader may access the terminal after restoration.
     restore_terminal(&mut terminal)?;
 
     ipc_server.shutdown().await;
