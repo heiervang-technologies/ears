@@ -2,6 +2,7 @@
 //! terminal when it can draw multi-row preedit, else in the fcitx popup.
 //! Only a client descended from the focused terminal may supply pane geometry.
 
+use std::ops::Range;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -152,35 +153,42 @@ pub(crate) fn wrap_into_pane(text: &str, frozen: usize, pane: &Pane) -> (String,
         .filter(|&b| b != b'\r')
         .count();
     let text = text.replace('\r', "").replace('\t', " ");
-    let first = pane.width.saturating_sub(pane.cursor_x).max(1);
+    let width = pane.width.max(1);
+    let first = pane.width.saturating_sub(pane.cursor_x);
     let rows = pane.rows.max(1);
-
-    // Drop whole words from the front until the rest fits the rows.
-    let starts = std::iter::once(0).chain(
-        text.char_indices()
-            .filter(|&(i, c)| i > 0 && c != ' ' && text[..i].ends_with([' ', '\n']))
-            .map(|(i, _)| i),
-    );
-    let mut layout = None;
-    for start in starts {
-        let lines = wrap_lines(&text, start, first, pane.width.max(1));
-        let fits = lines.len() <= rows;
-        layout = Some((start, lines));
-        if fits {
-            break;
-        }
-    }
-    let Some((start, mut lines)) = layout else {
-        return (text, frozen);
+    // The ellipsis marks dropped words, on the cursor row when it fits there.
+    let ellipsis = first >= ELLIPSIS.width();
+    let wrap_from = |start: usize| {
+        let first = if start > 0 && ellipsis {
+            first - ELLIPSIS.width()
+        } else {
+            first
+        };
+        wrap_lines(&text, start, first, width)
     };
-    // A single word too long for every row: keep its newest rows.
-    if lines.len() > rows {
-        lines.drain(..lines.len() - rows);
-    }
+
+    // Drop whole words from the front until the rest fits the rows; if even
+    // the last word does not, drop characters.
+    let words = text
+        .char_indices()
+        .filter(|&(i, c)| i > 0 && !c.is_whitespace() && text[..i].ends_with([' ', '\n']))
+        .map(|(i, _)| i);
+    let chars = text
+        .char_indices()
+        .filter(|&(i, c)| i > 0 && !c.is_whitespace())
+        .map(|(i, _)| i);
+    let Some((start, lines)) = std::iter::once(0)
+        .chain(words)
+        .chain(chars)
+        .map(|start| (start, wrap_from(start)))
+        .find(|(_, lines)| lines.len() <= rows)
+    else {
+        // Not one character fits (a single row with the cursor at its edge).
+        return (String::new(), 0);
+    };
 
     let mut out = String::new();
     let mut frozen_out = None;
-    let elided = start > 0 || lines.first().is_some_and(|line| line.start > start);
     for (n, line) in lines.iter().enumerate() {
         if n > 0 {
             out.push('\n');
@@ -195,65 +203,68 @@ pub(crate) fn wrap_into_pane(text: &str, frozen: usize, pane: &Pane) -> (String,
         }
     }
     let frozen_out = frozen_out.unwrap_or(out.len());
-    if elided {
+    if start > 0 && ellipsis {
         // The ellipsis replaces the dropped start; it is frozen when that was.
-        let mut with = String::from(ELLIPSIS);
-        with.push_str(&out);
         let marked = if frozen > 0 { ELLIPSIS.len() } else { 0 };
-        return (with, frozen_out + marked);
+        return (format!("{ELLIPSIS}{out}"), frozen_out + marked);
     }
     (out, frozen_out)
 }
 
 const ELLIPSIS: &str = "\u{2026} ";
 
-/// Byte ranges of `text[start..]` per row, greedy word wrap: `first` columns
-/// on the cursor row, `width` after. Spaces at a wrap are dropped.
-fn wrap_lines(text: &str, start: usize, first: usize, width: usize) -> Vec<std::ops::Range<usize>> {
-    // The ellipsis takes room on the first row when words were dropped.
-    let mut capacity = if start > 0 {
-        first.saturating_sub(ELLIPSIS.width()).max(1)
-    } else {
-        first
-    };
+/// Byte ranges of `text[start..]` per row: greedy word wrap with `first`
+/// columns on the cursor row (possibly none) and `width` after. Spaces at a
+/// wrap are dropped; a word longer than a row is split. Only a glyph wider
+/// than the whole pane can overflow a row.
+fn wrap_lines(text: &str, start: usize, first: usize, width: usize) -> Vec<Range<usize>> {
     let mut lines = Vec::new();
+    let mut capacity = first;
     let (mut line_start, mut used) = (start, 0);
-    let mut last_space: Option<usize> = None;
-    let mut i = start;
-    while i < text.len() {
-        let c = text[i..].chars().next().unwrap_or(' ');
+    // The last space in the row, and the width of the word after it.
+    let (mut space, mut word) = (None::<usize>, 0);
+    for (offset, c) in text[start..].char_indices() {
+        let i = start + offset;
         let next = i + c.len_utf8();
         if c == '\n' {
             lines.push(line_start..i);
-            (line_start, used, last_space, capacity) = (next, 0, None, width);
-            i = next;
+            (line_start, used, space, word, capacity) = (next, 0, None, 0, width);
             continue;
         }
         let w = c.width().unwrap_or(0);
-        if used + w > capacity && used > 0 {
-            if c == ' ' {
-                // Break at this space and drop it.
+        if c == ' ' {
+            if used + 1 > capacity {
+                // Break here and drop the space.
                 lines.push(line_start..i);
-                (line_start, used, last_space, capacity) = (next, 0, None, width);
-                i = next;
-                continue;
-            }
-            if let Some(space) = last_space {
-                lines.push(line_start..space);
-                line_start = space + 1;
+                (line_start, used, space, word, capacity) = (next, 0, None, 0, width);
             } else {
+                (used, space, word) = (used + 1, Some(i), 0);
+            }
+            continue;
+        }
+        if used + w <= capacity {
+            used += w;
+            word += w;
+            continue;
+        }
+        match space {
+            // Move the word to the next row when it fits there whole.
+            Some(at) if word + w <= width => {
+                lines.push(line_start..at);
+                line_start = at + 1;
+                used = word + w;
+            }
+            // Split the word, or leave the cursor row empty when not even
+            // this glyph fits on it.
+            _ if used > 0 || lines.is_empty() => {
                 lines.push(line_start..i);
                 line_start = i;
+                used = w;
             }
-            capacity = width;
-            last_space = None;
-            used = text[line_start..i].width();
+            // A glyph wider than the pane: place it anyway to make progress.
+            _ => used += w,
         }
-        if c == ' ' {
-            last_space = Some(i);
-        }
-        used += w;
-        i = next;
+        (space, word, capacity) = (None, used, width);
     }
     lines.push(line_start..text.len());
     lines
@@ -342,6 +353,78 @@ mod tests {
         assert_eq!(frozen, out.len());
         let (_, frozen) = wrap_into_pane(text, 0, &pane(0, 2));
         assert_eq!(frozen, 0);
+    }
+
+    #[test]
+    fn a_long_word_elided_into_one_row_fits_after_the_cursor() {
+        // #187: the newest rows of a split word kept their full width.
+        let pane = Pane {
+            left: 2,
+            width: 10,
+            cursor_x: 4,
+            rows: 1,
+        };
+        let (out, _) = wrap_into_pane("abcdefghijklmnop", 0, &pane);
+        assert_eq!(out, "\u{2026} mnop");
+    }
+
+    #[test]
+    fn a_cursor_at_the_pane_edge_starts_on_the_next_row() {
+        let (out, frozen) = wrap_into_pane("hello world", 5, &pane(10, 3));
+        assert_eq!(out, "\n  hello\n  world");
+        assert_eq!(&out[..frozen], "\n  hello");
+        // One row and no room on it: nothing to show.
+        assert_eq!(wrap_into_pane("hello", 3, &pane(10, 1)), (String::new(), 0));
+        // Too narrow for the ellipsis: words are dropped without one.
+        assert_eq!(wrap_into_pane("ab cd", 0, &pane(9, 1)).0, "d");
+    }
+
+    /// Every row fits: the cursor row after the cursor, later rows the pane.
+    fn assert_fits(text: &str, frozen: usize, pane: &Pane) {
+        let (out, mapped) = wrap_into_pane(text, frozen, pane);
+        assert!(
+            out.is_char_boundary(mapped),
+            "{text:?} {pane:?}: {out:?} {mapped}"
+        );
+        let rows: Vec<_> = out.split('\n').collect();
+        assert!(rows.len() <= pane.rows.max(1), "{text:?} {pane:?}: {out:?}");
+        for (n, row) in rows.iter().enumerate() {
+            let (room, row) = if n == 0 {
+                (pane.width - pane.cursor_x, *row)
+            } else {
+                (pane.width, &row[pane.left..])
+            };
+            assert!(row.width() <= room, "{text:?} {pane:?}: row {n} {row:?}");
+        }
+    }
+
+    #[test]
+    fn rows_always_fit_the_pane() {
+        let texts = [
+            "abcdefghijklmnop",
+            "one two three four five six seven",
+            "a bb ccc dddd eeeee ffffff ggggggg",
+            "你好世界 wide 你好 glyphs",
+            "  leading and  double  spaces ",
+            "new\nlines\n\nand words",
+        ];
+        for text in texts {
+            for width in 2..12 {
+                for cursor_x in 0..=width {
+                    for rows in 1..4 {
+                        let pane = Pane {
+                            left: 1,
+                            width,
+                            cursor_x,
+                            rows,
+                        };
+                        for frozen in (0..=text.len()).filter(|&i| text.is_char_boundary(i)) {
+                            assert_fits(text, frozen, &pane);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
