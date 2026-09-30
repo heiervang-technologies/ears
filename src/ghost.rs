@@ -666,6 +666,10 @@ mod tests {
             commands(&rx),
             ["F 12 hello\\n  wide world", "C hello wide world"]
         );
+        // CR removal must not move the boundary into the mutable UTF-8 tail.
+        // This used to panic when preedit_frozen sliced the wrapped prefix.
+        client.preedit_frozen("\raé tail", 2).unwrap();
+        assert_eq!(commands(&rx), ["F 1 aé\\n  tail"]);
     }
 
     #[test]
