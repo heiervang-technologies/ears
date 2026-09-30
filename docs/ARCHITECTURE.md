@@ -240,7 +240,7 @@ Continuous decoding (`src/continuous.rs`) relies on Qwen3-ASR's audio encoder at
 
 - **Per-request HTTP.** `ContinuousDecoder` makes one `/v1/chat/completions` call per update.
 - **Ears stream.** `src/stream_client.rs` connects to `WS /v1/ears/stream`, served by a vLLM endpoint plugin (`vllm-plugin/`, protocol in `docs/STREAM_PROTOCOL.md`). Ears sends only new audio, and the server keeps per-utterance state, decoding whenever 150 ms of new audio has arrived.
-- **Handover to the stop path.** The push-to-talk preview writes the settled state, tagged with its recorder, to `ghost-continuous.json`. With `final_correction = false`, the stop path finishes from it with one more decode instead of a full transcription.
+- **Handover to the stop path.** The push-to-talk preview writes the settled state, tagged with its recorder, to `ghost-continuous.json`. Publication uses an owned atomic temporary file and must succeed before that frozen boundary is shown. A write failure stops preview updates with an error. With `final_correction = false`, the stop path finishes from saved state with one more decode. If frozen text exists, a final decoding error is reported instead of silently replacing it with full transcription; unreadable or malformed state also reports an error. With no frozen text, full-transcription fallback remains available. Explicit `final_correction = true` still permits replacement.
 
 ## 6. IPC Protocol
 

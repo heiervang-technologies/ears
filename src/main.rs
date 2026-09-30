@@ -1083,7 +1083,7 @@ async fn stop_and_transcribe(
             model,
             language.as_deref(),
         )
-        .await
+        .await?
     } else {
         None
     };
