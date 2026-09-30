@@ -624,3 +624,14 @@ write succeeds. Original legacy files remain intact.
 The legacy CLI/TUI `load_profile_or_defaults` entry point still reports a warning
 and attempts defaults on load failure. Strict profile-loading and inspection
 APIs return the error; this change does not silently alter fallback policy.
+
+### Embedded sound cache
+
+Embedded WAVs use SHA-256 filenames under the user cache directory's
+`ears/sounds` directory. Fresh directories are mode 0700 and files mode 0600.
+Complete files are published with atomic rename; concurrent processes can reuse
+the same path, and mismatching cached bytes are repaired. Filenames depend on
+content rather than process addresses, so restarts do not accumulate duplicates.
+Muted playback skips cache creation. Custom sound paths keep their existing
+behavior. Cached files are disposable and recreated when needed; content changes
+may leave older cache entries, but normal launches do not create new names.

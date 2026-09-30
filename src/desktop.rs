@@ -346,29 +346,45 @@ impl AudioFeedback {
         Ok(())
     }
 
-    /// Play embedded sound data (non-blocking)
-    ///
-    /// Writes the WAV data to a cache file in /tmp and plays via paplay,
-    /// which is more reliable than piping through stdin.
-    fn play_embedded(data: &'static [u8]) -> Result<()> {
-        use std::hash::{Hash, Hasher};
+    /// Cache embedded bytes by content in the user's cache directory. Publish
+    /// complete files atomically so simultaneous Ears processes can reuse them.
+    fn cache_embedded(data: &[u8], directory: &std::path::Path) -> Result<PathBuf> {
+        use sha2::{Digest, Sha256};
         use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
 
-        // Derive a stable cache path from the data pointer (each static has a unique address)
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (data.as_ptr() as usize).hash(&mut hasher);
-        let hash = hasher.finish();
-        let cache_path = std::path::PathBuf::from(format!("/tmp/ears-sound-{:x}.wav", hash));
-
-        // Write to cache file if not already present
-        if !cache_path.exists() {
-            let mut f =
-                std::fs::File::create(&cache_path).context("Failed to create sound cache file")?;
-            f.write_all(data)
-                .context("Failed to write sound cache file")?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)
+            .context("Failed to create sound cache directory")?;
+        let path = directory.join(format!("{:x}.wav", Sha256::digest(data)));
+        match std::fs::read(&path) {
+            Ok(existing) if existing == data => return Ok(path),
+            Ok(_) => {} // Repair a truncated or corrupted cache entry.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Failed to read sound cache file"),
         }
+        let mut file = tempfile::Builder::new()
+            .prefix(".sound-")
+            .tempfile_in(directory)
+            .context("Failed to create sound cache file")?;
+        file.write_all(data)
+            .context("Failed to write sound cache file")?;
+        file.persist(&path)
+            .context("Failed to publish sound cache file")?;
+        Ok(path)
+    }
 
-        Self::play_sound(&cache_path)
+    /// Play embedded sound data (non-blocking), reusing a content-addressed file.
+    fn play_embedded(data: &'static [u8]) -> Result<()> {
+        if Self::get_volume() == 0 {
+            return Ok(());
+        }
+        let dirs = directories::ProjectDirs::from("com", "heiervang", "ears")
+            .context("Cannot resolve sound cache directory")?;
+        let path = Self::cache_embedded(data, &dirs.cache_dir().join("sounds"))?;
+        Self::play_sound(&path)
     }
 
     /// Play a named sound (custom override or embedded)
@@ -1019,6 +1035,140 @@ mod tests {
     }
 
     // 5.2 Audio Feedback Tests
+    #[test]
+    fn sound_cache_reused_across_processes() {
+        use std::os::unix::fs::PermissionsExt;
+        const MARKER: &str = "EARS_SOUND_CACHE_TEST";
+        if let Some(root) = std::env::var_os(MARKER) {
+            let root = PathBuf::from(root);
+            let path = AudioFeedback::cache_embedded(SOUND_START, &root.join("sounds")).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), SOUND_START);
+            std::fs::write(
+                root.join(format!("{}.path", std::process::id())),
+                path.to_str().unwrap(),
+            )
+            .unwrap();
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut children = Vec::new();
+        for _ in 0..6 {
+            children.push(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "desktop::tests::sound_cache_reused_across_processes",
+                    ])
+                    .env(MARKER, root.path())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        let mut paths = Vec::new();
+        for mut child in children {
+            let pid = child.id();
+            assert!(child.wait().unwrap().success());
+            paths.push(std::fs::read_to_string(root.path().join(format!("{pid}.path"))).unwrap());
+        }
+        assert!(paths.iter().all(|path| path == &paths[0]));
+        assert_eq!(
+            std::fs::read_dir(root.path().join("sounds"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let path = std::path::Path::new(&paths[0]);
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        // A later call repairs partial content without accumulating another file.
+        std::fs::write(path, b"partial").unwrap();
+        assert_eq!(
+            AudioFeedback::cache_embedded(SOUND_START, path.parent().unwrap()).unwrap(),
+            path
+        );
+        assert_eq!(std::fs::read(path).unwrap(), SOUND_START);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
+    fn embedded_playback_uses_private_cache() {
+        use std::os::unix::fs::PermissionsExt;
+        const MARKER: &str = "EARS_SOUND_PLAY_TEST";
+        if std::env::var_os(MARKER).is_some() {
+            AudioFeedback::set_volume(100);
+            AudioFeedback::play_embedded(SOUND_DONE).unwrap();
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let player = bin.join("paplay");
+        std::fs::write(
+            &player,
+            "#!/bin/sh\nprintf '%s\\n' \"$2\" >> \"$SOUND_PLAYED\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = root.path().join("played");
+        for _ in 0..2 {
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "desktop::tests::embedded_playback_uses_private_cache"
+                ])
+                .env(MARKER, "1")
+                .env("PATH", &bin)
+                .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .env("SOUND_PLAYED", &log)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let played = loop {
+            let value = std::fs::read_to_string(&log).unwrap_or_default();
+            if value.lines().count() == 2 {
+                break value;
+            }
+            assert!(Instant::now() < deadline, "fake player did not finish");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let paths: Vec<_> = played.lines().collect();
+        assert_eq!(paths[0], paths[1]);
+        let path = std::path::Path::new(paths[0]);
+        assert_eq!(
+            path.parent().unwrap(),
+            root.path().join("cache/ears/sounds")
+        );
+        assert_eq!(std::fs::read(path).unwrap(), SOUND_DONE);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
+    fn sound_cache_failure_preserves_existing_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("not-a-directory");
+        std::fs::write(&directory, "keep this").unwrap();
+        assert!(AudioFeedback::cache_embedded(SOUND_START, &directory).is_err());
+        assert_eq!(std::fs::read_to_string(directory).unwrap(), "keep this");
+    }
+
     #[test]
     fn test_embedded_sounds() {
         // Verify embedded sounds are present and non-empty
