@@ -4,54 +4,14 @@
 //! requiring an actual server to be running.
 
 use ears::{WhisperClient, WhisperError};
-use std::fs;
-use std::path::PathBuf;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Creates a temporary test audio file with a unique name to avoid conflicts in parallel tests
-fn create_test_audio_file() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let temp_dir = std::env::temp_dir();
-    let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let thread_id = std::thread::current().id();
-    let audio_path = temp_dir.join(format!(
-        "test_audio_{}_{:?}_{}.wav",
-        std::process::id(),
-        thread_id,
-        unique_id
-    ));
-
-    // Create a minimal WAV file (44 bytes header + some data)
-    // This is a valid WAV file structure, though the audio data is just zeros
-    let wav_data = vec![
-        // RIFF header
-        0x52, 0x49, 0x46, 0x46, // "RIFF"
-        0x24, 0x00, 0x00, 0x00, // File size - 8
-        0x57, 0x41, 0x56, 0x45, // "WAVE"
-        // fmt chunk
-        0x66, 0x6D, 0x74, 0x20, // "fmt "
-        0x10, 0x00, 0x00, 0x00, // fmt chunk size
-        0x01, 0x00, // Audio format (PCM)
-        0x01, 0x00, // Num channels (mono)
-        0x80, 0x3E, 0x00, 0x00, // Sample rate (16000)
-        0x00, 0x7D, 0x00, 0x00, // Byte rate
-        0x02, 0x00, // Block align
-        0x10, 0x00, // Bits per sample (16)
-        // data chunk
-        0x64, 0x61, 0x74, 0x61, // "data"
-        0x00, 0x00, 0x00, 0x00, // Data size (0)
-    ];
-
-    fs::write(&audio_path, wav_data).expect("Failed to create test audio file");
-    audio_path
-}
-
-/// Cleanup test audio file
-fn cleanup_test_audio_file(path: &PathBuf) {
-    let _ = fs::remove_file(path);
+/// Owned, valid PCM fixture: even silence must include audio frames.
+fn create_test_audio_file() -> tempfile::TempPath {
+    let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    std::fs::write(&path, ears::continuous::wav_bytes(&[0; 512])).unwrap();
+    path
 }
 
 #[tokio::test]
@@ -119,7 +79,6 @@ async fn test_health_check_server_error() {
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_success() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -127,7 +86,7 @@ async fn test_transcribe_success() {
     // Set up mock response for transcription
     let response_body = r#"{"text": "Hello world"}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;
@@ -140,14 +99,14 @@ async fn test_transcribe_success() {
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello world");
+    assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_filters_thank_you() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -155,7 +114,7 @@ async fn test_transcribe_filters_thank_you() {
     // Set up mock response with silence artifact
     let response_body = r#"{"text": "Thank you."}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;
@@ -168,7 +127,7 @@ async fn test_transcribe_filters_thank_you() {
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
     // Should return error because filtered text is empty
     assert!(result.is_err());
@@ -194,16 +153,13 @@ async fn test_transcribe_file_not_found() {
 
 #[tokio::test]
 async fn test_transcribe_empty_file() {
-    // Create empty audio file
-    let temp_dir = std::env::temp_dir();
-    let audio_path = temp_dir.join(format!("empty_audio_{}.wav", std::process::id()));
-    fs::write(&audio_path, b"").expect("Failed to create empty file");
+    let audio_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
 
     let client = WhisperClient::new("http://localhost:8178");
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
     assert!(result.is_err());
     match result {
@@ -225,7 +181,7 @@ async fn test_transcribe_server_error() {
 
     // Set up mock response with error
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -238,48 +194,41 @@ async fn test_transcribe_server_error() {
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
-    // backoff library will eventually return the error after retries
-    assert!(result.is_err());
+    assert!(matches!(result, Err(WhisperError::TranscriptionError(_))));
+    assert_eq!(mock_server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_with_retry_eventually_succeeds() {
     // Start mock server
     let mock_server = MockServer::start().await;
 
-    // First two requests fail, third succeeds
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
     Mock::given(method("POST"))
-        .and(path("/inference"))
-        .respond_with(ResponseTemplate::new(500).append_header("X-Retry", "1"))
-        .up_to_n_times(2)
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/inference"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(r#"{"text": "Success after retry"}"#),
-        )
+        .and(path("/v1/audio/transcriptions"))
+        .respond_with(move |_: &wiremock::Request| {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(500)
+            } else {
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text":"Success after retry"}))
+            }
+        })
+        .expect(3)
         .mount(&mock_server)
         .await;
 
     // Create test audio file
     let audio_path = create_test_audio_file();
 
-    // Create client with retry enabled
-    // Use more generous backoff times to avoid timing-based flakiness:
-    // - 50ms initial backoff (was 10ms)
-    // - 500ms max backoff (was 100ms)
-    // This gives the retry logic enough time to execute reliably
-    // while still completing quickly (~50ms + ~100ms + ~200ms = ~350ms total)
-    let client = WhisperClient::with_retry_config(mock_server.uri(), 3, 50, 500);
+    // Two allowed retries must reach the third response, exactly.
+    let client = WhisperClient::with_retry_config(mock_server.uri(), 2, 1, 2);
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
     assert!(
         result.is_ok(),
@@ -290,7 +239,6 @@ async fn test_transcribe_with_retry_eventually_succeeds() {
 }
 
 #[tokio::test]
-#[ignore = "flaky in CI - uses mock server with timing issues"]
 async fn test_transcribe_trims_whitespace() {
     // Start mock server
     let mock_server = MockServer::start().await;
@@ -298,7 +246,7 @@ async fn test_transcribe_trims_whitespace() {
     // Response with extra whitespace
     let response_body = r#"{"text": "  Hello world  "}"#;
     Mock::given(method("POST"))
-        .and(path("/inference"))
+        .and(path("/v1/audio/transcriptions"))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&mock_server)
         .await;
@@ -311,8 +259,78 @@ async fn test_transcribe_trims_whitespace() {
     let result = client.transcribe(&audio_path).await;
 
     // Cleanup
-    cleanup_test_audio_file(&audio_path);
+    drop(audio_path);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello world");
+    assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn zero_retries_sends_exactly_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let audio = create_test_audio_file();
+    let client = WhisperClient::with_retry_config(server.uri(), 0, 1, 2);
+    assert!(matches!(
+        client.transcribe(&audio).await,
+        Err(WhisperError::TranscriptionError(_))
+    ));
+}
+
+#[tokio::test]
+async fn bearer_auth_covers_health_fallback_and_transcription() {
+    use wiremock::matchers::header;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .and(header("authorization", "Bearer test-secret"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("authorization", "Bearer test-secret"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(header("authorization", "Bearer test-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"text":"hello"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer test-secret"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"choices":[{"message":{"content":"hello"}}]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = WhisperClient::with_retry_config(server.uri(), 0, 1, 2)
+        .with_model(Some("test-asr".into()))
+        .with_api_key(Some("test-secret".into()));
+    client.health_check().await.unwrap();
+    assert_eq!(
+        client.transcribe(create_test_audio_file()).await.unwrap(),
+        "hello"
+    );
+    assert_eq!(
+        client
+            .transcribe_with_grammar(create_test_audio_file(), Some("root ::= \"hello\""))
+            .await
+            .unwrap(),
+        "hello"
+    );
 }
