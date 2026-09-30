@@ -392,10 +392,12 @@ private:
             }
             if (panel && columns + width > 48) finishLine();
             const auto part = panel && codepoint == '\t' ? std::string(4, ' ') : text.substr(i, end - i);
+            // The popup is themed like the terminal: colour only, no underline.
+            const auto underline = panel ? fcitx::TextFormatFlag::NoFlag : fcitx::TextFormatFlag::Underline;
             if (i < frozen) {
-                t.append(part, {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::HighLight});
+                t.append(part, {underline, fcitx::TextFormatFlag::HighLight});
             } else {
-                t.append(part, fcitx::TextFormatFlag::Underline);
+                t.append(part, underline);
             }
             columns += width;
             i = end;

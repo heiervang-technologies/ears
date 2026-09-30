@@ -124,7 +124,14 @@ application testing to verify preedit rendering.
 
 For a tmux client descended from the focused Alacritty window, Ears compares
 preview display width with `pane_width - cursor_x`. Text that would overflow
-(or contains a line break or tab) moves to the fcitx popup; short previews stay
+(or contains a line break or tab) no longer fits the cursor's row. When
+`alacritty.toml` sets `[colors.preedit] wrap = true` (patched Alacritty), Ears
+word-wraps it into the pane: the first row starts at the cursor, later rows are
+newline-separated and indented by `pane_left` spaces, which Alacritty leaves
+undrawn, and the grid under the text is hidden. When the rows below the cursor
+run out, the oldest words give way to `…`. The frozen byte count is mapped into
+the wrapped text, and the commit still delivers the original transcript.
+Without `wrap`, the preview moves to the fcitx popup; short previews stay
 inline. Only the matched client's pane is used. Probes have deadlines; unknown
 geometry and older addons retain the existing inline behavior. Other terminal
 servers and non-default tmux sockets are not inferred from unrelated clients.
@@ -133,7 +140,9 @@ The addon command `B <frozen_bytes> <escaped text>` shares `F`'s byte validation
 and ownership rules, but selects a wrapped popup. Read-only popup rows wrap around 48 columns (fcitx preedit itself is single-line); the observer retains the raw text and original
 boundary, and commit still delivers the original transcript. Switching between
 popup and inline clears the previous surface. Popup colors follow the fcitx
-theme rather than Alacritty's settings. Clicking a preview row does not commit it.
+classic UI theme; popup text has no underline, so a theme with the terminal's
+font and colors (`NormalColor` for the ghost, `HighlightColor` for frozen
+text) matches it. Clicking a preview row does not commit it.
 
 Validated in an isolated headless Wayland session with the patched Alacritty,
 tmux and fcitx addon: inline frozen color, multiline popup, exact observer text

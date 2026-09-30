@@ -26,6 +26,7 @@
 //! The addon clears any visible ghost when the connection closes, so a
 //! crashed or stopped ears never leaves stale text behind.
 
+use crate::ghost_terminal::Overflow;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -266,7 +267,7 @@ pub struct GhostClient {
     /// Remember an addon that does not understand frozen boundaries.
     no_frozen: bool,
     no_panel: bool,
-    overflow_probe: fn(&str) -> bool,
+    overflow_probe: fn(&str) -> Option<crate::ghost_terminal::Overflow>,
 }
 
 impl GhostClient {
@@ -284,7 +285,7 @@ impl GhostClient {
             active_class,
             no_frozen: false,
             no_panel: false,
-            overflow_probe: |_| false,
+            overflow_probe: |_| None,
         }
     }
 
@@ -345,10 +346,23 @@ impl GhostClient {
             return Ok(GhostDisplay::None);
         }
         let frozen_bytes = crate::freeze::boundary(text, frozen_bytes);
+        let overflow = if text.is_empty() {
+            None
+        } else {
+            (self.overflow_probe)(text)
+        };
+        let wrapped;
+        let (text, frozen_bytes) = match &overflow {
+            Some(Overflow::Wrap(pane)) => {
+                wrapped = crate::ghost_terminal::wrap_into_pane(text, frozen_bytes, pane);
+                (wrapped.0.as_str(), wrapped.1)
+            }
+            _ => (text, frozen_bytes),
+        };
         // The wire protocol drops CR; count bytes in the unescaped text the
         // addon will actually receive, not in the original transcript.
         let frozen_bytes = text[..frozen_bytes].bytes().filter(|b| *b != b'\r').count();
-        if !text.is_empty() && !self.no_panel && (self.overflow_probe)(text) {
+        if overflow == Some(Overflow::Panel) && !self.no_panel {
             match self.send(&format!("B {} {}", frozen_bytes, escape(text))) {
                 Err(GhostError::Rejected(reply)) if reply == "ERR unknown command" => {
                     self.no_panel = true;
@@ -595,7 +609,7 @@ mod tests {
             seen
         });
         let mut client = client(path);
-        client.overflow_probe = |_| true;
+        client.overflow_probe = |_| Some(Overflow::Panel);
         client.preedit_frozen("hello tail", 5).unwrap();
         client.preedit_frozen("hello again", 5).unwrap();
         assert_eq!(
@@ -616,7 +630,7 @@ mod tests {
         let path = dir.path().join("ghost.sock");
         let rx = fake_addon(path.clone());
         let mut client = client(path);
-        client.overflow_probe = |_| true;
+        client.overflow_probe = |_| Some(Overflow::Panel);
         assert_eq!(
             client.preedit_frozen("hello wide world", 5).unwrap(),
             GhostDisplay::Panel
@@ -625,6 +639,32 @@ mod tests {
         assert_eq!(
             commands(&rx),
             ["B 5 hello wide world", "C hello wide world"]
+        );
+    }
+
+    #[test]
+    fn overflowing_preview_wraps_into_the_pane_when_the_terminal_can() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let rx = fake_addon(path.clone());
+        let mut client = client(path);
+        client.overflow_probe = |_| {
+            Some(Overflow::Wrap(crate::ghost_terminal::Pane {
+                left: 2,
+                width: 10,
+                cursor_x: 4,
+                rows: 5,
+            }))
+        };
+        assert_eq!(
+            client.preedit_frozen("hello wide world", 10).unwrap(),
+            GhostDisplay::Preedit
+        );
+        client.commit("hello wide world");
+        // Frozen bytes count the inserted indentation; the commit is untouched.
+        assert_eq!(
+            commands(&rx),
+            ["F 12 hello\\n  wide world", "C hello wide world"]
         );
     }
 
