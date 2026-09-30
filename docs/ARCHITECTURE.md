@@ -578,3 +578,15 @@ Notifications have a two-second deadline and report unsuccessful exit status.
 Background sound playback and clipboard-copy helper parents are reaped with
 30-second and key-helper deadlines respectively. Interactive fzf selection waits for user input; user-supplied post-transcription
 hooks run asynchronously until they exit.
+
+### Dependency auditing
+
+`dependency-audit.yml` audits the committed Cargo.lock on pull requests and main
+pushes, and supports manual runs. It installs cargo-audit 0.22.0 and fetches the
+current RustSec database. Vulnerabilities and soundness advisories fail the job;
+maintenance notices remain visible in its output. No advisories are ignored.
+Run the same check locally with `cargo audit --deny unsound`.
+
+As of 2026-09-30, `backoff` and its `instant` dependency still have unmaintained
+notices. Replacing that retry implementation remains maintenance work; a passing
+audit is not a claim that every dependency is actively maintained.
