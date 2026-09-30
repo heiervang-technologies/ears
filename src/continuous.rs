@@ -307,7 +307,11 @@ impl ContinuousDecoder {
         };
         let hypothesis = hypothesis.trim_start().to_string();
         if !last && self.header.is_some() {
-            self.stable = settled_prefix(&hypothesis, self.rollback_words).to_string();
+            // A shorter continuation must never retract the forced prefix.
+            let settled = settled_prefix(&hypothesis, self.rollback_words);
+            if settled.len() > self.stable.len() && settled.starts_with(&self.stable) {
+                self.stable = settled.to_string();
+            }
         }
         Ok(hypothesis.trim_end().to_string())
     }
@@ -713,6 +717,33 @@ mod tests {
         assert_eq!(d.step(&pcm, true, TICK).await.unwrap(), "x y a b c");
         // A final tick does not settle anything further.
         assert_eq!(d.snapshot().stable, "x y");
+    }
+
+    #[tokio::test]
+    async fn short_continuation_cannot_unfreeze_the_prefix() {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply(" new"))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"))
+            .resume(DecoderState {
+                stable: "one two three four".into(),
+                ..Default::default()
+            });
+        let pcm = vec![0i16; SAMPLE_RATE];
+        for _ in 0..2 {
+            assert_eq!(
+                d.step(&pcm, false, TICK).await.unwrap(),
+                "one two three four new"
+            );
+            assert_eq!(d.snapshot().stable, "one two three four");
+        }
+        assert_eq!(
+            bodies(&server).await[1]["messages"][1]["content"],
+            "language English<asr_text>one two three four"
+        );
     }
 
     #[tokio::test]

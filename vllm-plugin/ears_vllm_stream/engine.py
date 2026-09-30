@@ -58,6 +58,35 @@ class VllmDecoder:
         text = build_prompt(context, n_windows, prefix)
         return list(self.tokenizer.encode(text, add_special_tokens=False))
 
+    def transcript_tokens(self, text: str, frozen_bytes: int) -> list[dict] | None:
+        """Tokenizer spans of the current transcript, not sampled-token history.
+
+        BPE can merge across the forced-prefix seam on re-tokenization. A
+        token touching mutable text is therefore mutable even if part of
+        its span is frozen. Offsets on the wire are UTF-8 bytes; HF offsets
+        are Unicode characters (and can overlap for byte-fallback tokens).
+        Unsupported tokenizers omit this optional detail, never guess it.
+        """
+        try:
+            encoded = self.tokenizer(text, add_special_tokens=False,
+                                     return_offsets_mapping=True)
+            ids, offsets = encoded["input_ids"], encoded["offset_mapping"]
+            if len(ids) != len(offsets):
+                return None
+            byte_offsets = [0]
+            for char in text:
+                byte_offsets.append(byte_offsets[-1] + len(char.encode("utf-8")))
+            tokens = []
+            for token_id, (start, end) in zip(ids, offsets):
+                if not 0 <= start < end <= len(text):
+                    return None
+                a, b = byte_offsets[start], byte_offsets[end]
+                tokens.append({"id": int(token_id), "start_byte": a, "end_byte": b,
+                               "state": "frozen" if b <= frozen_bytes else "mutable"})
+            return tokens
+        except (TypeError, AttributeError, KeyError, NotImplementedError, ValueError):
+            return None
+
     async def __call__(
         self,
         windows: Sequence[np.ndarray],

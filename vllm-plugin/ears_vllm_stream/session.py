@@ -73,6 +73,7 @@ class Utterance:
     closed: list[np.ndarray] = field(default_factory=list)  # cached windows
     last_decode_at: int = 0  # samples at the start of the last decode
     last_text: str = ""
+    last_stable: str = ""
     seq: int = 0
     ended: bool = False
     too_long: bool = False
@@ -320,12 +321,29 @@ class StreamSession:
         decode_ms = int((time.monotonic() - t0) * 1000)
         if self.active is not utt:
             return  # cancelled or superseded meanwhile: send nothing
+        frozen_bytes = len((text if final else utt.stable).encode("utf-8"))
+        stability = {
+            "profile": "qwen3_asr_forced_prefix_v1",
+            "scope": "final" if final else "live_decode",
+            "frozen_bytes": frozen_bytes,
+            "rollback_words": utt.rollback_words,
+            "encoder_window_ms": ENCODER_WINDOW * 1000 // SAMPLE_RATE,
+            "closed_audio_windows": sum(len(w) == ENCODER_WINDOW for w in windows),
+            "open_audio_ms": _ms(sum(len(w) for w in windows if len(w) < ENCODER_WINDOW)),
+        }
+        token_spans = getattr(self._decode, "transcript_tokens", None)
+        if token_spans is not None:
+            tokens = token_spans(text, frozen_bytes)
+            if tokens is not None:
+                stability["token_basis"] = "retokenized_transcript"
+                stability["tokens"] = tokens
         if final:
             utt.done = True
             self.active = None
             await self._send(
                 {
                     "type": "final",
+                    "stability": stability,
                     "utterance": utt.id,
                     "text": text,
                     "audio_ms": audio_ms,
@@ -333,13 +351,15 @@ class StreamSession:
                 }
             )
             return
-        if utt.too_long or text == utt.last_text:
+        if utt.too_long or (text == utt.last_text and utt.stable == utt.last_stable):
             return
         utt.last_text = text
+        utt.last_stable = utt.stable
         utt.seq += 1
         await self._send(
             {
                 "type": "partial",
+                "stability": stability,
                 "utterance": utt.id,
                 "seq": utt.seq,
                 "text": text,

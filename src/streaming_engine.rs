@@ -218,8 +218,7 @@ struct Partial {
     unsupported: bool,
     /// Pushed by the ears stream, not a request of ours in flight.
     streamed: bool,
-    /// Prefix of the text that will not change.
-    settled: String,
+    frozen_bytes: usize,
 }
 
 impl Partial {
@@ -231,15 +230,15 @@ impl Partial {
             decoder: None,
             unsupported: false,
             streamed: false,
-            settled: String::new(),
+            frozen_bytes: 0,
         }
     }
 
     /// A partial the ears stream pushed for `utterance`.
-    fn streamed(utterance: u64, text: String, settled: String) -> Self {
+    fn streamed(utterance: u64, text: String, frozen_bytes: usize) -> Self {
         Self {
             streamed: true,
-            settled,
+            frozen_bytes,
             ..Self::plain(utterance, Ok(text))
         }
     }
@@ -621,11 +620,12 @@ impl StreamingEngine {
                     Some(s) if s.id == partial.utterance => {
                         ghost.stream_state = Some(partial.snapshot());
                         let text = partial.text.trim().to_string();
-                        let settled = partial.stable().trim_start().to_string();
-                        let _ =
-                            ghost
-                                .partial_tx
-                                .send(Partial::streamed(s.utterance, text, settled));
+                        let frozen_bytes = partial.stable().trim_start().len();
+                        let _ = ghost.partial_tx.send(Partial::streamed(
+                            s.utterance,
+                            text,
+                            frozen_bytes,
+                        ));
                     }
                     _ => debug!("Stale stream partial (utterance {})", partial.utterance),
                 },
@@ -753,7 +753,7 @@ impl StreamingEngine {
                 decoder,
                 unsupported,
                 streamed,
-                settled,
+                frozen_bytes,
             } = partial;
             if !streamed {
                 ghost.partial_in_flight = false;
@@ -786,27 +786,18 @@ impl StreamingEngine {
                     continue;
                 }
             };
-            let text = if bash {
-                text
+            let (text, frozen_bytes) = if bash {
+                (text, 0)
             } else {
-                filters.apply(&text, language.as_deref())
+                crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
-            if text.is_empty() {
-                continue;
-            }
-            let settled = if bash {
-                settled
-            } else {
-                filters.apply(&settled, language.as_deref())
-            };
-            let frozen = crate::ghost::frozen_len(&text, &settled);
             let shown = ghost.spaced(&text);
-            let frozen = if frozen > 0 {
-                frozen + shown.len() - text.len()
+            let frozen_bytes = if frozen_bytes > 0 {
+                frozen_bytes + shown.len() - text.len()
             } else {
                 0
             };
-            let r = ghost.client.preedit_frozen(&shown, frozen);
+            let r = ghost.client.preedit_frozen(&shown, frozen_bytes);
             ghost.note_result(&r);
             if r.is_ok() {
                 ghost.showing = true;
@@ -867,14 +858,13 @@ impl StreamingEngine {
                     outcome,
                     Err(crate::continuous::ContinuousError::Unsupported(_))
                 );
-                let settled = decoder.snapshot().stable;
                 let _ = tx.send(Partial {
                     utterance,
                     result: outcome.map_err(|e| e.to_string()),
+                    frozen_bytes: decoder.snapshot().stable.len(),
                     decoder: (!unsupported).then_some(decoder),
                     unsupported,
                     streamed: false,
-                    settled,
                 });
             });
             return;
@@ -2023,7 +2013,7 @@ mod tests {
         // The per-tick decoder carries on from the settled text.
         assert_eq!(
             next_cmd_ticking(&mut engine, &lines).await,
-            "F 8 streamed words then http"
+            "F 14 streamed words then http"
         );
         let requests = http.received_requests().await.unwrap();
         let chat: serde_json::Value = serde_json::from_slice(

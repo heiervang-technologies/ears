@@ -101,7 +101,8 @@ utterance. Any length; an odd trailing byte is kept until the next frame.
 {"type": "end", "utterance": 7}
 ```
 No more audio for this utterance. The server finishes any decode in flight,
-then decodes once more with every word open and sends `final`.
+then decodes the remaining mutable suffix once more, retaining the forced
+prefix, and sends `final`.
 
 ```json
 {"type": "cancel", "utterance": 7}
@@ -114,7 +115,7 @@ Drop the utterance. Nothing more is sent for it.
   connection. After a decode finishes, the next starts as soon as
   `min_step_ms` of new audio is buffered (or immediately on `end`). There is
   no timer: decoding keeps pace with the audio as the GPU allows.
-- A partial is sent only if its text differs from the previous one.
+- A partial is sent if its text or frozen boundary differs from the previous one.
 - Results for a cancelled or superseded utterance are never sent.
 - Bounded memory: audio per utterance is capped at `max_audio_ms`; incoming
   frames are read continuously so a slow decode never stalls the socket.
@@ -148,3 +149,11 @@ decoder, then repeated previews:
    segment completes, `cancel` when the candidate is rejected.
 4. Connection lost mid-utterance: fall back to per-tick HTTP for that
    utterance; never replay audio into a second final (no duplicate commits).
+
+## Token freeze extension
+
+Partial and final frames include additive `stability` metadata with the
+`qwen3_asr_forced_prefix_v1` profile, UTF-8 freeze boundary, live/final scope,
+audio-window counts, and optional model-tokenizer spans. See
+[TOKEN_FREEZE.md](TOKEN_FREEZE.md) for the schema and guarantees. Legacy
+`stable_chars` remains supported. A boundary-only update is a partial too.

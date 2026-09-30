@@ -53,6 +53,13 @@ pub enum Commands {
         frozen: Option<String>,
     },
 
+    /// Watch the live frozen/revisable ghost boundary without changing focus
+    GhostWatch {
+        /// Emit changed snapshots as JSON lines for external visualizers
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Internal: ghost preview loop for a push-to-talk recording
     #[command(hide = true)]
     GhostPreview {

@@ -7,9 +7,8 @@
 // "\n" -> newline.
 //
 //   P <text>   show <text> as preedit (replaces any previous ghost)
-//   F <n> <text>  as P; the first <n> bytes are frozen (settled). They are
-//              marked HighLight, which the Wayland frontend sends as the
-//              preedit cursor range [0, n), so apps can colour them apart
+//   F <bytes> <text>  mark frozen prefix HighLight (Wayland cursor range [0,n))
+//   T          observe: OK state <bytes> <escaped text> (does not claim ownership)
 //   C <text>   clear the ghost and commit <text> to the application
 //   X          clear the ghost without committing
 //   S          status query
@@ -35,7 +34,7 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 
-#include <algorithm>
+#include <charconv>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -74,6 +73,16 @@ std::string unescape(const std::string &in) {
         } else {
             out.push_back(in[i]);
         }
+    }
+    return out;
+}
+
+std::string escape(const std::string &in) {
+    std::string out;
+    for (char c : in) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else out += c;
     }
     return out;
 }
@@ -275,31 +284,21 @@ private:
         char op = line[0];
         std::string text =
             line.size() > 2 ? unescape(line.substr(2)) : std::string();
-        size_t frozen = 0;
-        if (op == 'F') {
-            // "F <n> <text>": the count is not escaped, the text is.
-            std::string rest = line.size() > 2 ? line.substr(2) : std::string();
-            auto space = rest.find(' ');
-            if (space == std::string::npos) {
-                return "ERR bad frozen count";
-            }
-            char *end = nullptr;
-            errno = 0;
-            unsigned long n = std::strtoul(rest.c_str(), &end, 10);
-            if (errno != 0 || end != rest.c_str() + space) {
-                return "ERR bad frozen count";
-            }
-            text = unescape(rest.substr(space + 1));
-            frozen = std::min<size_t>(n, text.size());
-            // Never split a UTF-8 sequence.
-            while (frozen > 0 && frozen < text.size() &&
-                   (static_cast<unsigned char>(text[frozen]) & 0xC0) == 0x80) {
-                --frozen;
-            }
-        }
         switch (op) {
-        case 'P':
-        case 'F': {
+        case 'F':
+        case 'P': {
+            size_t frozen = 0;
+            if (op == 'F') {
+                const auto space = text.find(' ');
+                if (space == std::string::npos) return "ERR invalid boundary";
+                auto parsed = std::from_chars(text.data(), text.data() + space, frozen);
+                if (parsed.ec != std::errc() || parsed.ptr != text.data() + space)
+                    return "ERR invalid boundary";
+                text.erase(0, space + 1);
+                if (frozen > text.size() || (frozen < text.size() &&
+                    (static_cast<unsigned char>(text[frozen]) & 0xc0) == 0x80))
+                    return "ERR invalid boundary";
+            }
             auto *ic = target();
             if (!ic) {
                 return "OK none";
@@ -328,6 +327,10 @@ private:
                 clearGhost();
             }
             return "OK none";
+        case 'T':
+            target(); // reconcile a focus change before reporting the ghost
+            if (!ghostIc_.get()) clearGhost();
+            return "OK state " + std::to_string(frozenBytes_) + " " + escape(ghostText_);
         case 'S': {
             auto *ic = focusedNow();
             return ic ? "OK " + mode(ic) + " " + ic->program()
@@ -338,8 +341,9 @@ private:
         }
     }
 
-    void showOn(fcitx::InputContext *ic, const std::string &text,
-                size_t frozen = 0) {
+    void showOn(fcitx::InputContext *ic, const std::string &text, size_t frozen) {
+        ghostText_ = text;
+        frozenBytes_ = frozen;
         fcitx::Text t;
         if (frozen > 0) {
             t.append(text.substr(0, frozen),
@@ -363,6 +367,8 @@ private:
     }
 
     void clearOn(fcitx::InputContext *ic) {
+        ghostText_.clear();
+        frozenBytes_ = 0;
         ic->inputPanel().setClientPreedit(fcitx::Text());
         ic->inputPanel().setPreedit(fcitx::Text());
         ic->updatePreedit();
@@ -370,6 +376,8 @@ private:
     }
 
     void clearGhost() {
+        ghostText_.clear();
+        frozenBytes_ = 0;
         if (auto *ic = ghostIc_.get()) {
             clearOn(ic);
         }
@@ -387,6 +395,8 @@ private:
     // Client whose P put the ghost up; 0 when none is showing.
     uint64_t ownerId_ = 0;
     uint64_t nextClientId_ = 0;
+    std::string ghostText_;
+    size_t frozenBytes_ = 0;
 };
 
 class EarsGhostFactory : public fcitx::AddonFactory {

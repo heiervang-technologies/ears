@@ -88,6 +88,8 @@ async def run(args) -> int:
             t = time.monotonic() - t0
             audio = sent / 2 / 16000
             kind = msg.get("type")
+            if args.tokens and kind in ("partial", "final"):
+                print_token_state(msg)
             if kind == "partial":
                 s = msg["text"].encode()[: msg["stable_chars"]].decode(errors="replace")
                 rest = msg["text"][len(s):]
@@ -112,9 +114,31 @@ async def run(args) -> int:
     return code
 
 
+def print_token_state(msg: dict) -> None:
+    """Plain, copyable visualization, also works without ANSI support."""
+    state = msg.get("stability")
+    if not state:
+        print("  token freeze metadata unavailable (older server)")
+        return
+    print(f"  {state['scope']}: {state['frozen_bytes']} frozen UTF-8 bytes; "
+          f"audio windows: {state['closed_audio_windows']} closed + "
+          f"{state['open_audio_ms']}ms open (not a text alignment)")
+    tokens = state.get("tokens")
+    if tokens is None:
+        print("  tokenizer spans unavailable; text boundary remains authoritative")
+        return
+    raw = msg["text"].encode("utf-8")
+    # Token ids identify this re-tokenized snapshot, not persistent identities.
+    for token in tokens:
+        span = raw[token['start_byte']:token['end_byte']].decode("utf-8")
+        label = "FROZEN" if token['state'] == 'frozen' else "mutable"
+        print(f"    {label:7} {token['id']:>6} {span!r}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("wav")
+    p.add_argument("--tokens", action="store_true", help="visualize Qwen tokenizer spans and live freeze boundary")
     p.add_argument("--url", default="ws://localhost:30189/v1/ears/stream")
     p.add_argument("--language", help="ISO 639-1 code, e.g. en (default: detect)")
     p.add_argument("--context", help="context-biasing text")

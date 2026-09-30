@@ -106,3 +106,20 @@ def test_service_setup(monkeypatch):
     assert not is_qwen3_asr(client.model_config)
     assert build_service(client, SimpleNamespace()).decode is None
     assert build_service(None, SimpleNamespace()).decode is None
+
+
+def test_token_spans_use_utf8_and_keep_seam_tokens_mutable():
+    d = VllmDecoder(engine(1)[0])
+    class OffsetTokenizer:
+        def __call__(self, text, **kwargs):
+            assert kwargs == {"add_special_tokens": False, "return_offsets_mapping": True}
+            # Two byte-fallback pieces can share a Unicode character span.
+            return {"input_ids": [1, 2, 3, 4],
+                    "offset_mapping": [(0, 1), (1, 2), (1, 2), (2, 5)]}
+    d.tokenizer = OffsetTokenizer()
+    tokens = d.transcript_tokens("a你 bc", len("a你 ".encode()))
+    assert [t["state"] for t in tokens] == ["frozen", "frozen", "frozen", "mutable"]
+    assert [(t["start_byte"], t["end_byte"]) for t in tokens] == [(0, 1), (1, 4), (1, 4), (4, 7)]
+    assert all(t["state"] == "mutable" for t in d.transcript_tokens("a你 bc", 0))
+    d.tokenizer = Tokenizer()  # tokenizer without offsets: no invented word tokens
+    assert d.transcript_tokens("abc", 2) is None
