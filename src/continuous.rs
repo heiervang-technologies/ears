@@ -281,7 +281,9 @@ impl ContinuousDecoder {
         let reply: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| ContinuousError::Failed(e.to_string()))?;
         let choice = &reply["choices"][0];
-        let continuation = choice["message"]["content"].as_str().unwrap_or_default();
+        let continuation = choice["message"]["content"].as_str().ok_or_else(|| {
+            ContinuousError::Failed("ASR response is missing string message.content".into())
+        })?;
         // Cut off by max_tokens: the text is a runaway, not a transcript.
         if choice["finish_reason"].as_str() == Some("length") {
             return Err(ContinuousError::Failed("decode hit max_tokens".to_string()));
@@ -826,6 +828,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ContinuousError::Unsupported(_)));
+    }
+
+    #[tokio::test]
+    async fn malformed_success_responses_preserve_decoder_state() {
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({"choices": []}),
+            serde_json::json!({"choices": [{"message": {"content": null}}]}),
+            serde_json::json!({"choices": [{"message": {"content": 42}}]}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(path("/v1/chat/completions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            for stable in ["", "already frozen words"] {
+                let mut decoder =
+                    ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+                        .with_language(Some("en"))
+                        .resume(DecoderState {
+                            stable: stable.into(),
+                            ..Default::default()
+                        });
+                let before = decoder.snapshot();
+                for last in [false, true] {
+                    let error = decoder
+                        .step(&vec![0i16; SAMPLE_RATE], last, TICK)
+                        .await
+                        .unwrap_err();
+                    assert!(matches!(error, ContinuousError::Failed(_)));
+                    assert_eq!(decoder.snapshot(), before);
+                }
+            }
+        }
     }
 
     #[tokio::test]

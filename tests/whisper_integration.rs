@@ -334,3 +334,45 @@ async fn bearer_auth_covers_health_fallback_and_transcription() {
         "hello"
     );
 }
+
+#[tokio::test]
+async fn grammar_response_distinguishes_malformed_from_empty_text() {
+    for (body, valid) in [
+        (serde_json::json!({}), false),
+        (serde_json::json!({"choices": []}), false),
+        (serde_json::json!({"choices": [{"message": {}}]}), false),
+        (
+            serde_json::json!({"choices": [{"message": {"content": null}}]}),
+            false,
+        ),
+        (
+            serde_json::json!({"choices": [{"message": {"content": 42}}]}),
+            false,
+        ),
+        (
+            serde_json::json!({"choices": [{"message": {"content": ""}}]}),
+            true,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WhisperClient::with_retry_config(server.uri(), 0, 1, 2)
+            .with_model(Some("Qwen/Qwen3-ASR-1.7B".into()));
+        let result = client
+            .transcribe_with_grammar(create_test_audio_file(), Some("root ::= \"hello\""))
+            .await;
+        if valid {
+            assert!(matches!(result, Err(WhisperError::EmptyTranscription)));
+        } else {
+            assert!(
+                result.is_err() && !matches!(result, Err(WhisperError::EmptyTranscription)),
+                "malformed response accepted or treated as silence: {body}: {result:?}"
+            );
+        }
+    }
+}

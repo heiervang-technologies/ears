@@ -523,7 +523,11 @@ impl WhisperClient {
             .into_iter()
             .next()
             .and_then(|c| c.message.content)
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                WhisperError::TranscriptionError(
+                    "ASR response is missing string message.content".into(),
+                )
+            })?;
 
         let text = Self::strip_asr_scaffold(&raw);
 
