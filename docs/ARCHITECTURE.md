@@ -512,7 +512,14 @@ An optional executable at `~/.config/ears/hooks/post-transcribe` is called after
 - `$1` -- Path to a copy of the audio file (the copy is made so the hook can process it asynchronously)
 - `$2` -- The transcribed text
 
-The hook runs in a background thread (fire-and-forget) with stdin/stdout/stderr redirected to null.
+`src/post_transcribe.rs` launches a `/bin/sh` supervisor before returning, with
+stdin/stdout/stderr redirected to null. A unique audio copy is owned by that
+supervisor: its exit trap removes the copy after the hook succeeds, fails, or
+cannot execute. This works even if the Ears CLI exits first. The parent reaps
+the supervisor in a background thread while it remains alive. Paths and text
+are positional arguments, never interpolated shell code. Hooks that start
+background work must copy the audio before returning. A machine crash or forced
+kill of the supervisor can still leave a copy; no crash-wide scavenger is claimed.
 
 ### Source boundaries for live previews
 

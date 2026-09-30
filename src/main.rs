@@ -1,5 +1,6 @@
 mod cli;
 mod ghost_preview;
+mod post_transcribe;
 
 use ghost_preview::{
     deliver_via_ghost, finish_continuous, ghost_continuous_state_file, proc_start_time,
@@ -394,59 +395,6 @@ async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
 }
 
 // Use shared StateResetGuard from ears::state
-
-/// Run post-transcribe hook if it exists (fire-and-forget)
-fn run_post_transcribe_hook(audio_file: &std::path::Path, text: &str) {
-    use directories::ProjectDirs;
-    use std::os::unix::fs::PermissionsExt;
-
-    let hook_path = ProjectDirs::from("com", "heiervang", "ears")
-        .map(|p| p.config_dir().join("hooks/post-transcribe"))
-        .unwrap_or_default();
-
-    let is_executable = std::fs::metadata(&hook_path)
-        .map(|m| m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false);
-
-    if !is_executable {
-        return;
-    }
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    let hook_audio = audio_file
-        .parent()
-        .unwrap_or(std::path::Path::new("/tmp"))
-        .join(format!("hook-{}.wav", timestamp));
-
-    if std::fs::copy(audio_file, &hook_audio).is_err() {
-        tracing::warn!("Failed to copy audio file for hook");
-        return;
-    }
-
-    let text_owned = text.to_string();
-
-    std::thread::spawn(move || {
-        let mut command = std::process::Command::new(&hook_path);
-        command
-            .arg(&hook_audio)
-            .arg(&text_owned)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-
-        match command.spawn() {
-            Ok(mut child) => {
-                tracing::info!("Post-transcribe hook started");
-                let _ = child.wait();
-            }
-            Err(e) => tracing::warn!("Failed to run post-transcribe hook: {}", e),
-        }
-    });
-}
 
 /// Toggle VAD mode: start or stop headless voice activity detection
 async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
@@ -1204,7 +1152,7 @@ async fn stop_and_transcribe(
                 TextInput::copy_to_clipboard(&filtered_text);
             }
 
-            run_post_transcribe_hook(&audio_file, &filtered_text);
+            post_transcribe::run(&audio_file, &filtered_text);
         }
         Ok(_) => {
             AudioFeedback::beep_error().ok();
