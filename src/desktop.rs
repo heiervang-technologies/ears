@@ -74,10 +74,12 @@ impl KeyboardLayout {
     fn detect_hyprland_layout() -> Option<String> {
         // First try to get the active keyboard layout
         // hyprctl devices -j returns JSON with keyboard info
-        let output = Command::new("hyprctl")
+        let mut command = Command::new("hyprctl");
+        command
             .args(["devices", "-j"])
-            .output()
-            .ok()?;
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let output = output_bounded(command, Duration::from_millis(300)).ok()?;
 
         if !output.status.success() {
             return None;
@@ -92,23 +94,17 @@ impl KeyboardLayout {
         }
 
         // Fallback: try getting the configured layout from hyprctl getoption
-        let option_output = Command::new("hyprctl")
-            .args(["getoption", "input:kb_layout"])
-            .output()
-            .ok()?;
-
-        if option_output.status.success() {
-            let option_str = String::from_utf8_lossy(&option_output.stdout);
-            // Output format: "str: us" or similar
-            for line in option_str.lines() {
-                if line.trim().starts_with("str:") {
-                    let layout = line.trim().strip_prefix("str:")?.trim();
-                    // Handle comma-separated layouts (e.g., "us,no") - take the first one
-                    let first_layout = layout.split(',').next()?.trim();
-                    if !first_layout.is_empty() {
-                        return Some(first_layout.to_string());
-                    }
-                }
+        let mut command = Command::new("hyprctl");
+        command
+            .args(["getoption", "input:kb_layout", "-j"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let output = output_bounded(command, Duration::from_millis(300)).ok()?;
+        if output.status.success() {
+            let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+            let layout = value.get("str")?.as_str()?.split(',').next()?.trim();
+            if !layout.is_empty() {
+                return Some(layout.to_string());
             }
         }
 
@@ -117,33 +113,13 @@ impl KeyboardLayout {
 
     /// Parse hyprctl devices JSON output to find active keyboard layout
     fn parse_hyprctl_devices(json_str: &str) -> Option<String> {
-        // Simple JSON parsing without a full parser
-        // Look for "active_keymap": "..." in the keyboards section
-        // The active_keymap field contains the human-readable layout name
-
-        // Find keyboards section
-        let keyboards_start = json_str.find("\"keyboards\"")?;
-        let keyboards_section = &json_str[keyboards_start..];
-
-        // Find the first active_keymap in the keyboards array
-        // Look for main keyboard (not virtual)
-        for line in keyboards_section.lines() {
-            let trimmed = line.trim();
-
-            // Look for active_keymap field
-            if trimmed.contains("\"active_keymap\"") {
-                // Extract the value: "active_keymap": "English (US)"
-                if let Some(start) = trimmed.find(':') {
-                    let value_part = &trimmed[start + 1..];
-                    let value = value_part.trim().trim_matches(',').trim_matches('"').trim();
-
-                    // Map common keymap names to layout codes
-                    return Self::keymap_name_to_layout(value);
-                }
-            }
-        }
-
-        None
+        let value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let keyboards = value.get("keyboards")?.as_array()?;
+        let keyboard = keyboards
+            .iter()
+            .find(|keyboard| keyboard.get("main").and_then(|v| v.as_bool()) == Some(true))
+            .or_else(|| keyboards.first())?;
+        Self::keymap_name_to_layout(keyboard.get("active_keymap")?.as_str()?)
     }
 
     /// Map Hyprland keymap names to layout codes
@@ -192,10 +168,12 @@ impl KeyboardLayout {
     fn detect_gnome_layout() -> Option<String> {
         // Use mru-sources (most recently used) - first item is current layout
         // This works with GNOME's per-window keyboard layout switching
-        let mru_output = Command::new("dconf")
+        let mut command = Command::new("dconf");
+        command
             .args(["read", "/org/gnome/desktop/input-sources/mru-sources"])
-            .output()
-            .ok()?;
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mru_output = output_bounded(command, Duration::from_millis(300)).ok()?;
 
         if !mru_output.status.success() {
             return None;
@@ -268,14 +246,17 @@ pub struct Notifications;
 impl Notifications {
     /// Send a desktop notification
     pub fn send(message: &str, urgency: Urgency) -> Result<()> {
-        Command::new("notify-send")
-            .arg("-u")
-            .arg(urgency.as_str())
-            .arg("-a")
-            .arg("ears")
-            .arg(message)
-            .output()
-            .context("Failed to send notification")?;
+        let mut command = Command::new("notify-send");
+        command
+            .args(["-u", urgency.as_str(), "-a", "ears", "--", message])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let status =
+            run_bounded(command, Duration::from_secs(2)).context("Failed to send notification")?;
+        if !status.success() {
+            anyhow::bail!("notify-send failed with status: {status}");
+        }
         Ok(())
     }
 
@@ -347,7 +328,7 @@ impl AudioFeedback {
         }
         // Map 0-100 to PulseAudio's 0-65536 scale
         let pa_volume = (volume as u32 * 65536 / 100).to_string();
-        Command::new("paplay")
+        let mut child = Command::new("paplay")
             .arg(format!("--volume={}", pa_volume))
             .arg(path)
             .stdin(std::process::Stdio::null())
@@ -355,6 +336,13 @@ impl AudioFeedback {
             .stderr(std::process::Stdio::null())
             .spawn()
             .context("Failed to spawn paplay")?;
+        std::thread::spawn(
+            move || match wait_bounded(&mut child, Duration::from_secs(30)) {
+                Ok(status) if !status.success() => tracing::warn!(%status, "Sound playback failed"),
+                Err(error) => tracing::warn!(%error, "Sound playback did not finish"),
+                _ => {}
+            },
+        );
         Ok(())
     }
 
@@ -918,11 +906,19 @@ impl TextInput {
     /// Under long-running `ws-listen`, those add up (centurion reported 34
     /// zombies stacked after a session). Park the wait in a detached thread.
     pub fn copy_to_clipboard(text: &str) {
-        match Command::new("wl-copy").arg(text).spawn() {
+        match Command::new("wl-copy")
+            .arg("--")
+            .arg(text)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
             Ok(mut child) => {
-                tracing::info!("Copied text to clipboard");
-                std::thread::spawn(move || {
-                    let _ = child.wait();
+                std::thread::spawn(move || match wait_bounded(&mut child, KEY_TIMEOUT) {
+                    Ok(status) if status.success() => tracing::info!("Copied text to clipboard"),
+                    Ok(status) => tracing::warn!(%status, "wl-copy failed"),
+                    Err(error) => tracing::warn!(%error, "Clipboard copy did not finish"),
                 });
             }
             Err(e) => {
@@ -1306,6 +1302,23 @@ mod tests {
         }"#;
         let result = KeyboardLayout::parse_hyprctl_devices(json);
         assert_eq!(result, Some("no".to_string()));
+    }
+
+    #[test]
+    fn keyboard_json_prefers_main_and_decodes_escapes() {
+        let json = r#"{"other":{"active_keymap":"German"},"keyboards":[{"active_keymap":"Norwegian","main":false},{"main":true,"active_keymap":"English (\u0055S)"}]}"#;
+        assert_eq!(
+            KeyboardLayout::parse_hyprctl_devices(json).as_deref(),
+            Some("us")
+        );
+        for invalid in [
+            "not JSON",
+            r#"{"keyboards":[]}"#,
+            r#"{"keyboards":{}}"#,
+            r#"{"other":{"active_keymap":"Norwegian"}}"#,
+        ] {
+            assert_eq!(KeyboardLayout::parse_hyprctl_devices(invalid), None);
+        }
     }
 
     #[test]
