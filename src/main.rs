@@ -1,5 +1,6 @@
 mod cli;
 mod ghost_preview;
+mod owned_file;
 mod post_transcribe;
 
 use ghost_preview::{
@@ -999,10 +1000,15 @@ async fn stop_and_transcribe(
         .stop_recording()
         .context("Failed to stop recording")?;
 
+    // The recorder is stopped: every later return/cancellation must release
+    // its audio and reset state, including validation and metadata failures.
+    let _state_guard = ears::state::StateResetGuard::new(&config.state_dir);
+    let audio_file = config.state_dir.join("recording.wav");
+    let _audio_cleanup = owned_file::CleanupFile::new(&audio_file)?;
+
     tokio::time::sleep(Duration::from_millis(300)).await;
     tracing::info!("Recording stopped in {:?}", stop_start.elapsed());
 
-    let audio_file = config.state_dir.join("recording.wav");
     if !audio_file.exists() {
         AudioFeedback::beep_error().ok();
         Notifications::error("Recording file is empty or missing").ok();
@@ -1015,7 +1021,6 @@ async fn stop_and_transcribe(
     if metadata.len() <= ears::WAV_HEADER_SIZE {
         AudioFeedback::beep_error().ok();
         Notifications::error("Recording too short").ok();
-        std::fs::remove_file(&audio_file).ok();
         tracing::error!(
             "Audio file has no audio data ({} bytes, header is {})",
             metadata.len(),
@@ -1034,7 +1039,6 @@ async fn stop_and_transcribe(
     if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
         AudioFeedback::beep_error().ok();
         Notifications::error("Recording file is corrupted").ok();
-        std::fs::remove_file(&audio_file).ok();
         tracing::error!("Audio file is not a valid WAV file");
         anyhow::bail!("Invalid audio file format");
     }
@@ -1044,10 +1048,6 @@ async fn stop_and_transcribe(
     state_mgr
         .transition(StateEnum::Transcribing)
         .context("Failed to transition to Transcribing state")?;
-
-    // Guard ensures state resets to Idle even if we return early via `?` or panic.
-    // This prevents getting stuck in Transcribing after crashes or unexpected errors.
-    let _state_guard = ears::state::StateResetGuard::new(&config.state_dir);
 
     let lang_start = std::time::Instant::now();
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
@@ -1164,14 +1164,10 @@ async fn stop_and_transcribe(
             Notifications::error(&format!("Transcription failed: {}", e)).ok();
             tracing::error!("Transcription failed: {}", e);
 
-            std::fs::remove_file(&audio_file).ok();
-
             // Guard will reset state to Idle on drop
             return Err(e.into());
         }
     }
-
-    std::fs::remove_file(&audio_file).ok();
 
     // Explicit transition (guard also resets on drop, but this is the clean path)
     state_mgr
