@@ -70,6 +70,10 @@ fn default_final_correction() -> bool {
     true
 }
 
+/// Largest accepted `live_min_step_ms`: longer steps would leave the ghost
+/// without updates for most of an utterance.
+pub const MAX_LIVE_MIN_STEP_MS: u64 = 5_000;
+
 /// How the live ghost preview decodes a growing recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -203,6 +207,15 @@ pub struct Config {
     /// Live preview decoding (`repeat` or `continuous`). Default: repeat.
     #[serde(default)]
     pub live_decoding: LiveDecoding,
+    /// Continuous live decoding: words at the end of the hypothesis that stay
+    /// open to revision (the rest is frozen). Lower freezes sooner, higher
+    /// corrects more. Default: 3.
+    #[serde(default)]
+    pub live_rollback_words: Option<usize>,
+    /// Streaming (vLLM plugin) live decoding: least new audio, in ms, before
+    /// the server decodes again. Default: the server's (150).
+    #[serde(default)]
+    pub live_min_step_ms: Option<u64>,
     /// Re-transcribe the whole recording for the committed text. When false
     /// and continuous live decoding is on, the committed text is the live
     /// hypothesis finished off in one more tick, which is faster. Default: true.
@@ -265,6 +278,8 @@ impl Config {
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
+            live_rollback_words: None,
+            live_min_step_ms: None,
             final_correction: default_final_correction(),
             ghost: Default::default(),
             config_dir,
@@ -416,6 +431,8 @@ impl Config {
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
+            live_rollback_words: None,
+            live_min_step_ms: None,
             final_correction: default_final_correction(),
             ghost: Default::default(),
             config_dir: PathBuf::new(),
@@ -656,6 +673,17 @@ impl Config {
             .ends_with("/v1")
     }
 
+    /// Words the continuous decoder leaves open to revision.
+    pub fn rollback_words(&self) -> usize {
+        self.live_rollback_words
+            .unwrap_or(crate::continuous::DEFAULT_ROLLBACK_WORDS)
+    }
+
+    /// The streaming decode step, capped at [`MAX_LIVE_MIN_STEP_MS`].
+    pub fn min_step_ms(&self) -> Option<u64> {
+        self.live_min_step_ms.map(|ms| ms.min(MAX_LIVE_MIN_STEP_MS))
+    }
+
     /// Validate the configuration
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<()> {
@@ -742,6 +770,11 @@ mod tests {
     fn test_validate_valid_config() {
         let config = Config::new().unwrap();
         assert!(config.validate().is_ok());
+        assert_eq!(
+            config.rollback_words(),
+            crate::continuous::DEFAULT_ROLLBACK_WORDS
+        );
+        assert_eq!(config.min_step_ms(), None);
     }
 
     #[test]
@@ -834,6 +867,14 @@ server = "http://my-server:9000"
         assert_eq!(config.device, "default");
         assert!(config.language.is_none());
         assert!(config.model.is_none());
+    }
+
+    #[test]
+    fn live_tuning_options_parse_and_step_is_capped() {
+        let config: Config =
+            toml::from_str("live_rollback_words = 1\nlive_min_step_ms = 60000\n").unwrap();
+        assert_eq!(config.rollback_words(), 1);
+        assert_eq!(config.min_step_ms(), Some(MAX_LIVE_MIN_STEP_MS));
     }
 
     #[test]

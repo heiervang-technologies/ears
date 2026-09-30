@@ -263,6 +263,8 @@ fn spec() -> crate::continuous::ContinuousSpec {
         model: Some("Qwen/Qwen3-ASR-1.7B".into()),
         language: Some("en".into()),
         context: None,
+        rollback_words: None,
+        min_step_ms: None,
     }
 }
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `live_rollback_words` and `live_min_step_ms` config options tune continuous
+  live decoding: how many trailing words stay revisable, and how much new
+  audio the streaming server waits for between decodes.
+- A ghost too long for its tmux pane row wraps over the pane's rows below
+  (patched Alacritty with `colors.preedit.wrap`) instead of opening the
+  fcitx popup (#184).
+
 ## [1.2.0] - 2026-09-28
 
 Reconciles the package, CLI, tag, and release versions after the historical

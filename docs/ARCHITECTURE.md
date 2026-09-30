@@ -383,6 +383,8 @@ progressive_typing = false           # Type text as it becomes stable
 cue_volume = 100                     # Audio cue volume (0-100)
 live_decoding = "repeat"             # Ghost partials: repeat | continuous (Qwen3-ASR on vLLM)
 final_correction = true              # Continuous: re-transcribe in full on stop (false = finish the live result)
+# live_rollback_words = 3            # Continuous: trailing words still open to revision
+# live_min_step_ms = 150             # Streaming: least new audio (ms) between decodes, server default if unset
 
 [text_filters]
 lowercase = false                    # Convert output to lowercase
