@@ -34,7 +34,7 @@ expression: output
 │  Auto [m]                                                                                                            │
 │  [ ] Bash Mode [g]                                                                                                   │
 │  Cue Volume: 100% [+/-]                                                                                              │
-│  Ghost Colour: app default [o]                                                                                       │
+│  Ghost Colour: app default [o]  Frozen: same [O]                                                                     │
 │                                                                                                                      │
 │Volume Ducking:                                                                                                       │
 │  [ ] Enabled [Shift+D]                                                                                               │

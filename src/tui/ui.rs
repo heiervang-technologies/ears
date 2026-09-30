@@ -411,17 +411,27 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::styled(" [+/-]", Style::default().fg(Color::DarkGray)),
     ]));
-    let ghost_color = app
-        .ghost_style
-        .hex()
-        .and_then(|hex| u32::from_str_radix(&hex[1..], 16).ok())
-        .map_or(Color::DarkGray, |rgb| {
-            Color::Rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
-        });
+    let rgb = |hex: Option<String>| {
+        hex.and_then(|hex| u32::from_str_radix(&hex[1..], 16).ok())
+            .map_or(Color::DarkGray, |rgb| {
+                Color::Rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+            })
+    };
+    let ghost_color = rgb(app.ghost_style.hex());
+    let frozen_color = match app.ghost_style.frozen_hex() {
+        None => ghost_color,
+        hex => rgb(hex),
+    };
     text.push(Line::from(vec![
         Span::raw("  Ghost Colour: "),
         Span::styled(app.ghost_style.label(), Style::default().fg(ghost_color)),
         Span::styled(" [o]", Style::default().fg(Color::DarkGray)),
+        Span::raw("  Frozen: "),
+        Span::styled(
+            app.ghost_style.frozen_label(),
+            Style::default().fg(frozen_color),
+        ),
+        Span::styled(" [O]", Style::default().fg(Color::DarkGray)),
     ]));
 
     // Volume Ducking section
@@ -477,7 +487,7 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ]));
     } else {
         text.push(Line::from(Span::styled(
-            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] Bash  [+/-] Vol  [o] Ghost  [Shift+D] Duck  [ / ] Duck%",
+            "[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [t] Typing  [a] Auto-corr  [m] Mode  [g] Bash  [+/-] Vol  [o/O] Ghost  [Shift+D] Duck  [ / ] Duck%",
             Style::default().fg(theme.dim),
         )));
     }

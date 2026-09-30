@@ -218,6 +218,8 @@ struct Partial {
     unsupported: bool,
     /// Pushed by the ears stream, not a request of ours in flight.
     streamed: bool,
+    /// Prefix of the text that will not change.
+    settled: String,
 }
 
 impl Partial {
@@ -229,13 +231,15 @@ impl Partial {
             decoder: None,
             unsupported: false,
             streamed: false,
+            settled: String::new(),
         }
     }
 
     /// A partial the ears stream pushed for `utterance`.
-    fn streamed(utterance: u64, text: String) -> Self {
+    fn streamed(utterance: u64, text: String, settled: String) -> Self {
         Self {
             streamed: true,
+            settled,
             ..Self::plain(utterance, Ok(text))
         }
     }
@@ -617,7 +621,11 @@ impl StreamingEngine {
                     Some(s) if s.id == partial.utterance => {
                         ghost.stream_state = Some(partial.snapshot());
                         let text = partial.text.trim().to_string();
-                        let _ = ghost.partial_tx.send(Partial::streamed(s.utterance, text));
+                        let settled = partial.stable().trim_start().to_string();
+                        let _ =
+                            ghost
+                                .partial_tx
+                                .send(Partial::streamed(s.utterance, text, settled));
                     }
                     _ => debug!("Stale stream partial (utterance {})", partial.utterance),
                 },
@@ -745,6 +753,7 @@ impl StreamingEngine {
                 decoder,
                 unsupported,
                 streamed,
+                settled,
             } = partial;
             if !streamed {
                 ghost.partial_in_flight = false;
@@ -785,8 +794,19 @@ impl StreamingEngine {
             if text.is_empty() {
                 continue;
             }
+            let settled = if bash {
+                settled
+            } else {
+                filters.apply(&settled, language.as_deref())
+            };
+            let frozen = crate::ghost::frozen_len(&text, &settled);
             let shown = ghost.spaced(&text);
-            let r = ghost.client.preedit(&shown);
+            let frozen = if frozen > 0 {
+                frozen + shown.len() - text.len()
+            } else {
+                0
+            };
+            let r = ghost.client.preedit_frozen(&shown, frozen);
             ghost.note_result(&r);
             if r.is_ok() {
                 ghost.showing = true;
@@ -847,12 +867,14 @@ impl StreamingEngine {
                     outcome,
                     Err(crate::continuous::ContinuousError::Unsupported(_))
                 );
+                let settled = decoder.snapshot().stable;
                 let _ = tx.send(Partial {
                     utterance,
                     result: outcome.map_err(|e| e.to_string()),
                     decoder: (!unsupported).then_some(decoder),
                     unsupported,
                     streamed: false,
+                    settled,
                 });
             });
             return;
@@ -1882,7 +1904,7 @@ mod tests {
         server.say(stream_partial(id, "hello stream", 5));
         assert_eq!(
             next_cmd_ticking(&mut engine, &lines).await,
-            "P hello stream"
+            "F 5 hello stream"
         );
         assert_eq!(
             engine
@@ -1994,14 +2016,14 @@ mod tests {
         server.say(stream_partial(id, "streamed words so far", 14));
         assert_eq!(
             next_cmd_ticking(&mut engine, &lines).await,
-            "P streamed words so far"
+            "F 14 streamed words so far"
         );
 
         server.drop_connections();
         // The per-tick decoder carries on from the settled text.
         assert_eq!(
             next_cmd_ticking(&mut engine, &lines).await,
-            "P streamed words then http"
+            "F 8 streamed words then http"
         );
         let requests = http.received_requests().await.unwrap();
         let chat: serde_json::Value = serde_json::from_slice(

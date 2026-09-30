@@ -7,6 +7,9 @@
 // "\n" -> newline.
 //
 //   P <text>   show <text> as preedit (replaces any previous ghost)
+//   F <n> <text>  as P; the first <n> bytes are frozen (settled). They are
+//              marked HighLight, which the Wayland frontend sends as the
+//              preedit cursor range [0, n), so apps can colour them apart
 //   C <text>   clear the ghost and commit <text> to the application
 //   X          clear the ghost without committing
 //   S          status query
@@ -32,6 +35,7 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -271,13 +275,36 @@ private:
         char op = line[0];
         std::string text =
             line.size() > 2 ? unescape(line.substr(2)) : std::string();
+        size_t frozen = 0;
+        if (op == 'F') {
+            // "F <n> <text>": the count is not escaped, the text is.
+            std::string rest = line.size() > 2 ? line.substr(2) : std::string();
+            auto space = rest.find(' ');
+            if (space == std::string::npos) {
+                return "ERR bad frozen count";
+            }
+            char *end = nullptr;
+            errno = 0;
+            unsigned long n = std::strtoul(rest.c_str(), &end, 10);
+            if (errno != 0 || end != rest.c_str() + space) {
+                return "ERR bad frozen count";
+            }
+            text = unescape(rest.substr(space + 1));
+            frozen = std::min<size_t>(n, text.size());
+            // Never split a UTF-8 sequence.
+            while (frozen > 0 && frozen < text.size() &&
+                   (static_cast<unsigned char>(text[frozen]) & 0xC0) == 0x80) {
+                --frozen;
+            }
+        }
         switch (op) {
-        case 'P': {
+        case 'P':
+        case 'F': {
             auto *ic = target();
             if (!ic) {
                 return "OK none";
             }
-            showOn(ic, text);
+            showOn(ic, text, frozen);
             ghostIc_ = ic->watch();
             ownerId_ = clientId;
             return "OK " + mode(ic);
@@ -311,9 +338,17 @@ private:
         }
     }
 
-    void showOn(fcitx::InputContext *ic, const std::string &text) {
+    void showOn(fcitx::InputContext *ic, const std::string &text,
+                size_t frozen = 0) {
         fcitx::Text t;
-        t.append(text, fcitx::TextFormatFlag::Underline);
+        if (frozen > 0) {
+            t.append(text.substr(0, frozen),
+                     {fcitx::TextFormatFlag::Underline,
+                      fcitx::TextFormatFlag::HighLight});
+        }
+        if (frozen < text.size()) {
+            t.append(text.substr(frozen), fcitx::TextFormatFlag::Underline);
+        }
         // Ghost semantics: the caret stays where the user is; the suggested
         // text trails after it instead of pushing the cursor along.
         t.setCursor(0);

@@ -47,6 +47,10 @@ pub enum Commands {
         /// Do not underline the ghost text
         #[arg(long)]
         no_underline: bool,
+        /// Colour of the settled start of the ghost, the part that will no
+        /// longer change (same formats; `default` draws it like the rest)
+        #[arg(long, value_name = "COLOR")]
+        frozen: Option<String>,
     },
 
     /// Internal: ghost preview loop for a push-to-talk recording

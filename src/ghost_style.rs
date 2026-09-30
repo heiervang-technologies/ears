@@ -6,8 +6,13 @@
 //!
 //! * Alacritty (with the preedit-colors patch): `[colors.preedit]` in
 //!   `alacritty.toml`, live-reloaded.
-//! * Hover: `hover.ime.ghost_preedit_color` in each profile's `user.js`,
-//!   read at browser start.
+//! * Hover: `hover.ime.ghost_preedit_color` and
+//!   `hover.ime.ghost_frozen_color` in each profile's `user.js`, read at
+//!   browser start.
+//!
+//! The frozen colour is for the settled start of the ghost, the part the
+//! live decoder will no longer change. ears marks it as the input method's
+//! highlighted range, which is what the apps colour.
 //!
 //! Chromium, Firefox and GTK4 apps such as Walker keep their own style.
 
@@ -32,6 +37,10 @@ pub struct GhostStyle {
     /// Underline the ghost text. Default: false.
     #[serde(default)]
     pub underline: bool,
+    /// Colour of the settled (frozen) start of the ghost, same formats as
+    /// `color`. None: drawn like the rest.
+    #[serde(default)]
+    pub frozen_color: Option<String>,
 }
 
 impl GhostStyle {
@@ -40,25 +49,50 @@ impl GhostStyle {
         self.color.as_deref().and_then(normalize_color)
     }
 
+    /// The frozen colour as `#rrggbb`, if set and valid.
+    pub fn frozen_hex(&self) -> Option<String> {
+        self.frozen_color.as_deref().and_then(normalize_color)
+    }
+
     /// The next preset after the current colour (for the TUI).
     pub fn next_preset(&self) -> &'static str {
-        let current = self.hex();
-        let i = PRESETS
-            .iter()
-            .position(|(_, hex)| Some(*hex) == current.as_deref())
-            .map_or(0, |i| (i + 1) % PRESETS.len());
-        PRESETS[i].0
+        next_preset_after(self.hex())
+    }
+
+    /// The next frozen colour: presets, then back to none.
+    pub fn next_frozen(&self) -> Option<&'static str> {
+        match self.frozen_hex() {
+            Some(hex) if PRESETS.last().is_some_and(|(_, h)| *h == hex) => None,
+            current => Some(next_preset_after(current)),
+        }
     }
 
     /// A short label: the preset name if it is one, else the hex value.
     pub fn label(&self) -> String {
-        match self.hex() {
-            None => "app default".to_string(),
-            Some(hex) => PRESETS
-                .iter()
-                .find(|(_, h)| *h == hex)
-                .map_or(hex.clone(), |(name, _)| name.to_string()),
-        }
+        label_of(self.hex(), "app default")
+    }
+
+    /// Label of the frozen colour.
+    pub fn frozen_label(&self) -> String {
+        label_of(self.frozen_hex(), "same")
+    }
+}
+
+fn next_preset_after(current: Option<String>) -> &'static str {
+    let i = PRESETS
+        .iter()
+        .position(|(_, hex)| Some(*hex) == current.as_deref())
+        .map_or(0, |i| (i + 1) % PRESETS.len());
+    PRESETS[i].0
+}
+
+fn label_of(hex: Option<String>, none: &str) -> String {
+    match hex {
+        None => none.to_string(),
+        Some(hex) => PRESETS
+            .iter()
+            .find(|(_, h)| *h == hex)
+            .map_or(hex.clone(), |(name, _)| name.to_string()),
     }
 }
 
@@ -190,36 +224,52 @@ fn profile_dirs(root: &Path, ini: &str) -> Vec<PathBuf> {
 /// Set `[colors.preedit]` in an alacritty.toml, keeping everything else.
 fn apply_alacritty(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
     let old = std::fs::read_to_string(path)?;
-    let mut keys: Vec<(&str, String)> = vec![("underline", style.underline.to_string())];
+    // Ghost text is drawn over the terminal, without a background box.
+    let mut keys: Vec<(&str, String)> = vec![
+        ("underline", style.underline.to_string()),
+        ("background", "false".to_string()),
+    ];
     // Without a colour the section keeps whatever foreground it has.
     if let Some(hex) = style.hex() {
         keys.insert(0, ("foreground", format!("\"{hex}\"")));
     }
+    // An empty value removes the key: no frozen colour, no highlight.
+    keys.push((
+        "highlight_foreground",
+        style
+            .frozen_hex()
+            .map_or(String::new(), |hex| format!("\"{hex}\"")),
+    ));
     let new = set_toml_keys(&old, "colors.preedit", &keys);
     write_if_changed(path, &old, &new)
 }
 
-/// Set `hover.ime.ghost_preedit_color` in a user.js, keeping everything else.
+/// Set the Hover ghost colour prefs in a user.js, keeping everything else.
 fn apply_hover(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
     let old = std::fs::read_to_string(path).unwrap_or_default();
-    let pref = "hover.ime.ghost_preedit_color";
-    let line = format!(
-        "user_pref(\"{pref}\", \"{}\");",
-        style.hex().unwrap_or_default()
-    );
+    let prefs = [
+        ("hover.ime.ghost_preedit_color", style.hex()),
+        ("hover.ime.ghost_frozen_color", style.frozen_hex()),
+    ];
     let mut lines: Vec<String> = old
         .lines()
-        .filter(|l| !l.contains(&format!("\"{pref}\"")))
+        .filter(|l| !prefs.iter().any(|(p, _)| l.contains(&format!("\"{p}\""))))
         .map(str::to_string)
         .collect();
-    lines.push(line);
+    for (pref, hex) in prefs {
+        lines.push(format!(
+            "user_pref(\"{pref}\", \"{}\");",
+            hex.unwrap_or_default()
+        ));
+    }
     let mut new = lines.join("\n");
     new.push('\n');
     write_if_changed(path, &old, &new)
 }
 
 /// Replace or add `key = value` lines in `[section]`; add the section at the
-/// end if missing. Other lines, comments and formatting are kept.
+/// end if missing. A key with an empty value is removed instead. Other
+/// lines, comments and formatting are kept.
 fn set_toml_keys(text: &str, section: &str, keys: &[(&str, String)]) -> String {
     let header = format!("[{section}]");
     let lines: Vec<&str> = text.lines().collect();
@@ -231,7 +281,7 @@ fn set_toml_keys(text: &str, section: &str, keys: &[(&str, String)]) -> String {
         out.push_str("# Ghost text style, written by ears (`[ghost]` in its config).\n");
         out.push_str(&header);
         out.push('\n');
-        for (k, v) in keys {
+        for (k, v) in keys.iter().filter(|(_, v)| !v.is_empty()) {
             out.push_str(&format!("{k} = {v}\n"));
         }
         return out;
@@ -246,7 +296,9 @@ fn set_toml_keys(text: &str, section: &str, keys: &[(&str, String)]) -> String {
         let key = line.split('=').next().unwrap_or("").trim();
         if let Some(i) = pending.iter().position(|(k, _)| *k == key) {
             let (k, v) = pending.remove(i);
-            out.push(format!("{k} = {v}"));
+            if !v.is_empty() {
+                out.push(format!("{k} = {v}"));
+            }
         } else {
             out.push(line.to_string());
         }
@@ -256,7 +308,7 @@ fn set_toml_keys(text: &str, section: &str, keys: &[(&str, String)]) -> String {
     while insert_at > start + 1 && out[insert_at - 1].trim().is_empty() {
         insert_at -= 1;
     }
-    for (k, v) in pending {
+    for (k, v) in pending.into_iter().filter(|(_, v)| !v.is_empty()) {
         out.insert(insert_at, format!("{k} = {v}"));
         insert_at += 1;
     }
@@ -364,6 +416,7 @@ size = 11
         let style = GhostStyle {
             color: Some("orange".into()),
             underline: false,
+            ..Default::default()
         };
         assert!(apply_alacritty(&link, &style).unwrap());
         assert!(std::fs::symlink_metadata(&link)
@@ -387,18 +440,54 @@ size = 11
         let style = GhostStyle {
             color: Some("#e0c040".into()),
             underline: false,
+            ..Default::default()
         };
         assert!(apply_hover(&path, &style).unwrap());
         let style = GhostStyle {
             color: Some("green-yellow".into()),
             underline: false,
+            ..Default::default()
         };
         assert!(apply_hover(&path, &style).unwrap());
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
             text,
-            "user_pref(\"a.b\", true);\nuser_pref(\"hover.ime.ghost_preedit_color\", \"#b8d44a\");\n"
+            "user_pref(\"a.b\", true);\nuser_pref(\"hover.ime.ghost_preedit_color\", \"#b8d44a\");\nuser_pref(\"hover.ime.ghost_frozen_color\", \"\");\n"
         );
+    }
+
+    #[test]
+    fn frozen_colour_is_written_and_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alacritty.toml");
+        std::fs::write(&path, ALACRITTY).unwrap();
+        let mut style = GhostStyle {
+            color: Some("grey".into()),
+            frozen_color: Some("#fff".into()),
+            ..Default::default()
+        };
+        assert!(apply_alacritty(&path, &style).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(
+            "underline = false\nbackground = false\nhighlight_foreground = \"#ffffff\"\n"
+        ));
+        style.frozen_color = None;
+        assert!(apply_alacritty(&path, &style).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("highlight_foreground"), "{text}");
+        assert!(toml::from_str::<toml::Value>(&text).is_ok());
+    }
+
+    #[test]
+    fn frozen_presets_cycle_through_none() {
+        let mut style = GhostStyle::default();
+        assert_eq!(style.frozen_label(), "same");
+        assert_eq!(style.next_frozen(), Some("grey"));
+        style.frozen_color = Some("green-yellow".into());
+        assert_eq!(style.next_frozen(), None);
+        style.frozen_color = Some("orange".into());
+        assert_eq!(style.frozen_label(), "orange");
+        assert_eq!(style.next_frozen(), Some("yellow"));
     }
 
     #[test]
