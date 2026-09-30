@@ -38,10 +38,14 @@ new recordings, and rejected speech candidates reset the state.
 
 With `live_decoding = "continuous"`, push-to-talk and VAD ghost previews
 send the boundary automatically. The updated fcitx5 addon draws the frozen
-prefix with `HighLight` and underlines both parts. The Wayland frontend
-exports the highlighted prefix as the preedit cursor range `[0, n)`, which
-patched Alacritty uses for the configured frozen color. Both remain
-uncommitted until the existing commit path runs. Filters map the boundary
+prefix with `HighLight` and underlines both parts for inline preedit. The
+Wayland frontend exports the highlighted prefix as the preedit cursor range
+`[0, n)`, which
+patched Alacritty uses for the configured frozen color. Patched Hover maps
+the GTK Wayland highlighted prefix to `hover.ime.ghost_frozen_color`.
+`ears ghost-style --frozen "#ffffff"` writes these app preferences; Alacritty
+reloads its configuration immediately, while Hover needs a restart.
+Both parts remain uncommitted until the existing commit path runs. Filters map the boundary
 into the displayed text, including Unicode case changes and punctuation
 removal; invalid byte offsets freeze nothing.
 
@@ -49,7 +53,7 @@ Applications and input-method themes can override preedit formatting.
 An older addon falls back to the existing uniform ghost display. Rebuild
 and install the ears binary and `fcitx5-addon` to enable the inline split;
 update the vLLM plugin for the additional tokenizer metadata. No system
-configuration or running services are changed by building this branch.
+configuration or running services are changed by building alone.
 
 For a live view alongside any application (including those that ignore
 preedit styling), run `ears ghost-watch` in another terminal. It observes
