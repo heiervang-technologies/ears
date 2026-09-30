@@ -37,7 +37,7 @@ fn validation_errors_reset_state_and_clean_recordings() {
             "invalid" => fs::write(&audio, [0u8; 80]).unwrap(),
             "unreadable" => {
                 fs::write(&audio, [0u8; 80]).unwrap();
-                fs::set_permissions(&audio, fs::Permissions::from_mode(0)).unwrap();
+                fs::set_permissions(&audio, fs::Permissions::from_mode(0o000)).unwrap();
             }
             _ => {}
         }
