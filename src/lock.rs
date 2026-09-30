@@ -123,8 +123,12 @@ impl FileLock {
         &self.lock_path
     }
 
-    /// Clean up stale lock file
-    /// This is safe because flock locks are automatically released when the process exits
+    /// Compatibility no-op: kernel flock ownership needs no stale-file cleanup.
+    ///
+    /// Locks are released when the owning descriptor closes or process exits.
+    /// The persistent file must not be unlinked: another process may still hold
+    /// its inode, and replacing it would let two processes lock different files.
+    /// This method deliberately neither removes the file nor releases our lock.
     pub fn cleanup_stale(&self) -> Result<(), LockError> {
         // flock locks are automatically released when the file descriptor is closed
         // or when the process exits, so we don't need to do anything special here.
