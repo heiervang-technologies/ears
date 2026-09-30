@@ -349,7 +349,10 @@ impl App {
             device_picker_selected: 0,
             device_picker_error: None,
             profile: active_profile,
-            available_profiles: Config::list_profiles().unwrap_or_default(),
+            available_profiles: Config::list_profiles().unwrap_or_else(|error| {
+                tracing::warn!(%error, "Cannot list profiles; profile picker is empty");
+                Vec::new()
+            }),
             log_filter: LogFilter::All,
             help_overlay_open: false,
             search_mode: false,
@@ -399,8 +402,12 @@ impl App {
                 }
 
                 let model_name = async {
-                    let response = request.send().await.ok()?;
-                    let json: serde_json::Value = response.json().await.ok()?;
+                    let response = request.send().await
+                        .inspect_err(|error| tracing::debug!(%error, "Optional model discovery failed"))
+                        .ok()?;
+                    let json: serde_json::Value = response.json().await
+                        .inspect_err(|error| tracing::debug!(%error, "Optional model discovery returned invalid JSON"))
+                        .ok()?;
                     json.get("data")?
                         .as_array()?
                         .first()?

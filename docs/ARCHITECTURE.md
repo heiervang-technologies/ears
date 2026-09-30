@@ -502,6 +502,34 @@ still apply independently. Restart listeners after changing it.
 - **Binary code** (`main.rs`, TUI): Uses `anyhow::Result` for ergonomic error propagation with context via `.context()`.
 - **Library modules** (`state.rs`, `vad.rs`, `streaming.rs`, etc.): Uses `thiserror` for typed error enums that implement `std::error::Error`.
 
+### Review rules and accepted fallbacks
+
+The mixed syntax identified in audit #114 is not a requirement to replace every
+`.ok()`, `unwrap_or`, or `expect` with the same operator. Review the operation's
+contract and caller:
+
+| Operation | Required handling |
+|-----------|-------------------|
+| Transcription, recorder I/O, config persistence, state transition, frozen-prefix handoff | Return contextual errors; do not replace failure with empty text or success. State must publish before memory/display claims it succeeded. |
+| Optional sound, notification, model label, profile picker, volume adjustment | Keep transcription usable; log a diagnostic at the API boundary or where fallback is chosen. Routine absent desktop probes may return `None`. |
+| Closed event/watch/oneshot receiver during shutdown or with no subscribers | Discard send failure intentionally; it means there is no consumer, not a failed transcription. |
+| Child cancellation, socket cleanup, owned temporary-file drop | Complete bounded cleanup and reap owned children. Missing/already-closed resources are expected; primary cleanup failures get diagnostics where recovery remains possible. |
+| Optional display fields and protocol observations | `Option` defaults are allowed when absence is part of the protocol; malformed required ASR content is an error. |
+| Proven local invariants and fixed constructor setup | `expect` documents an invariant or fatal initialization failure. It must not hide runtime config, recording, or transcription errors. Test assertions are separate from production error handling. |
+
+The typing switch intentionally retains its legacy compatibility policy: a missing
+file means on, and anything other than explicit `off` means on. Unreadable or
+invalid state now warns rather than silently selecting that default. Persistence
+errors still propagate. `Config::load_profile_or_defaults` likewise explicitly
+warns before its compatibility fallback; strict loading and profile switching
+return errors. These policies are documented exceptions, not implicit success.
+
+The review covered the original desktop/event/config priorities plus recording,
+IPC, preview/finalization and worker lifecycle paths. Regression tests exercise
+failed persistence, malformed responses, bounded helpers, cancellation and frozen
+handoff. The remaining uses of fallback syntax represent the contracts above;
+their count alone is not a count of unhandled failures.
+
 ### Error Types
 
 | Module | Error Type | Key Variants |
@@ -521,7 +549,7 @@ still apply independently. Restart listeners after changing it.
 - **Drop guards**: `StateResetGuard` attempts to persist `Idle` on early return or panic and logs write failures. It preserves a live external VAD session. `ContinuousCapture` kills `pw-record` on drop.
 - **State persistence**: Transitions, timeout resets and stale-state reconciliation publish a unique temporary file atomically before changing in-memory state. Write failures preserve the previous in-memory state and propagate to the caller. Optional Waybar refresh has a 300 ms deadline and its child is reaped.
 - **Stale state reconciliation**: On startup, `Recording` state with no live process or `Transcribing` state is reset to `Idle`.
-- **Graceful degradation**: Missing optional tools (e.g., `column`, `fzf`, `notify-send`) are handled with fallbacks or silent failures (`.ok()`).
+- **Graceful degradation**: Optional presentation helpers may fall back without failing transcription. Notification and sound APIs log failures at debug level even when callers discard their returned error; asynchronous sound failures are logged by the playback worker. Volume helper failures are warnings. Profile-list failures warn and leave the picker empty.
 - **Health checks**: The whisper server is health-checked before starting a recording or VAD pipeline.
 
 ### Logging
