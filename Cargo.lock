@@ -618,6 +618,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "url",
  "voice_activity_detector",
  "wiremock",

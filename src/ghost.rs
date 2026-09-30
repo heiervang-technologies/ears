@@ -13,6 +13,7 @@
 //! ```text
 //! P <text>   show <text> as the ghost (replaces the previous one)
 //! F <bytes> <text>   show with a frozen live prefix and mutable tail
+//! B <bytes> <text>   show in the input-method panel (tmux overflow)
 //! T          read snapshot: "OK state <bytes> <escaped text>"
 //! C <text>   clear the ghost and commit <text>
 //! X          clear the ghost
@@ -264,11 +265,15 @@ pub struct GhostClient {
     active_class: fn() -> Option<String>,
     /// Remember an addon that does not understand frozen boundaries.
     no_frozen: bool,
+    no_panel: bool,
+    overflow_probe: fn(&str) -> bool,
 }
 
 impl GhostClient {
     pub fn new(path: PathBuf) -> Self {
-        Self::with_focus_probe(path, hyprland_active_class)
+        let mut client = Self::with_focus_probe(path, hyprland_active_class);
+        client.overflow_probe = crate::ghost_terminal::overflows;
+        client
     }
 
     /// Client that asks `active_class` which window really has focus.
@@ -278,6 +283,8 @@ impl GhostClient {
             conn: None,
             active_class,
             no_frozen: false,
+            no_panel: false,
+            overflow_probe: |_| false,
         }
     }
 
@@ -341,6 +348,14 @@ impl GhostClient {
         // The wire protocol drops CR; count bytes in the unescaped text the
         // addon will actually receive, not in the original transcript.
         let frozen_bytes = text[..frozen_bytes].bytes().filter(|b| *b != b'\r').count();
+        if !text.is_empty() && !self.no_panel && (self.overflow_probe)(text) {
+            match self.send(&format!("B {} {}", frozen_bytes, escape(text))) {
+                Err(GhostError::Rejected(reply)) if reply == "ERR unknown command" => {
+                    self.no_panel = true;
+                }
+                result => return result.map(|(shown, _)| shown),
+            }
+        }
         if frozen_bytes > 0 && !self.no_frozen {
             match self.send(&format!("F {} {}", frozen_bytes, escape(text))) {
                 Err(GhostError::Rejected(reply)) if reply == "ERR unknown command" => {
@@ -476,6 +491,8 @@ mod tests {
                     let commit = line.starts_with('C');
                     let reply: &[u8] = if line == "S" {
                         b"OK preedit TestApp\n"
+                    } else if line.starts_with("B ") {
+                        b"OK panel\n"
                     } else {
                         b"OK preedit\n"
                     };
@@ -546,6 +563,24 @@ mod tests {
         ] {
             assert!(GhostSnapshot::parse(bad).is_err());
         }
+    }
+
+    #[test]
+    fn overflowing_preview_uses_panel_without_changing_commit_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let rx = fake_addon(path.clone());
+        let mut client = client(path);
+        client.overflow_probe = |_| true;
+        assert_eq!(
+            client.preedit_frozen("hello wide world", 5).unwrap(),
+            GhostDisplay::Panel
+        );
+        client.commit("hello wide world");
+        assert_eq!(
+            commands(&rx),
+            ["B 5 hello wide world", "C hello wide world"]
+        );
     }
 
     #[test]

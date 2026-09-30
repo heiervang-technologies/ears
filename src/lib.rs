@@ -70,3 +70,5 @@ pub mod typing_switch;
 
 // Re-export audio constants
 pub use whisper::WAV_HEADER_SIZE;
+
+mod ghost_terminal;

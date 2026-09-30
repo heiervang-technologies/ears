@@ -8,6 +8,7 @@
 //
 //   P <text>   show <text> as preedit (replaces any previous ghost)
 //   F <bytes> <text>  mark frozen prefix HighLight (Wayland cursor range [0,n))
+//   B <bytes> <text>  show wrapped preview in the input-method popup
 //   T          observe: OK state <bytes> <escaped text> (does not claim ownership)
 //   C <text>   clear the ghost and commit <text> to the application
 //   X          clear the ghost without committing
@@ -34,7 +35,10 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 
+#include <algorithm>
 #include <charconv>
+#include <cwchar>
+#include <fcitx-utils/utf8.h>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -285,10 +289,11 @@ private:
         std::string text =
             line.size() > 2 ? unescape(line.substr(2)) : std::string();
         switch (op) {
+        case 'B':
         case 'F':
         case 'P': {
             size_t frozen = 0;
-            if (op == 'F') {
+            if (op == 'F' || op == 'B') {
                 const auto space = text.find(' ');
                 if (space == std::string::npos) return "ERR invalid boundary";
                 auto parsed = std::from_chars(text.data(), text.data() + space, frozen);
@@ -303,10 +308,10 @@ private:
             if (!ic) {
                 return "OK none";
             }
-            showOn(ic, text, frozen);
+            showOn(ic, text, frozen, op == 'B');
             ghostIc_ = ic->watch();
             ownerId_ = clientId;
-            return "OK " + mode(ic);
+            return "OK " + (op == 'B' ? std::string("panel") : mode(ic));
         }
         case 'C': {
             auto *ic = target();
@@ -341,22 +346,39 @@ private:
         }
     }
 
-    void showOn(fcitx::InputContext *ic, const std::string &text, size_t frozen) {
+    void showOn(fcitx::InputContext *ic, const std::string &text, size_t frozen, bool panel) {
         ghostText_ = text;
         frozenBytes_ = frozen;
         fcitx::Text t;
-        if (frozen > 0) {
-            t.append(text.substr(0, frozen),
-                     {fcitx::TextFormatFlag::Underline,
-                      fcitx::TextFormatFlag::HighLight});
+        // Wrapping affects only the popup layout. The observer and commit
+        // retain the exact transcript and its original byte boundary.
+        std::string prefix, suffix;
+        int columns = 0;
+        for (size_t i = 0; i < text.size();) {
+            size_t end = i + 1;
+            while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) ++end;
+            auto &part = i < frozen ? prefix : suffix;
+            const auto codepoint = fcitx::utf8::getChar(text.begin() + i, text.begin() + end);
+            const int width = std::max(0, ::wcwidth(static_cast<wchar_t>(codepoint)));
+            if (panel && columns + width > 48) {
+                part += '\n';
+                columns = 0;
+            }
+            part.append(text, i, end - i);
+            columns = codepoint == '\n' ? 0 : columns + width;
+            i = end;
         }
-        if (frozen < text.size()) {
-            t.append(text.substr(frozen), fcitx::TextFormatFlag::Underline);
+        if (!prefix.empty()) {
+            t.append(prefix, {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::HighLight});
         }
+        if (!suffix.empty()) t.append(suffix, fcitx::TextFormatFlag::Underline);
         // Ghost semantics: the caret stays where the user is; the suggested
         // text trails after it instead of pushing the cursor along.
         t.setCursor(0);
-        if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+        // Remove the previous surface when changing between inline and popup.
+        ic->inputPanel().setClientPreedit(fcitx::Text());
+        ic->inputPanel().setPreedit(fcitx::Text());
+        if (!panel && ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
             ic->inputPanel().setClientPreedit(t);
         } else {
             // App cannot draw preedit: fcitx shows it in its own panel.
