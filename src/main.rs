@@ -24,10 +24,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load config with profile
-    let config = Config::load_profile(cli.profile.as_deref()).unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to load config: {}", e);
-        Config::new().expect("Failed to create config")
-    });
+    let config = Config::load_profile_or_defaults(cli.profile.as_deref())?;
 
     // Set up debug logging to file
     let log_file_path = config.state_dir.join("debug.log");

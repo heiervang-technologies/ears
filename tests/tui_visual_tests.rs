@@ -33,7 +33,7 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
 
 #[test]
 fn test_render_initial_state() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 80, 24);
 
     // Print for inspection during development
@@ -49,7 +49,7 @@ fn test_render_initial_state() {
 
 #[test]
 fn test_render_vad_active_state() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.vad_active = true;
 
     let output = render_to_string(&mut app, 80, 24);
@@ -61,7 +61,7 @@ fn test_render_vad_active_state() {
 
 #[test]
 fn test_render_config_panel() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Configuration;
 
     let output = render_to_string(&mut app, 100, 30);
@@ -73,7 +73,7 @@ fn test_render_config_panel() {
 
 #[test]
 fn test_render_logs_panel() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
     app.logs = vec![
         "First log entry".to_string(),
@@ -92,7 +92,7 @@ fn test_render_logs_panel() {
 
 #[test]
 fn test_render_command_mode() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.command_mode = true;
     app.command_buffer = "quit".to_string();
 
@@ -105,7 +105,7 @@ fn test_render_command_mode() {
 
 #[test]
 fn test_render_different_terminal_sizes() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Test small terminal
     let output_small = render_to_string(&mut app, 40, 10);
@@ -125,7 +125,7 @@ fn test_render_different_terminal_sizes() {
 
 #[test]
 fn test_render_empty_logs() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
     app.logs.clear();
 
@@ -138,7 +138,7 @@ fn test_render_empty_logs() {
 
 #[test]
 fn test_render_with_long_log_lines() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
     app.logs = vec![
         "This is a very long log line that should be handled gracefully by the terminal rendering and might need to be truncated or wrapped depending on the implementation".to_string(),

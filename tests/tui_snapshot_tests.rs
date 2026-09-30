@@ -82,7 +82,7 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
 #[serial_test::serial]
 fn snapshot_initial_state() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 80, 24);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
@@ -92,7 +92,7 @@ fn snapshot_initial_state() {
 #[serial_test::serial]
 fn snapshot_vad_active_state() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.vad_active = true;
     let output = render_to_string(&mut app, 80, 24);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
@@ -103,7 +103,7 @@ fn snapshot_vad_active_state() {
 #[serial_test::serial]
 fn snapshot_status_panel() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 100, 30);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
@@ -113,7 +113,7 @@ fn snapshot_status_panel() {
 #[serial_test::serial]
 fn snapshot_config_panel() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Configuration;
     let output = render_to_string(&mut app, 100, 30);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
@@ -124,7 +124,7 @@ fn snapshot_config_panel() {
 #[serial_test::serial]
 fn snapshot_logs_panel_with_content() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
     app.logs = vec![
         "2024-01-04 12:00:00 - Recording started".to_string(),
@@ -140,7 +140,7 @@ fn snapshot_logs_panel_with_content() {
 #[serial_test::serial]
 fn snapshot_command_mode() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.command_mode = true;
     app.command_buffer = "quit".to_string();
     let output = render_to_string(&mut app, 80, 24);
@@ -152,7 +152,7 @@ fn snapshot_command_mode() {
 #[serial_test::serial]
 fn snapshot_small_terminal() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 60, 15);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);
@@ -162,7 +162,7 @@ fn snapshot_small_terminal() {
 #[serial_test::serial]
 fn snapshot_wide_terminal() {
     let (_env, orig_home, orig_xdg, orig_runtime) = setup_test_env();
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 120, 40);
     restore_test_env(orig_home, orig_xdg, orig_runtime);
     insta::assert_snapshot!(output);

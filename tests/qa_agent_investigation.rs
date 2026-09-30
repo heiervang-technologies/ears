@@ -11,7 +11,7 @@ fn test_keybinding_conflict_c_key() {
     // - 'c' alone jumps to configuration panel
     //
     // This test verifies both behaviors work correctly
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start on Configuration panel
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -38,7 +38,7 @@ fn test_keybinding_conflict_c_key() {
 fn test_empty_command_handling() {
     // BUG INVESTIGATION: What happens when user enters command mode
     // and presses Enter with an empty command?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -68,7 +68,7 @@ fn test_empty_command_handling() {
 #[test]
 fn test_whitespace_only_command() {
     // BUG INVESTIGATION: What happens with whitespace-only commands?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode and type spaces
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -101,7 +101,7 @@ fn test_whitespace_only_command() {
 #[test]
 fn test_very_long_command() {
     // BUG INVESTIGATION: What happens with extremely long commands?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -136,7 +136,7 @@ fn test_very_long_command() {
 #[test]
 fn test_escape_key_in_command_mode() {
     // BUG INVESTIGATION: Verify escape key properly cancels command mode
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode and type something
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -162,7 +162,7 @@ fn test_escape_key_in_command_mode() {
 #[test]
 fn test_backspace_on_empty_command() {
     // BUG INVESTIGATION: What happens when backspacing on empty command buffer?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -184,7 +184,7 @@ fn test_backspace_on_empty_command() {
 fn test_scroll_on_non_logs_panel() {
     // BUG INVESTIGATION: j/k keys should only scroll on Logs panel
     // What happens when pressing j/k on other panels?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start on Configuration panel
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -214,7 +214,7 @@ fn test_scroll_on_non_logs_panel() {
 #[test]
 fn test_rapid_panel_switching() {
     // BUG INVESTIGATION: Does rapid panel switching cause issues?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Rapidly switch panels 100 times
     for _ in 0..100 {
@@ -231,7 +231,7 @@ fn test_rapid_panel_switching() {
 #[test]
 fn test_command_mode_with_special_chars() {
     // BUG INVESTIGATION: Can user type special characters in command mode?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);

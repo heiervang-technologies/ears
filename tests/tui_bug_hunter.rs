@@ -81,7 +81,7 @@ fn explore_and_collect_states(max_states: usize) -> Vec<(AppState, App, String)>
     let mut results: Vec<(AppState, App, String)> = Vec::new();
     let mut queue: VecDeque<App> = VecDeque::new();
 
-    let mut initial_app = App::new();
+    let mut initial_app = App::new().unwrap();
     let initial_state = AppState::from(&initial_app);
     let initial_output = render_to_string(&mut initial_app);
 

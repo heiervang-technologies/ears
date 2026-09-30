@@ -255,11 +255,21 @@ impl Config {
         })
     }
 
+    /// Load a profile, preserving the legacy fallback to defaults on load errors.
+    /// Failure to construct those defaults is an error, never a panic.
+    pub fn load_profile_or_defaults(profile: Option<&str>) -> Result<Self> {
+        Self::load_profile(profile).or_else(|error| {
+            eprintln!("Warning: Failed to load config: {error:#}");
+            Self::new().context("Failed to create fallback configuration")
+        })
+    }
+
     /// Load configuration with an optional profile name
     ///
     /// Priority: env vars > config file > defaults
     ///
-    /// Profile resolution: `profile` arg > `EARS_PROFILE` env var > default
+    /// Profile resolution: `profile` arg > `EARS_PROFILE` env var > default.
+    /// An explicit empty profile selects config.toml, bypassing saved selections.
     pub fn load_profile(profile: Option<&str>) -> Result<Self> {
         let (config_dir, state_dir) = Self::computed_dirs()?;
         fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
@@ -272,10 +282,10 @@ impl Config {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let profile_name = profile
-            .map(|s| s.to_string())
-            .or(env_profile)
-            .or(file_profile);
+        let profile_name = match profile {
+            Some(name) => (!name.is_empty()).then(|| name.to_string()),
+            None => env_profile.or(file_profile),
+        };
 
         let config_file = Self::config_file_path(&config_dir, profile_name.as_deref());
 

@@ -8,7 +8,7 @@ use ears::tui::{App, Panel};
 fn test_extremely_long_log_line() {
     // BUG INVESTIGATION: What happens when a log line is extremely long?
     // This could cause rendering issues or horizontal scrolling problems
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Create a very long log message (5000 characters)
     let long_message = "x".repeat(5000);
@@ -40,7 +40,7 @@ fn test_extremely_long_log_line() {
 #[test]
 fn test_log_count_boundary() {
     // BUG INVESTIGATION: What happens with selected_log at boundaries?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Initially has 2 logs
     assert_eq!(app.logs.len(), 2);
@@ -71,7 +71,7 @@ fn test_log_count_boundary() {
 #[test]
 fn test_empty_logs_array() {
     // BUG INVESTIGATION: What happens if logs array is somehow empty?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Manually clear logs (this shouldn't happen in normal use but let's test)
     app.logs.clear();
@@ -97,7 +97,7 @@ fn test_empty_logs_array() {
 #[test]
 fn test_selected_log_out_of_bounds() {
     // BUG INVESTIGATION: What if selected_log is set to invalid index?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Manually set selected_log to out of bounds
     app.selected_log = 999;
@@ -130,7 +130,7 @@ fn test_selected_log_out_of_bounds() {
 fn test_configuration_panel_placeholder() {
     // BUG INVESTIGATION: Configuration panel shows "not yet implemented"
     // Is this really just a placeholder or is there a deeper issue?
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Switch to configuration panel
     app.current_panel = Panel::Configuration;
@@ -154,7 +154,7 @@ fn test_configuration_panel_placeholder() {
 fn test_command_history_not_implemented() {
     // BUG INVESTIGATION: Can user access command history?
     // In vim, pressing up arrow in command mode shows previous commands
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Execute a command
     let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);

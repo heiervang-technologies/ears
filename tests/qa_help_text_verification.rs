@@ -9,7 +9,7 @@ use ears::tui::{App, Panel};
 fn test_tab_key_works_but_not_documented() {
     // BUG INVESTIGATION: The footer shows "[h/l] Tabs" but Tab/Shift+Tab also work
     // This is a documentation issue - Tab keys work but aren't shown to users
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start on Configuration
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -42,7 +42,7 @@ fn test_tab_key_works_but_not_documented() {
 fn test_c_key_shortcut_not_documented() {
     // BUG INVESTIGATION: The 'c' key jumps to configuration panel
     // but this is not documented in the footer
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start on Configuration — navigate away first
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -65,7 +65,7 @@ fn test_c_key_shortcut_not_documented() {
 fn test_all_documented_keys_work() {
     // VERIFICATION: All keys shown in footer should actually work
     // Footer shows: "[Space] Start/Stop  [h/l] Tabs  [j/k] Scroll  [:] Command  [q] Quit"
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // [Space] Start/Stop (toggles VAD)
     let was_vad_active = app.vad_active;

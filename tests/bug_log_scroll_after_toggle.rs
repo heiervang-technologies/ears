@@ -5,7 +5,7 @@ use ears::tui::{App, Panel};
 
 #[test]
 fn bug_selected_log_doesnt_follow_new_logs() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
 
     println!("\n=== Testing log scroll behavior when logs are added ===");
