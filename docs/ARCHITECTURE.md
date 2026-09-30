@@ -81,7 +81,7 @@ State is persisted to `$XDG_RUNTIME_DIR/ears/state` as a plain text string (`idl
 
 ### Crash Recovery
 
-- A `TranscribingGuard` (drop guard) resets state to `Idle` if the process panics or returns early during transcription.
+- A `StateResetGuard` attempts to reset state to `Idle` if the process panics or returns early during transcription; failed persistence is logged.
 - `StateManager::reconcile_state()` detects stale `Recording` or `Transcribing` states on startup (e.g., after a crash) and resets to `Idle`.
 - Recording has a 2-minute timeout enforced by `StateManager`.
 
@@ -497,7 +497,8 @@ ears requires a running ASR server that implements the OpenAI-compatible `/v1/au
 
 ### Recovery Patterns
 
-- **Drop guards**: `TranscribingGuard` and `StateCleanupGuard` ensure state resets to `Idle` even on panic. `ContinuousCapture` kills `pw-record` on drop.
+- **Drop guards**: `StateResetGuard` attempts to persist `Idle` on early return or panic and logs write failures. It preserves a live external VAD session. `ContinuousCapture` kills `pw-record` on drop.
+- **State persistence**: Transitions, timeout resets and stale-state reconciliation publish a unique temporary file atomically before changing in-memory state. Write failures preserve the previous in-memory state and propagate to the caller. Optional Waybar refresh has a 300 ms deadline and its child is reaped.
 - **Stale state reconciliation**: On startup, `Recording` state with no live process or `Transcribing` state is reset to `Idle`.
 - **Graceful degradation**: Missing optional tools (e.g., `column`, `fzf`, `notify-send`) are handled with fallbacks or silent failures (`.ok()`).
 - **Health checks**: The whisper server is health-checked before starting a recording or VAD pipeline.
