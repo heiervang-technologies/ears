@@ -356,9 +356,14 @@ impl StreamingEngine {
 
         // Save segment to temporary WAV file
         let wav_start = Instant::now();
-        let segment_file = self
-            .temp_dir
-            .join(format!("segment_{}.wav", self.stats.segments_processed));
+        // A unique owned path survives the request and is removed on success,
+        // failure, or cancellation. A deterministic name races other engines.
+        let segment_file = tempfile::Builder::new()
+            .prefix("segment_")
+            .suffix(".wav")
+            .tempfile_in(&self.temp_dir)
+            .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?
+            .into_temp_path();
         let saving = self
             .health
             .as_ref()
@@ -393,7 +398,7 @@ impl StreamingEngine {
         info!("Transcription took {:?}", transcribe_start.elapsed());
 
         // Clean up temp file
-        let _ = std::fs::remove_file(&segment_file);
+        drop(segment_file);
 
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");

@@ -72,3 +72,5 @@ pub mod typing_switch;
 pub use whisper::WAV_HEADER_SIZE;
 
 mod ghost_terminal;
+
+pub mod pipeline;

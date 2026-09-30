@@ -651,7 +651,7 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     }
 
     let _ = shutdown_tx.send(true);
-    let _ = pipeline_handle.await;
+    ears::pipeline::join_stopped(pipeline_handle).await;
     // Restore audio volume if we shut down mid-speech.
     ducker.on_speech_ended();
     drop(ducker);
@@ -757,38 +757,37 @@ async fn handle_ws_listen(
         engine.set_guided_grammar(s.guided_grammar.clone());
 
         // Shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         // Audio processing task
-        let pipeline_handle = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    audio = audio_rx.recv() => {
-                        match audio {
-                            Some(samples) => {
-                                if let Err(e) = engine.process_audio(&samples).await {
-                                    tracing::warn!("Audio processing error: {}", e);
+        let pipeline_handle = tokio::spawn(ears::pipeline::until_shutdown(
+            shutdown_rx,
+            async move {
+                loop {
+                    tokio::select! {
+                        audio = audio_rx.recv() => {
+                            match audio {
+                                Some(samples) => {
+                                    if let Err(e) = engine.process_audio(&samples).await {
+                                        tracing::warn!("Audio processing error: {}", e);
+                                    }
+                                }
+                                None => {
+                                    tracing::debug!("Audio channel closed");
+                                    break;
                                 }
                             }
-                            None => {
-                                tracing::debug!("Audio channel closed");
-                                break;
-                            }
+                        }
+                        Ok(()) = settings_rx.changed() => {
+                            let s = settings_rx.borrow_and_update().clone();
+                            engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
+                            engine.set_text_filters(s.text_filters, s.language);
+                            engine.set_guided_grammar(s.guided_grammar.clone());
                         }
                     }
-                    _ = settings_rx.changed() => {
-                        let s = settings_rx.borrow_and_update().clone();
-                        engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
-                        engine.set_text_filters(s.text_filters, s.language);
-                        engine.set_guided_grammar(s.guided_grammar.clone());
-                    }
-                    _ = shutdown_rx.changed() => {
-                        tracing::debug!("WS VAD pipeline shutdown requested");
-                        break;
-                    }
                 }
-            }
-        });
+            },
+        ));
 
         // IPC server on custom socket path (avoids conflict with desktop ears)
         let ipc_server = ears::ipc::start_ipc_server_at(socket_path.clone(), ipc_rx);
@@ -828,7 +827,7 @@ async fn handle_ws_listen(
         }
 
         let _ = shutdown_tx.send(true);
-        let _ = pipeline_handle.await;
+        ears::pipeline::join_stopped(pipeline_handle).await;
         ws_handle.abort();
         ipc_server.shutdown().await;
     }

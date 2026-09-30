@@ -165,13 +165,13 @@ pub async fn start_vad_pipeline(
     engine.set_continuous(continuous);
 
     // Shutdown channel
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Typing settings channel
     let (settings_tx, mut settings_rx) = watch::channel(TypingSettings::default());
 
     // Spawn audio processing task
-    let handle = tokio::spawn(async move {
+    let handle = tokio::spawn(crate::pipeline::until_shutdown(shutdown_rx, async move {
         let _health_monitor = health_monitor;
         loop {
             tokio::select! {
@@ -189,17 +189,13 @@ pub async fn start_vad_pipeline(
                         }
                     }
                 }
-                _ = settings_rx.changed() => {
+                Ok(()) = settings_rx.changed() => {
                     let s = settings_rx.borrow_and_update().clone();
                     engine.set_typing_enabled(s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter);
                     engine.set_text_filters(s.text_filters, s.language);
                     engine.set_guided_grammar(s.guided_grammar.clone());
                     engine.set_ghost(s.ghost);
                     tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
-                }
-                _ = shutdown_rx.changed() => {
-                    tracing::debug!("VAD pipeline shutdown requested");
-                    break;
                 }
                 changed = capture_status.changed() => {
                     if changed.is_err() {
@@ -216,7 +212,7 @@ pub async fn start_vad_pipeline(
         }
         // Capture is dropped here, which calls stop() via Drop
         drop(capture);
-    });
+    }));
 
     Ok((shutdown_tx, settings_tx, handle))
 }
@@ -403,7 +399,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 }
                 vad_settings.take();
                 if let Some(handle) = vad_handle.take() {
-                    let _ = handle.await;
+                    crate::pipeline::join_stopped(handle).await;
                 }
                 vad_running = false;
                 app.is_speaking = false;
@@ -424,7 +420,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let _ = tx.send(true);
         }
         if let Some(handle) = vad_handle.take() {
-            let _ = handle.await;
+            crate::pipeline::join_stopped(handle).await;
         }
         let _ = state_mgr.transition(EarsState::Idle);
     }
