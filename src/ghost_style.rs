@@ -224,7 +224,11 @@ fn profile_dirs(root: &Path, ini: &str) -> Vec<PathBuf> {
 /// Set `[colors.preedit]` in an alacritty.toml, keeping everything else.
 fn apply_alacritty(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
     let old = std::fs::read_to_string(path)?;
-    let mut keys: Vec<(&str, String)> = vec![("underline", style.underline.to_string())];
+    // Ghost text is drawn over the terminal, without a background box.
+    let mut keys: Vec<(&str, String)> = vec![
+        ("underline", style.underline.to_string()),
+        ("background", "false".to_string()),
+    ];
     // Without a colour the section keeps whatever foreground it has.
     if let Some(hex) = style.hex() {
         keys.insert(0, ("foreground", format!("\"{hex}\"")));
@@ -464,7 +468,9 @@ size = 11
         };
         assert!(apply_alacritty(&path, &style).unwrap());
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("underline = false\nhighlight_foreground = \"#ffffff\"\n"));
+        assert!(text.contains(
+            "underline = false\nbackground = false\nhighlight_foreground = \"#ffffff\"\n"
+        ));
         style.frozen_color = None;
         assert!(apply_alacritty(&path, &style).unwrap());
         let text = std::fs::read_to_string(&path).unwrap();
