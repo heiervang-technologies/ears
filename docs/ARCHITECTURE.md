@@ -610,3 +610,17 @@ under repository Settings → Secrets and variables → Actions → Variables. T
 are public identity settings, not secrets. Changing them changes which account
 receives work or who can initiate assignment work; retain the intended allowlist.
 The mention workflow's existing event eligibility is otherwise unchanged.
+
+### Configuration I/O failures
+
+Optional configuration files use defaults only when absent. Invalid UTF-8,
+unreadable files, malformed legacy values, and directory enumeration errors
+propagate with path/context information. Profile precedence is lazy: an explicit
+CLI or environment selection does not read a lower-priority saved profile.
+Legacy migration writes a private temporary file and publishes config.toml
+without overwriting an existing target; success is reported only after that
+write succeeds. Original legacy files remain intact.
+
+The legacy CLI/TUI `load_profile_or_defaults` entry point still reports a warning
+and attempts defaults on load failure. Strict profile-loading and inspection
+APIs return the error; this change does not silently alter fallback policy.

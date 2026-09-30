@@ -8,6 +8,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
 
+/// Only absence means an optional config file is unset. Corrupt text and I/O
+/// failures must remain visible instead of silently selecting another profile.
+fn read_optional_config(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("Failed to read {}", path.display())),
+    }
+}
+
 fn default_server() -> Url {
     Url::parse("http://127.0.0.1:8178").expect("Default server URL is valid")
 }
@@ -274,24 +284,28 @@ impl Config {
         let (config_dir, state_dir) = Self::computed_dirs()?;
         fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-        // Resolve profile: CLI arg > env var > persistent file
-        let env_profile = std::env::var("EARS_PROFILE")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let file_profile = fs::read_to_string(config_dir.join("profile"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        // Read only the source selected by precedence. An explicit CLI/env
+        // profile must not depend on an unreadable saved profile file.
         let profile_name = match profile {
             Some(name) => (!name.is_empty()).then(|| name.to_string()),
-            None => env_profile.or(file_profile),
+            None => {
+                let env_profile = match std::env::var("EARS_PROFILE") {
+                    Ok(name) => Some(name).filter(|s| !s.trim().is_empty()),
+                    Err(std::env::VarError::NotPresent) => None,
+                    Err(error) => return Err(error).context("Invalid EARS_PROFILE"),
+                };
+                match env_profile {
+                    Some(name) => Some(name),
+                    None => read_optional_config(&config_dir.join("profile"))?
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                }
+            }
         };
 
         let config_file = Self::config_file_path(&config_dir, profile_name.as_deref());
 
-        let mut config = if config_file.exists() {
-            let content = fs::read_to_string(&config_file)
-                .with_context(|| format!("Failed to read {}", config_file.display()))?;
+        let mut config = if let Some(content) = read_optional_config(&config_file)? {
             toml::from_str(&content)
                 .with_context(|| format!("Failed to parse {}", config_file.display()))?
         } else if profile_name.is_some() {
@@ -402,55 +416,62 @@ impl Config {
 
         let mut migrated_any = false;
 
-        if let Ok(s) = fs::read_to_string(config_dir.join("server")) {
-            if let Ok(url) = Url::parse(s.trim()) {
-                config.whisper_server = url;
-                migrated_any = true;
-            }
+        if let Some(s) = read_optional_config(&config_dir.join("server"))? {
+            config.whisper_server = Url::parse(s.trim()).context("Invalid legacy server URL")?;
+            migrated_any = true;
         }
-        if let Ok(s) = fs::read_to_string(config_dir.join("device")) {
+        if let Some(s) = read_optional_config(&config_dir.join("device"))? {
             let d = s.trim().to_string();
             if !d.is_empty() {
                 config.device = d;
                 migrated_any = true;
             }
         }
-        if let Ok(s) = fs::read_to_string(config_dir.join("language")) {
+        if let Some(s) = read_optional_config(&config_dir.join("language"))? {
             let l = s.trim().to_string();
             if !l.is_empty() {
                 config.language = Some(l);
                 migrated_any = true;
             }
         }
-        if let Ok(s) = fs::read_to_string(config_dir.join("api_key")) {
+        if let Some(s) = read_optional_config(&config_dir.join("api_key"))? {
             let k = s.trim().to_string();
             if !k.is_empty() {
                 config.api_key = Some(k);
                 migrated_any = true;
             }
         }
-        if let Ok(s) = fs::read_to_string(config_dir.join("model")) {
+        if let Some(s) = read_optional_config(&config_dir.join("model"))? {
             let m = s.trim().to_string();
             if !m.is_empty() {
                 config.model = Some(m);
                 migrated_any = true;
             }
         }
-        if let Ok(s) = fs::read_to_string(config_dir.join("text_filters.json")) {
-            if let Ok(filters) = serde_json::from_str(&s) {
-                config.text_filters = filters;
-                migrated_any = true;
-            }
+        if let Some(s) = read_optional_config(&config_dir.join("text_filters.json"))? {
+            config.text_filters =
+                serde_json::from_str(&s).context("Invalid legacy text_filters.json")?;
+            migrated_any = true;
         }
 
         // Write migrated config as config.toml
         if migrated_any {
             let toml_path = config_dir.join("config.toml");
-            if let Ok(toml_str) = toml::to_string_pretty(&config) {
-                fs::write(&toml_path, &toml_str).ok();
-                tracing::info!("Migrated old config files to {}", toml_path.display());
-                eprintln!("Migrated config to {}", toml_path.display());
-            }
+            use std::io::Write;
+            let toml_str =
+                toml::to_string_pretty(&config).context("Failed to serialize migrated config")?;
+            let mut output = tempfile::Builder::new()
+                .prefix(".config-migrate-")
+                .tempfile_in(config_dir)
+                .context("Failed to create migrated config")?;
+            output
+                .write_all(toml_str.as_bytes())
+                .context("Failed to write migrated config")?;
+            output.persist_noclobber(&toml_path).with_context(|| {
+                format!("Failed to persist migrated config {}", toml_path.display())
+            })?;
+            tracing::info!("Migrated old config files to {}", toml_path.display());
+            eprintln!("Migrated config to {}", toml_path.display());
         }
 
         Ok(config)
@@ -460,15 +481,19 @@ impl Config {
     pub fn list_profiles() -> Result<Vec<String>> {
         let (config_dir, _) = Self::computed_dirs()?;
         let mut profiles = Vec::new();
-        if let Ok(entries) = fs::read_dir(&config_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if let Some(profile) = name
-                    .strip_prefix("config.")
-                    .and_then(|s| s.strip_suffix(".toml"))
-                {
-                    profiles.push(profile.to_string());
-                }
+        let entries = match fs::read_dir(&config_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(profiles),
+            Err(error) => return Err(error).context("Failed to list profile directory"),
+        };
+        for entry in entries {
+            let entry = entry.context("Failed to read profile directory entry")?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(profile) = name
+                .strip_prefix("config.")
+                .and_then(|s| s.strip_suffix(".toml"))
+            {
+                profiles.push(profile.to_string());
             }
         }
         profiles.sort();
@@ -479,8 +504,7 @@ impl Config {
     pub fn get_default_profile() -> Result<Option<String>> {
         let (config_dir, _) = Self::computed_dirs()?;
         let profile_file = config_dir.join("profile");
-        Ok(fs::read_to_string(profile_file)
-            .ok()
+        Ok(read_optional_config(&profile_file)?
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()))
     }
@@ -723,6 +747,51 @@ mod tests {
         let mut config = Config::new().unwrap();
         config.device = String::new();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn optional_config_distinguishes_absence_from_read_errors() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("profile");
+        assert!(read_optional_config(&path).unwrap().is_none());
+        fs::create_dir(&path).unwrap();
+        assert!(read_optional_config(&path).is_err());
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, [0xff]).unwrap();
+        assert!(read_optional_config(&path).is_err());
+    }
+
+    #[test]
+    fn migration_rejects_corrupt_or_unreadable_legacy_files() {
+        for name in ["server", "text_filters.json", "device"] {
+            let root = TempDir::new().unwrap();
+            let path = root.path().join(name);
+            if name == "device" {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, "invalid legacy value").unwrap();
+            }
+            assert!(Config::migrate_old_files(root.path()).is_err());
+            assert!(!root.path().join("config.toml").exists());
+            assert!(path.exists());
+        }
+    }
+
+    #[test]
+    fn migration_does_not_claim_success_or_overwrite_existing_config() {
+        let root = TempDir::new().unwrap();
+        fs::write(root.path().join("device"), "legacy-device").unwrap();
+        let target = root.path().join("config.toml");
+        fs::write(&target, "existing config").unwrap();
+        let error = Config::migrate_old_files(root.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("Failed to persist migrated config"));
+        drop(error);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "existing config");
+        assert_eq!(
+            fs::read_to_string(root.path().join("device")).unwrap(),
+            "legacy-device"
+        );
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[test]
