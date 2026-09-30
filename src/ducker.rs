@@ -69,8 +69,10 @@ impl VolumeBackend for WpctlBackend {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        if let Err(e) = crate::desktop::run_bounded(cmd, WPCTL_TIMEOUT) {
-            tracing::warn!("wpctl set-volume failed: {}", e);
+        match crate::desktop::run_bounded(cmd, WPCTL_TIMEOUT) {
+            Ok(status) if status.success() => {}
+            Ok(status) => tracing::warn!(%status, "wpctl set-volume failed"),
+            Err(error) => tracing::warn!(%error, "wpctl set-volume failed"),
         }
     }
 }
@@ -166,7 +168,11 @@ impl VolumeDucker {
             let backend = inner.backend.clone();
             let current = match tokio::task::spawn_blocking(move || backend.get_volume()).await {
                 Ok(Some(v)) => v,
-                _ => return,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::warn!(%error, "Volume read worker failed");
+                    return;
+                }
             };
             // Re-check: get_volume ran external work, a cancel may have raced it.
             if inner.epoch.load(Ordering::SeqCst) != requested_epoch {
@@ -183,7 +189,12 @@ impl VolumeDucker {
             let factor = 1.0 - (percent as f32 / 100.0);
             let target = (current * factor).clamp(0.0, 1.0);
             let backend = inner.backend.clone();
-            let _ = tokio::task::spawn_blocking(move || backend.set_volume(target)).await;
+            if let Err(error) =
+                tokio::task::spawn_blocking(move || backend.set_volume(target)).await
+            {
+                tracing::warn!(%error, "Volume duck worker failed");
+                return;
+            }
             tracing::debug!(
                 "Ducked volume: {:.2} -> {:.2} (-{}%)",
                 current,
@@ -234,7 +245,12 @@ impl VolumeDucker {
             };
             let Some(volume) = saved else { return };
             let backend = inner.backend.clone();
-            let _ = tokio::task::spawn_blocking(move || backend.set_volume(volume)).await;
+            if let Err(error) =
+                tokio::task::spawn_blocking(move || backend.set_volume(volume)).await
+            {
+                tracing::warn!(%error, "Volume restore worker failed");
+                return;
+            }
             tracing::debug!("Restored volume: {:.2} ({})", volume, why);
         });
     }

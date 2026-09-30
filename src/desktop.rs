@@ -252,9 +252,11 @@ impl Notifications {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let status =
-            run_bounded(command, Duration::from_secs(2)).context("Failed to send notification")?;
+        let status = run_bounded(command, Duration::from_secs(2))
+            .inspect_err(|error| tracing::debug!(%error, "Optional notification unavailable"))
+            .context("Failed to send notification")?;
         if !status.success() {
+            tracing::debug!(%status, "Optional notification failed");
             anyhow::bail!("notify-send failed with status: {status}");
         }
         Ok(())
@@ -389,16 +391,18 @@ impl AudioFeedback {
 
     /// Play a named sound (custom override or embedded)
     fn play_named(name: &str, embedded: &'static [u8]) -> Result<()> {
-        // Try custom sound first
-        if let Ok(custom_dir) = Self::sound_dir() {
-            let custom_wav = custom_dir.join(format!("{}.wav", name));
-            if custom_wav.exists() {
-                return Self::play_sound(&custom_wav);
+        let result = (|| {
+            if let Ok(custom_dir) = Self::sound_dir() {
+                let custom_wav = custom_dir.join(format!("{}.wav", name));
+                if custom_wav.exists() {
+                    return Self::play_sound(&custom_wav);
+                }
             }
-        }
-
-        // Use embedded sound
-        Self::play_embedded(embedded)
+            Self::play_embedded(embedded)
+        })();
+        result.inspect_err(
+            |error| tracing::debug!(%error, sound = name, "Optional sound unavailable"),
+        )
     }
 
     /// Play start recording beep (E5 - 660Hz)

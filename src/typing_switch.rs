@@ -86,10 +86,24 @@ pub fn state_path() -> Option<PathBuf> {
 
 /// Whether typing is enabled. Anything but an explicit `off` means on.
 pub fn load() -> bool {
-    state_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim() != "off")
-        .unwrap_or(true)
+    let Some(path) = state_path() else {
+        tracing::warn!("No typing state directory; using legacy default on");
+        return true;
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(value) => {
+            let value = value.trim();
+            if value != "on" && value != "off" {
+                tracing::warn!(path = %path.display(), "Invalid typing state; using legacy default on");
+            }
+            value != "off"
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "Cannot read typing state; using legacy default on");
+            true
+        }
+    }
 }
 
 /// Persist the switch atomically.

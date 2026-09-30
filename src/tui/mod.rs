@@ -414,7 +414,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
         if let Some(handle) = vad_handle.take() {
             crate::pipeline::join_stopped(handle).await;
         }
-        let _ = state_mgr.transition(EarsState::Idle);
+        if let Err(error) = state_mgr.transition(EarsState::Idle) {
+            tracing::warn!(%error, "Failed to persist idle state during TUI shutdown");
+        }
     }
 
     drop(event_handler); // No reader may access the terminal after restoration.
