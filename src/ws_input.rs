@@ -5,7 +5,8 @@
 //!
 //! Protocol:
 //! - Client sends JSON text frame: `{"type": "start", "sample_rate": 16000, "channels": 1}`
-//! - Client sends binary frames: raw PCM s16le audio chunks
+//! - Client sends binary frames: raw PCM s16le audio chunks, at most 64 KiB
+//! - Uploads wait for bounded queue space; split larger audio into messages
 //! - Client sends JSON text frame: `{"type": "end"}`
 //! - Server sends JSON text frames: streaming engine events (transcription updates, etc.)
 
@@ -25,43 +26,61 @@ use tracing::{debug, error, info, warn};
 pub async fn start_ws_server(
     host: &str,
     port: u16,
-    audio_tx: mpsc::UnboundedSender<Vec<f32>>,
+    audio_tx: mpsc::Sender<Vec<f32>>,
     event_tx: broadcast::Sender<StreamingEvent>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
     let listener = TcpListener::bind(&addr).await?;
     info!("WebSocket server listening on ws://{}", addr);
 
-    let handle = tokio::spawn(async move {
+    Ok(spawn_server(listener, audio_tx, event_tx))
+}
+
+fn spawn_server(
+    listener: TcpListener,
+    audio_tx: mpsc::Sender<Vec<f32>>,
+    event_tx: broadcast::Sender<StreamingEvent>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Aborting the listener also cancels clients blocked on queue space.
+        let mut clients = tokio::task::JoinSet::new();
         loop {
-            match listener.accept().await {
-                Ok((stream, peer)) => {
-                    info!("WebSocket connection from {}", peer);
-                    let tx = audio_tx.clone();
-                    let event_rx = event_tx.subscribe();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, tx, event_rx).await {
-                            warn!("WebSocket client {} error: {}", peer, e);
-                        }
-                        info!("WebSocket client {} disconnected", peer);
-                    });
-                }
-                Err(e) => {
-                    error!("WebSocket accept error: {}", e);
+            tokio::select! {
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, peer)) => {
+                        info!("WebSocket connection from {}", peer);
+                        let tx = audio_tx.clone();
+                        let event_rx = event_tx.subscribe();
+                        clients.spawn(async move {
+                            if let Err(e) = handle_connection(stream, tx, event_rx).await {
+                                warn!("WebSocket client {} error: {}", peer, e);
+                            }
+                            info!("WebSocket client {} disconnected", peer);
+                        });
+                    }
+                    Err(e) => error!("WebSocket accept error: {}", e),
+                },
+                Some(result) = clients.join_next(), if !clients.is_empty() => {
+                    if let Err(error) = result {
+                        warn!(%error, "WebSocket client task failed");
+                    }
                 }
             }
         }
-    });
-
-    Ok(handle)
+    })
 }
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
-    audio_tx: mpsc::UnboundedSender<Vec<f32>>,
+    audio_tx: mpsc::Sender<Vec<f32>>,
     mut event_rx: broadcast::Receiver<StreamingEvent>,
 ) -> anyhow::Result<()> {
-    let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(64 * 1024),
+        max_frame_size: Some(64 * 1024),
+        ..Default::default()
+    };
+    let ws_stream = tokio_tungstenite::accept_async_with_config(stream, Some(config)).await?;
     let (mut write, mut read) = ws_stream.split();
 
     let mut session_active = false;
@@ -84,8 +103,9 @@ async fn handle_connection(
                                     session_active = false;
                                     // Send ~1s of silence to flush the VAD pipeline
                                     // (forces speech segment to end via silence timeout)
-                                    let silence = vec![0.0f32; 16000];
-                                    let _ = audio_tx.send(silence);
+                                    for _ in 0..10 {
+                                        audio_tx.send(vec![0.0; crate::pipeline::AUDIO_CHUNK_SAMPLES]).await?;
+                                    }
                                 }
                                 other => {
                                     debug!("Unknown WS message type: {:?}", other);
@@ -101,16 +121,15 @@ async fn handle_connection(
                         if data.len() % 2 != 0 {
                             warn!("Odd byte count in PCM frame ({}), trimming", data.len());
                         }
-                        let samples: Vec<f32> = data
-                            .as_chunks::<2>().0.iter()
-                            .map(|b| {
-                                let s = i16::from_le_bytes([b[0], b[1]]);
-                                s as f32 / 32768.0
-                            })
-                            .collect();
-                        if audio_tx.send(samples).is_err() {
-                            debug!("Audio receiver dropped, closing WS connection");
-                            break;
+                        // Bound each queued allocation; await capacity so TCP
+                        // backpressure reaches uploaders instead of losing PCM.
+                        for bytes in data.chunks(crate::pipeline::AUDIO_CHUNK_SAMPLES * 2) {
+                            let samples: Vec<f32> = bytes.as_chunks::<2>().0.iter()
+                                .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+                                .collect();
+                            if !samples.is_empty() {
+                                audio_tx.send(samples).await?;
+                            }
                         }
                     }
                     Message::Close(_) => break,
@@ -147,27 +166,18 @@ mod tests {
     /// Helper: start the WS server on an ephemeral port and return (port, audio_rx, event_tx, handle)
     async fn setup_server() -> (
         u16,
-        mpsc::UnboundedReceiver<Vec<f32>>,
+        mpsc::Receiver<Vec<f32>>,
         broadcast::Sender<StreamingEvent>,
         tokio::task::JoinHandle<()>,
     ) {
-        let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+        let (audio_tx, audio_rx) = crate::pipeline::audio_channel();
         let (event_tx, _) = broadcast::channel(64);
         // Bind to port 0 to get an ephemeral port — but start_ws_server takes host/port,
         // so we bind manually and extract the port.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let event_tx_clone = event_tx.clone();
-        let handle = tokio::spawn(async move {
-            while let Ok((stream, _peer)) = listener.accept().await {
-                let tx = audio_tx.clone();
-                let event_rx = event_tx_clone.subscribe();
-                tokio::spawn(async move {
-                    let _ = handle_connection(stream, tx, event_rx).await;
-                });
-            }
-        });
+        let handle = spawn_server(listener, audio_tx, event_tx.clone());
 
         (port, audio_rx, event_tx, handle)
     }
@@ -229,10 +239,112 @@ mod tests {
             .unwrap();
 
         // Should receive a silence flush (16000 samples of zeros)
-        let silence = audio_rx.recv().await.expect("Should receive silence flush");
-        assert_eq!(silence.len(), 16000);
-        assert!(silence.iter().all(|&s| s == 0.0));
+        for _ in 0..10 {
+            let silence = audio_rx.recv().await.expect("Should receive silence flush");
+            assert_eq!(silence.len(), crate::pipeline::AUDIO_CHUNK_SAMPLES);
+            assert!(silence.iter().all(|&s| s == 0.0));
+        }
 
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn slow_consumer_bounds_queue_and_preserves_pcm_order() {
+        let (port, mut audio_rx, _events, handle) = setup_server().await;
+        let (mut write, _read) = connect_client(port).await;
+        write
+            .send(Message::Text(r#"{"type":"start"}"#.into()))
+            .await
+            .unwrap();
+        // 104 chunks exceed the 100-chunk queue; use multi-chunk messages.
+        for group in 0..26 {
+            let mut bytes = Vec::new();
+            for chunk in group * 4..group * 4 + 4 {
+                for _ in 0..crate::pipeline::AUDIO_CHUNK_SAMPLES {
+                    bytes.extend_from_slice(&(chunk as i16 - 52).to_le_bytes());
+                }
+            }
+            write.send(Message::Binary(bytes)).await.unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while audio_rx.len() < crate::pipeline::AUDIO_QUEUE_CHUNKS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(audio_rx.len(), crate::pipeline::AUDIO_QUEUE_CHUNKS);
+        for chunk in 0..104 {
+            let samples = tokio::time::timeout(std::time::Duration::from_secs(2), audio_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(samples.len(), crate::pipeline::AUDIO_CHUNK_SAMPLES);
+            assert!(samples
+                .iter()
+                .all(|&s| s == (chunk as f32 - 52.0) / 32768.0));
+        }
+        write.close().await.unwrap();
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn aborting_server_closes_backpressured_clients() {
+        let (port, audio_rx, _events, handle) = setup_server().await;
+        let (mut write, mut read) = connect_client(port).await;
+        write
+            .send(Message::Text(r#"{"type":"start"}"#.into()))
+            .await
+            .unwrap();
+        for _ in 0..110 {
+            write
+                .send(Message::Binary(vec![
+                    0;
+                    crate::pipeline::AUDIO_CHUNK_SAMPLES
+                        * 2
+                ]))
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while audio_rx.len() < crate::pipeline::AUDIO_QUEUE_CHUNKS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        handle.abort();
+        let _ = handle.await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), read.next())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn oversized_message_is_rejected_before_audio_queue() {
+        let (port, mut audio_rx, _events, handle) = setup_server().await;
+        let (mut write, mut read) = connect_client(port).await;
+        write
+            .send(Message::Text(r#"{"type":"start"}"#.into()))
+            .await
+            .unwrap();
+        write
+            .send(Message::Binary(vec![0; 64 * 1024 + 2]))
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), read.next())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
+        assert!(audio_rx.try_recv().is_err());
         handle.abort();
     }
 

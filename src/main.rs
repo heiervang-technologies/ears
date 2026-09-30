@@ -697,7 +697,7 @@ async fn handle_ws_listen(
         .map_err(|e| anyhow::anyhow!("Whisper server health check failed: {}", e))?;
 
     // Audio channel — WebSocket server writes here, engine reads
-    let (audio_tx, mut audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+    let (audio_tx, mut audio_rx) = ears::pipeline::audio_channel();
 
     // Broadcast channel for streaming events — shared by IPC server and WebSocket echo
     let (ipc_tx, ipc_rx) = tokio::sync::broadcast::channel(100);

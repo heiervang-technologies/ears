@@ -2,6 +2,47 @@
 use std::{future::Future, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
 
+/// Default capture frames are 100 ms of mono 16 kHz audio.
+pub const AUDIO_CHUNK_SAMPLES: usize = 1600;
+/// Ten seconds / 640 kB of f32 PCM at the default chunk size.
+pub const AUDIO_QUEUE_CHUNKS: usize = 100;
+
+pub fn audio_channel() -> (
+    tokio::sync::mpsc::Sender<Vec<f32>>,
+    tokio::sync::mpsc::Receiver<Vec<f32>>,
+) {
+    tokio::sync::mpsc::channel(AUDIO_QUEUE_CHUNKS)
+}
+
+/// Capture failure cancels pending requests, not just the next chunk. A failed
+/// capture cannot safely continue after an audio gap or an overflow.
+pub(crate) async fn until_capture_stops(
+    mut status: watch::Receiver<crate::continuous_capture::CaptureStatus>,
+    events: tokio::sync::mpsc::UnboundedSender<crate::streaming_engine::StreamingEvent>,
+    work: impl Future<Output = ()>,
+) {
+    let stopped = async {
+        loop {
+            if let crate::continuous_capture::CaptureStatus::Stopped { reason } =
+                status.borrow_and_update().clone()
+            {
+                tracing::warn!(%reason, "VAD pipeline ending: capture stopped");
+                let _ =
+                    events.send(crate::streaming_engine::StreamingEvent::CaptureStopped { reason });
+                break;
+            }
+            if status.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = stopped => {},
+        _ = work => {},
+    }
+}
+
 /// Drop in-flight processing when shutdown is requested or its owner disappears.
 /// The processing future owns the engine and capture, so cancellation also drops
 /// ghost connections and capture guards rather than draining queued audio.
@@ -55,6 +96,36 @@ mod tests {
         fn drop(&mut self) {
             let _ = self.0.take().unwrap().send(());
         }
+    }
+
+    #[tokio::test]
+    async fn capture_failure_cancels_pending_transcription_and_reports_reason() {
+        use crate::{continuous_capture::CaptureStatus, streaming_engine::StreamingEvent};
+        let (status_tx, status_rx) = watch::channel(CaptureStatus::Running);
+        let (events, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+        let task = tokio::spawn(until_capture_stops(status_rx, events, async move {
+            let _resource = OnDrop(Some(dropped_tx));
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+            panic!("failed capture must not commit pending transcription");
+        }));
+        started_rx.await.unwrap();
+        status_tx
+            .send(CaptureStatus::Stopped {
+                reason: "audio backlog limit reached".into(),
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        dropped_rx.await.unwrap();
+        assert!(
+            matches!(event_rx.recv().await, Some(StreamingEvent::CaptureStopped { reason }) if reason.contains("backlog"))
+        );
+        assert!(event_rx.recv().await.is_none());
     }
 
     #[tokio::test]

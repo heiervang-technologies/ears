@@ -536,3 +536,18 @@ Callers allow two seconds for cooperative exit, then abort and allow one second
 for task cleanup. Synchronous blocking code cannot be forcibly interrupted by
 Tokio; exceeding the abort deadline logs an error rather than holding the UI's
 join indefinitely. Stopping listening deliberately discards unfinished speech.
+
+### Audio backlog limits
+
+Both processing paths queue at most 100 chunks (ten seconds / 640 kB of f32
+PCM with the default 1,600-sample capture chunks). If microphone transcription
+falls behind that limit, capture stops, reaps pw-record, reports CaptureStopped,
+and cancels in-flight processing. Queued audio and unfinished speech are discarded
+with that explicit error; restart listening after resolving the slow server.
+This avoids silently joining speech across a dropped-audio gap.
+
+WebSocket input instead awaits queue space, applying backpressure to uploaders.
+Messages and frames are limited to 64 KiB and PCM is queued in chunks of at most
+1,600 samples. Clients must split larger uploads into messages under that limit;
+no queued samples are dropped or reordered. This bounds the shared audio queue
+and each connection's current message, not aggregate memory for unlimited clients.
