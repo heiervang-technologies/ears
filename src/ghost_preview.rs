@@ -395,6 +395,7 @@ pub(super) async fn run_ghost_preview(
 
     let audio_file = config.state_dir.join("recording.wav");
     let partial = config.state_dir.join("ghost_toggle_partial.wav");
+    let mut partial_cleanup = None;
 
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let (server_url, model) = config.resolve_server(language.as_deref());
@@ -529,8 +530,16 @@ pub(super) async fn run_ghost_preview(
                 }
             }
         } else {
-            if write_pcm16_wav(&partial, pcm, 16_000).is_err() {
+            if let Err(error) = write_pcm16_wav(&partial, pcm, 16_000) {
+                tracing::debug!(%error, "Failed to write preview WAV");
+                // A failed write can still have created a partial file.
+                if partial_cleanup.is_none() {
+                    drop(crate::owned_file::CleanupFile::new(&partial)?);
+                }
                 continue;
+            }
+            if partial_cleanup.is_none() {
+                partial_cleanup = Some(crate::owned_file::CleanupFile::new(&partial)?);
             }
             match client
                 .transcribe_preview(&partial, grammar.as_deref(), DEADLINE)
@@ -557,7 +566,7 @@ pub(super) async fn run_ghost_preview(
         };
         ghost.show(text, frozen_bytes);
     }
-    let _ = std::fs::remove_file(&partial);
+    drop(partial_cleanup);
     // Natural exit: drop our PID record so nothing signals a recycled PID.
     let pid_file = ghost_preview_pid_file(config);
     let me = std::process::id().to_string();

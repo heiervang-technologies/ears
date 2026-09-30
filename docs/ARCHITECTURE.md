@@ -635,3 +635,15 @@ content rather than process addresses, so restarts do not accumulate duplicates.
 Muted playback skips cache creation. Custom sound paths keep their existing
 behavior. Cached files are disposable and recreated when needed; content changes
 may leave older cache entries, but normal launches do not create new names.
+
+### Recording cleanup ownership
+
+After a push-to-talk recorder stops, the stop operation immediately owns both
+state reset and WAV cleanup. Validation, file-read, state-transition and request
+failures, as well as future cancellation, therefore release the stopped
+recording. Cleanup pins its inode and checks path identity so a replacement file
+is preserved; failures to remove owned audio are logged. Repeated-preview WAVs
+use the same ownership guard once created, including partial-write failures.
+The preview stopper retains its explicit cleanup for a terminated preview
+process. A process killed without running destructors still relies on that
+stopper or the next recording's stale-file handling.
