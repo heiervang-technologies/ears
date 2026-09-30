@@ -345,7 +345,7 @@ Transcribed text is typed into the focused window using one of several methods, 
 |------|--------|-----------|
 | `Auto` | Auto-detect | Default. Uses `wtype` on Omarchy/Hyprland, clipboard paste otherwise. |
 | `Wtype` | `wtype -d 4 -- <text>` | Direct Wayland text input. 4ms inter-key delay prevents browsers from dropping characters. |
-| `Paste` | `wl-copy` + `ydotool key ctrl+v` | Clipboard-based paste. Saves/restores original clipboard. |
+| `Paste` | `wl-copy` + `ydotool key ctrl+v` | Clipboard-based paste. Leaves the transcript on the clipboard; never restores a stale value. |
 | `None` | No output | Disables typing entirely (useful for IPC-only consumers). |
 
 ### Omarchy Detection
@@ -446,7 +446,7 @@ On first run, if `config.toml` does not exist, ears checks for legacy single-fil
 | `ydotool` | `ydotool` | `TextInput` | Keyboard simulation (Enter key, clipboard paste) |
 | `hyprctl` | `hyprland` | `KeyboardLayout`, `TextInput` | Keyboard layout detection, Omarchy detection |
 | `dconf` | `dconf` | `KeyboardLayout` | GNOME keyboard layout detection |
-| `wl-copy` / `wl-paste` | `wl-clipboard` | `TextInput` | Clipboard operations (non-Omarchy paste path) |
+| `wl-copy` | `wl-clipboard` | `TextInput` | Clipboard operations (non-Omarchy paste path) |
 | `fzf` | `fzf` | `audio.rs` | Interactive device selection |
 | `column` | `util-linux` | `main.rs` | Device list formatting |
 
