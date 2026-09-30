@@ -59,14 +59,25 @@ pub(super) fn recording_owner(recorder_pid: i32, recorder_start: u64) -> String 
 
 /// Replace the state file in one step: a preview killed mid-write must not
 /// leave half a file behind.
-fn write_continuous_state(path: &std::path::Path, state: &ears::continuous::DecoderState) {
-    let Ok(json) = serde_json::to_string(state) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
-    }
+fn write_continuous_state(
+    path: &std::path::Path,
+    state: &ears::continuous::DecoderState,
+) -> Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .context("Continuation state path has no parent")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .context("Failed to create continuation state file")?;
+    serde_json::to_writer(&mut temporary, state).context("Failed to encode continuation state")?;
+    temporary
+        .flush()
+        .context("Failed to write continuation state")?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .context("Failed to publish continuation state")?;
+    Ok(())
 }
 
 /// Start time of a process in clock ticks since boot (field 22 of
@@ -221,7 +232,9 @@ impl PreviewGhost<'_> {
             Ok(_) => {
                 self.last_frozen = frozen_bytes;
                 self.last_shown = text;
-                let _ = std::fs::write(&self.text_file, &self.last_shown);
+                if let Err(error) = std::fs::write(&self.text_file, &self.last_shown) {
+                    tracing::warn!(%error, "Failed to mirror ghost preview text");
+                }
             }
             Err(e) => tracing::debug!("Ghost preview: {}", e),
         }
@@ -247,7 +260,7 @@ async fn stream_ghost_preview(
     owner: &str,
     recorder_alive: impl Fn() -> bool,
     ghost: &mut PreviewGhost<'_>,
-) -> StreamPreview {
+) -> Result<StreamPreview> {
     use ears::continuous::{join_segments, samples, DecoderState, Rollover, PAUSE_WINDOW};
     use ears::stream_client::{StartParams, StreamEvent, StreamSession};
 
@@ -259,7 +272,7 @@ async fn stream_ghost_preview(
         Ok(session) => session,
         Err(e) => {
             tracing::info!("Stream unavailable, decoding per tick: {}", e);
-            return StreamPreview::Fallback(state);
+            return Ok(StreamPreview::Fallback(state));
         }
     };
     let params = StartParams {
@@ -319,7 +332,7 @@ async fn stream_ghost_preview(
                     state.prefix = prefix;
                     state.offset = offset;
                     state.owner = Some(owner.to_string());
-                    write_continuous_state(&state_file, &state);
+                    write_continuous_state(&state_file, &state)?;
                     let text = join_segments(&state.prefix, partial.text.trim());
                     let frozen = join_segments(&state.prefix, &state.stable);
                     ghost.show(text.clone(), if text.starts_with(&frozen) { frozen.len() } else { 0 });
@@ -334,7 +347,7 @@ async fn stream_ghost_preview(
                         owner: Some(owner.to_string()),
                         ..DecoderState::default()
                     };
-                    write_continuous_state(&state_file, &state);
+                    write_continuous_state(&state_file, &state)?;
                     ghost.show(state.prefix.clone(), state.prefix.len());
                     utterance += 1;
                     segment = 0;
@@ -348,28 +361,28 @@ async fn stream_ghost_preview(
                 }
                 Some(StreamEvent::Error { code, message, .. }) if code == "unsupported" => {
                     tracing::warn!("Stream unsupported, decoding per tick: {}", message);
-                    return StreamPreview::Fallback(state);
+                    return Ok(StreamPreview::Fallback(state));
                 }
                 Some(StreamEvent::Error { utterance: Some(u), code, message }) if u == utterance && ending => {
                     // The segment's final failed: its text is lost to the
                     // preview, so hand over to per-tick decoding, which
                     // decodes the segment again from its settled text.
                     tracing::warn!("Stream segment final failed ({}): {}", code, message);
-                    return StreamPreview::Fallback(state);
+                    return Ok(StreamPreview::Fallback(state));
                 }
                 Some(StreamEvent::Error { code, message, .. }) => {
                     tracing::debug!("Stream error {}: {}", code, message);
                 }
                 Some(StreamEvent::Closed(reason)) => {
                     tracing::warn!("Stream lost ({}), decoding per tick", reason);
-                    return StreamPreview::Fallback(state);
+                    return Ok(StreamPreview::Fallback(state));
                 }
-                None => return StreamPreview::Fallback(state),
+                None => return Ok(StreamPreview::Fallback(state)),
                 Some(_) => {}
             }
         }
     }
-    StreamPreview::Done
+    Ok(StreamPreview::Done)
 }
 
 /// Ghost preview for push-to-talk: while the recording grows, transcribe it
@@ -442,7 +455,7 @@ pub(super) async fn run_ghost_preview(
             recorder_alive,
             &mut ghost,
         )
-        .await
+        .await?
         {
             StreamPreview::Done => finished = true,
             // Carry on from what the stream settled; nothing is replayed.
@@ -502,7 +515,7 @@ pub(super) async fn run_ghost_preview(
                         owner: Some(owner.clone()),
                         ..decoder.snapshot()
                     };
-                    write_continuous_state(&state_file, &state);
+                    write_continuous_state(&state_file, &state)?;
                     prefix.clone()
                 }
                 Ok(text) => {
@@ -510,7 +523,7 @@ pub(super) async fn run_ghost_preview(
                     state.owner = Some(owner.clone());
                     state.prefix = prefix.clone();
                     state.offset = offset;
-                    write_continuous_state(&state_file, &state);
+                    write_continuous_state(&state_file, &state)?;
                     join_segments(&prefix, &text)
                 }
                 Err(ContinuousError::Unsupported(e)) => {
@@ -519,7 +532,7 @@ pub(super) async fn run_ghost_preview(
                         unsupported: true,
                         ..Default::default()
                     };
-                    write_continuous_state(&state_file, &state);
+                    write_continuous_state(&state_file, &state)?;
                     tracing::warn!("Continuous decoding unavailable, repeating instead: {}", e);
                     continuous = None;
                     last_len = 0;
@@ -581,7 +594,8 @@ pub(super) async fn run_ghost_preview(
 
 /// Final text from continuous decoding: one more tick over the whole
 /// recording, forcing what the preview already settled. None means use a
-/// full transcription instead.
+/// full transcription instead. Errors preserve the frozen prefix rather than
+/// allowing an unconstrained replacement; explicit final correction bypasses this path.
 pub(super) async fn finish_continuous(
     config: &Config,
     audio_file: &std::path::Path,
@@ -589,26 +603,36 @@ pub(super) async fn finish_continuous(
     server_url: &str,
     model: Option<String>,
     language: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     use ears::continuous::{samples, ContinuousDecoder, DecoderState};
     const DEADLINE: Duration = Duration::from_secs(4);
 
     let state_file = ghost_continuous_state_file(config);
-    let state: Option<DecoderState> = std::fs::read_to_string(&state_file)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
-    let _ = std::fs::remove_file(&state_file);
-    // Only this recording's settled text may be forced. Without it (no
-    // preview tick landed, or continuous decoding stopped working) a full
-    // transcription is just as fast.
-    let state =
-        state.filter(|s| !s.unsupported && owner.is_some() && s.owner.as_deref() == owner)?;
-    let bytes = tokio::fs::read(audio_file).await.ok()?;
-    let all = samples(ears::ghost::growing_wav_payload(&bytes)?);
-    // Only the last segment is decoded; earlier ones are already text.
-    let segment = all.get(state.offset..)?;
+    let json = match std::fs::read_to_string(&state_file) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("Failed to read frozen continuation state"),
+    };
+    let state: DecoderState =
+        serde_json::from_str(&json).context("Invalid frozen continuation state")?;
+    if state.unsupported || owner.is_none() || state.owner.as_deref() != owner {
+        return Ok(None);
+    }
+    let frozen = ears::continuous::join_segments(&state.prefix, &state.stable);
+    let bytes = tokio::fs::read(audio_file)
+        .await
+        .context("Failed to read final audio")?;
+    let payload = ears::ghost::growing_wav_payload(&bytes).context("Invalid final WAV")?;
+    let all = samples(payload);
+    let segment = all
+        .get(state.offset..)
+        .context("Continuation offset exceeds final audio")?;
     if segment.len() * 2 > MAX_CONTINUOUS_BYTES {
-        return None; // past the server's context
+        anyhow::ensure!(
+            frozen.is_empty(),
+            "Final audio exceeds context; refusing to revise frozen text"
+        );
+        return Ok(None);
     }
     let prefix = state.prefix.clone();
     let started = std::time::Instant::now();
@@ -619,21 +643,128 @@ pub(super) async fn finish_continuous(
     match decoder.step(segment, true, DEADLINE).await {
         Ok(text) if !text.is_empty() => {
             tracing::info!("Continuous final in {:?}", started.elapsed());
-            Some(ears::continuous::join_segments(&prefix, &text))
+            let text = ears::continuous::join_segments(&prefix, &text);
+            anyhow::ensure!(
+                text.starts_with(&frozen),
+                "Final decode would revise frozen text"
+            );
+            Ok(Some(text))
         }
         // A last segment of silence still leaves the earlier ones.
-        Ok(_) if !prefix.is_empty() => Some(prefix),
-        Ok(_) => None,
-        Err(e) => {
-            tracing::warn!("Continuous final failed, transcribing in full: {}", e);
-            None
+        Ok(_) if !prefix.is_empty() && prefix.starts_with(&frozen) => Ok(Some(prefix)),
+        Ok(_) => {
+            anyhow::ensure!(
+                frozen.is_empty(),
+                "Empty final decode would discard frozen text"
+            );
+            Ok(None)
         }
+        Err(error) if frozen.is_empty() => {
+            tracing::warn!(%error, "Continuous final failed before text froze; transcribing in full");
+            Ok(None)
+        }
+        Err(error) => Err(error).context("Continuous final failed; preserving frozen text"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn continuation_state_publication_is_atomic_and_cleans_failed_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let state = ears::continuous::DecoderState {
+            stable: "frozen words".into(),
+            ..Default::default()
+        };
+        write_continuous_state(&path, &state).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ears::continuous::DecoderState>(
+                &std::fs::read_to_string(&path).unwrap()
+            )
+            .unwrap(),
+            state
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(write_continuous_state(&path, &state).is_err());
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn final_failure_only_falls_back_before_any_text_is_frozen() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        for frozen in ["", "locked words"] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = Config {
+                state_dir: dir.path().into(),
+                ..toml::from_str::<Config>("").unwrap()
+            };
+            let audio = dir.path().join("recording.wav");
+            std::fs::write(&audio, ears::continuous::wav_bytes(&vec![0; 16_000])).unwrap();
+            let state = ears::continuous::DecoderState {
+                stable: frozen.into(),
+                owner: Some("recorder".into()),
+                ..Default::default()
+            };
+            write_continuous_state(&ghost_continuous_state_file(&config), &state).unwrap();
+            let server = MockServer::start().await;
+            Mock::given(wiremock::matchers::path("/v1/chat/completions"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = finish_continuous(
+                &config,
+                &audio,
+                Some("recorder"),
+                &server.uri(),
+                Some("Qwen/Qwen3-ASR-1.7B".into()),
+                Some("en"),
+            )
+            .await;
+            if frozen.is_empty() {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("preserving frozen text"));
+            }
+            assert!(
+                ghost_continuous_state_file(&config).exists(),
+                "caller owns cleanup"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_continuation_state_does_not_allow_full_redecode() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            state_dir: dir.path().into(),
+            ..toml::from_str::<Config>("").unwrap()
+        };
+        let path = ghost_continuous_state_file(&config);
+        std::fs::write(&path, "invalid JSON").unwrap();
+        let result = finish_continuous(
+            &config,
+            &dir.path().join("absent.wav"),
+            Some("recorder"),
+            "http://127.0.0.1:1",
+            None,
+            None,
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid frozen continuation state"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "invalid JSON");
+    }
+
     #[test]
     fn test_process_identity_rejects_recycled_pid() {
         let me = std::process::id() as i32;
