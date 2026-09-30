@@ -141,7 +141,7 @@ impl ProgressiveTypingEngine {
         /// Deadline for a batched backspace child.
         const KEY_SEQUENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-        if count == 0 {
+        if count == 0 || self.config.typing_mode == TypingMode::None {
             return Ok(());
         }
 
