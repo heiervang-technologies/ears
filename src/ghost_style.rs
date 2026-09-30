@@ -246,7 +246,11 @@ fn apply_alacritty(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
 
 /// Set the Hover ghost colour prefs in a user.js, keeping everything else.
 fn apply_hover(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
-    let old = std::fs::read_to_string(path).unwrap_or_default();
+    let old = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
     let prefs = [
         ("hover.ime.ghost_preedit_color", style.hex()),
         ("hover.ime.ghost_frozen_color", style.frozen_hex()),
@@ -430,6 +434,30 @@ size = 11
             !apply_alacritty(&link, &style).unwrap(),
             "unchanged the second time"
         );
+    }
+
+    #[test]
+    fn hover_unreadable_content_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user.js");
+        let bytes = b"user_pref(\"custom\", true);\n\xff";
+        std::fs::write(&path, bytes).unwrap();
+        let error = apply_hover(&path, &GhostStyle::default()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn hover_missing_file_is_created_but_directory_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user.js");
+        assert!(apply_hover(&path, &GhostStyle::default()).unwrap());
+        assert!(!apply_hover(&path, &GhostStyle::default()).unwrap());
+        let invalid = dir.path().join("directory.js");
+        std::fs::create_dir(&invalid).unwrap();
+        assert!(apply_hover(&invalid, &GhostStyle::default()).is_err());
+        assert!(invalid.is_dir());
     }
 
     #[test]
