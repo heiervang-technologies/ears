@@ -8,6 +8,7 @@
 //
 //   P <text>   show <text> as preedit (replaces any previous ghost)
 //   F <bytes> <text>  mark frozen prefix HighLight (Wayland cursor range [0,n))
+//   B <bytes> <text>  show wrapped preview in the input-method popup
 //   T          observe: OK state <bytes> <escaped text> (does not claim ownership)
 //   C <text>   clear the ghost and commit <text> to the application
 //   X          clear the ghost without committing
@@ -34,7 +35,10 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 
+#include <algorithm>
 #include <charconv>
+#include <cwchar>
+#include <fcitx-utils/utf8.h>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -46,12 +50,35 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <vector>
 
 FCITX_DEFINE_LOG_CATEGORY(ears_ghost, "ears-ghost");
 #define GHOST_INFO() FCITX_LOGC(ears_ghost, Info)
 #define GHOST_WARN() FCITX_LOGC(ears_ghost, Warn)
 
 namespace {
+
+// Classic UI preedit is single-line. Read-only candidate rows provide real
+// wrapping; selecting a preview row must never commit transcript text.
+class PreviewRow : public fcitx::CandidateWord {
+public:
+    explicit PreviewRow(fcitx::Text text) : CandidateWord(std::move(text)) {}
+    void select(fcitx::InputContext *) const override {}
+};
+
+class PreviewLines : public fcitx::CandidateList {
+public:
+    std::vector<std::unique_ptr<PreviewRow>> rows;
+    const fcitx::Text &label(int) const override { return empty_; }
+    const fcitx::CandidateWord &candidate(int i) const override { return *rows.at(i); }
+    int size() const override { return static_cast<int>(rows.size()); }
+    int cursorIndex() const override { return -1; }
+    fcitx::CandidateLayoutHint layoutHint() const override {
+        return fcitx::CandidateLayoutHint::Vertical;
+    }
+private:
+    fcitx::Text empty_;
+};
 
 std::string socketPath() {
     const char *runtime = std::getenv("XDG_RUNTIME_DIR");
@@ -285,10 +312,11 @@ private:
         std::string text =
             line.size() > 2 ? unescape(line.substr(2)) : std::string();
         switch (op) {
+        case 'B':
         case 'F':
         case 'P': {
             size_t frozen = 0;
-            if (op == 'F') {
+            if (op == 'F' || op == 'B') {
                 const auto space = text.find(' ');
                 if (space == std::string::npos) return "ERR invalid boundary";
                 auto parsed = std::from_chars(text.data(), text.data() + space, frozen);
@@ -303,10 +331,10 @@ private:
             if (!ic) {
                 return "OK none";
             }
-            showOn(ic, text, frozen);
+            showOn(ic, text, frozen, op == 'B');
             ghostIc_ = ic->watch();
             ownerId_ = clientId;
-            return "OK " + mode(ic);
+            return "OK " + (op == 'B' ? std::string("panel") : mode(ic));
         }
         case 'C': {
             auto *ic = target();
@@ -341,22 +369,48 @@ private:
         }
     }
 
-    void showOn(fcitx::InputContext *ic, const std::string &text, size_t frozen) {
+    void showOn(fcitx::InputContext *ic, const std::string &text, size_t frozen, bool panel) {
         ghostText_ = text;
         frozenBytes_ = frozen;
         fcitx::Text t;
-        if (frozen > 0) {
-            t.append(text.substr(0, frozen),
-                     {fcitx::TextFormatFlag::Underline,
-                      fcitx::TextFormatFlag::HighLight});
-        }
-        if (frozen < text.size()) {
-            t.append(text.substr(frozen), fcitx::TextFormatFlag::Underline);
+        auto lines = std::make_unique<PreviewLines>();
+        int columns = 0;
+        auto finishLine = [&] {
+            lines->rows.push_back(std::make_unique<PreviewRow>(std::move(t)));
+            t = fcitx::Text();
+            columns = 0;
+        };
+        for (size_t i = 0; i < text.size();) {
+            size_t end = i + 1;
+            while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) ++end;
+            const auto codepoint = fcitx::utf8::getChar(text.begin() + i, text.begin() + end);
+            const int width = codepoint == '\t' ? 4 : std::max(0, ::wcwidth(static_cast<wchar_t>(codepoint)));
+            if (panel && (codepoint == '\n' || codepoint == '\r')) {
+                finishLine();
+                i = end;
+                continue;
+            }
+            if (panel && columns + width > 48) finishLine();
+            const auto part = panel && codepoint == '\t' ? std::string(4, ' ') : text.substr(i, end - i);
+            if (i < frozen) {
+                t.append(part, {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::HighLight});
+            } else {
+                t.append(part, fcitx::TextFormatFlag::Underline);
+            }
+            columns += width;
+            i = end;
         }
         // Ghost semantics: the caret stays where the user is; the suggested
         // text trails after it instead of pushing the cursor along.
         t.setCursor(0);
-        if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+        // Remove the previous surface when changing between inline and popup.
+        ic->inputPanel().setClientPreedit(fcitx::Text());
+        ic->inputPanel().setPreedit(fcitx::Text());
+        ic->inputPanel().setCandidateList(nullptr);
+        if (panel) {
+            finishLine();
+            ic->inputPanel().setCandidateList(std::move(lines));
+        } else if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
             ic->inputPanel().setClientPreedit(t);
         } else {
             // App cannot draw preedit: fcitx shows it in its own panel.
@@ -369,6 +423,7 @@ private:
     void clearOn(fcitx::InputContext *ic) {
         ghostText_.clear();
         frozenBytes_ = 0;
+        ic->inputPanel().setCandidateList(nullptr);
         ic->inputPanel().setClientPreedit(fcitx::Text());
         ic->inputPanel().setPreedit(fcitx::Text());
         ic->updatePreedit();

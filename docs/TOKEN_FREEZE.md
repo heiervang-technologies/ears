@@ -120,3 +120,22 @@ and a build of the fcitx5 addon. Plugin tests use a deterministic decoder and
 need no GPU, model download, or installed vLLM. A live rollout still needs the
 synthetic WAV check above to verify the deployed model and tokenizer, and real
 application testing to verify preedit rendering.
+## Alacritty and tmux overflow
+
+For a tmux client descended from the focused Alacritty window, Ears compares
+preview display width with `pane_width - cursor_x`. Text that would overflow
+(or contains a line break or tab) moves to the fcitx popup; short previews stay
+inline. Only the matched client's pane is used. Probes have deadlines; unknown
+geometry and older addons retain the existing inline behavior. Other terminal
+servers and non-default tmux sockets are not inferred from unrelated clients.
+
+The addon command `B <frozen_bytes> <escaped text>` shares `F`'s byte validation
+and ownership rules, but selects a wrapped popup. Read-only popup rows wrap around 48 columns (fcitx preedit itself is single-line); the observer retains the raw text and original
+boundary, and commit still delivers the original transcript. Switching between
+popup and inline clears the previous surface. Popup colors follow the fcitx
+theme rather than Alacritty's settings. Clicking a preview row does not commit it.
+
+Validated in an isolated headless Wayland session with the patched Alacritty,
+tmux and fcitx addon: inline frozen color, multiline popup, exact observer text
+and byte boundary, and clearing without sending text to the shell. The Sway
+test exercises rendering; Hyprland focus probing is covered separately.
