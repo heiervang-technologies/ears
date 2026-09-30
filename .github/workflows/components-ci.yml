@@ -35,3 +35,17 @@ jobs:
         run: |
           cmake -S fcitx5-addon -B build/fcitx5 -DCMAKE_BUILD_TYPE=Release
           cmake --build build/fcitx5 --parallel 2
+
+  workflow-lint:
+    name: Agent workflow lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: actionlint@1.7.12
+          fallback: none
+      - name: Validate agent workflow expressions and shell scripts
+        run: actionlint .github/workflows/mention-trigger.yml .github/workflows/assignment-trigger.yml

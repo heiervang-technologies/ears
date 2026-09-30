@@ -592,3 +592,21 @@ count, 1.5x nominal growth, +/-50% jitter and a 30-second retry-scheduling budge
 that includes failed-request time. Cancelling the operation drops its current
 request or sleep; configuration errors return immediately. The individual HTTP
 request timeout remains separate from the retry-scheduling budget.
+
+### Agent workflow configuration
+
+The mention and assignment workflows use repository Actions variables instead
+of source-level usernames:
+
+- `AGENT_GITHUB_LOGIN`: agent GitHub login without `@`; also passed as the
+  reusable worker workflow's `agent_name`.
+- `AGENT_ASSIGNERS_JSON`: JSON array of GitHub logins allowed to assign work,
+  for example `["maintainer-login", "agent-login"]`. Matching uses array
+  membership, not substrings.
+
+An empty agent login disables both triggers, including manual mention dispatch.
+A missing or empty assignment allowlist allows no assignment senders. Set these
+under repository Settings → Secrets and variables → Actions → Variables. These
+are public identity settings, not secrets. Changing them changes which account
+receives work or who can initiate assignment work; retain the intended allowlist.
+The mention workflow's existing event eligibility is otherwise unchanged.
