@@ -35,7 +35,8 @@ reqwest = { version = "0.12", default-features = false, features = ["multipart",
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-backoff = { version = "0.4", features = ["tokio"] }
+backon = { version = "1.6", default-features = false, features = ["std", "tokio-sleep"] }
+fastrand = "2"
 
 # VAD (Voice Activity Detection) via Silero ONNX model
 voice_activity_detector = "0.2"
@@ -49,6 +50,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 crossterm = "0.29"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 serial_test = "3.2"
 tokio-test = "0.4"
 wiremock = "0.6"

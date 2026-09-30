@@ -583,10 +583,12 @@ hooks run asynchronously until they exit.
 
 `dependency-audit.yml` audits the committed Cargo.lock on pull requests and main
 pushes, and supports manual runs. It installs cargo-audit 0.22.0 and fetches the
-current RustSec database. Vulnerabilities and soundness advisories fail the job;
-maintenance notices remain visible in its output. No advisories are ignored.
-Run the same check locally with `cargo audit --deny unsound`.
+current RustSec database. Vulnerabilities and all advisory warnings, including
+unmaintained dependencies, fail the job. No advisories are ignored.
+Run the same check locally with `cargo audit --deny warnings`.
 
-As of 2026-09-30, `backoff` and its `instant` dependency still have unmaintained
-notices. Replacing that retry implementation remains maintenance work; a passing
-audit is not a claim that every dependency is actively maintained.
+Transcription retries use `backon` with the existing initial-attempt-plus-retries
+count, 1.5x nominal growth, +/-50% jitter and a 30-second retry-scheduling budget
+that includes failed-request time. Cancelling the operation drops its current
+request or sleep; configuration errors return immediately. The individual HTTP
+request timeout remains separate from the retry-scheduling budget.

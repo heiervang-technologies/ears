@@ -4,7 +4,7 @@
 //! It handles health checks, transcription requests, and includes retry logic
 //! with exponential backoff.
 
-use backoff::{future::retry, ExponentialBackoff};
+use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
@@ -314,26 +314,16 @@ impl WhisperClient {
             grammar.is_some()
         );
 
-        // Perform transcription with retry logic
-        let backoff = self.create_backoff();
-        let mut attempt = 0u32;
-        let text = retry(backoff, || {
-            let last_attempt = attempt >= self.max_retries;
-            attempt = attempt.saturating_add(1);
-            async move {
-                let result = match grammar {
-                    Some(g) => self.transcribe_chat_internal(path, g).await,
-                    None => self.transcribe_internal(path).await,
-                };
-                result.map_err(|e| {
-                    warn!("Transcription attempt failed: {}", e);
-                    if last_attempt || matches!(e, WhisperError::ConfigurationError(_)) {
-                        backoff::Error::permanent(e)
-                    } else {
-                        backoff::Error::transient(e)
-                    }
-                })
+        let text = (|| async {
+            match grammar {
+                Some(g) => self.transcribe_chat_internal(path, g).await,
+                None => self.transcribe_internal(path).await,
             }
+        })
+        .retry(self.create_backoff())
+        .when(|error| {
+            warn!("Transcription attempt failed: {}", error);
+            !matches!(error, WhisperError::ConfigurationError(_))
         })
         .await?;
 
@@ -642,20 +632,73 @@ impl WhisperClient {
         has_filler && all_allowed
     }
 
-    /// Creates an exponential backoff configuration
-    fn create_backoff(&self) -> ExponentialBackoff {
-        ExponentialBackoff {
-            initial_interval: Duration::from_millis(self.initial_backoff_ms),
-            max_interval: Duration::from_millis(self.max_backoff_ms),
-            max_elapsed_time: Some(Duration::from_secs(30)),
-            ..Default::default()
-        }
+    /// Preserve the retry policy: initial attempt plus max_retries, 1.5x
+    /// nominal growth capped at max_interval, +/-50% jitter, and no retry
+    /// scheduled beyond 30 seconds including time spent in failed requests.
+    fn create_backoff(&self) -> impl backon::Backoff {
+        let started = tokio::time::Instant::now();
+        ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(self.initial_backoff_ms))
+            .with_max_delay(Duration::from_millis(self.max_backoff_ms))
+            .with_factor(1.5)
+            .with_max_times(self.max_retries as usize)
+            .build()
+            .map(|delay| delay.mul_f64(0.5 + fastrand::f64()))
+            .take_while(move |delay| {
+                started.elapsed().saturating_add(*delay) <= Duration::from_secs(30)
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_budget_includes_failed_request_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let attempts = AtomicUsize::new(0);
+        let client = WhisperClient::with_retry_config("http://localhost", 10, 10_000, 10_000);
+        let started = tokio::time::Instant::now();
+        let result: Result<(), ()> = (|| async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_secs(29)).await;
+            Err(())
+        })
+        .retry(client.create_backoff())
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(started.elapsed(), Duration::from_secs(29));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_retry_sleep_prevents_later_attempts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let attempts = AtomicUsize::new(0);
+        let client = WhisperClient::with_retry_config("http://localhost", 10, 10_000, 10_000);
+        let operation = (|| async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err::<(), ()>(())
+        })
+        .retry(client.create_backoff());
+        assert!(tokio::time::timeout(Duration::from_secs(1), operation)
+            .await
+            .is_err());
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_intervals_preserve_growth_cap_jitter_and_count() {
+        let client = WhisperClient::with_retry_config("http://localhost", 4, 100, 200);
+        let delays: Vec<_> = client.create_backoff().collect();
+        assert_eq!(delays.len(), 4);
+        for (delay, nominal) in delays.into_iter().zip([100, 150, 200, 200]) {
+            assert!(delay >= Duration::from_millis(nominal / 2));
+            assert!(delay <= Duration::from_millis(nominal * 3 / 2));
+        }
+    }
 
     #[test]
     fn test_client_creation() {
