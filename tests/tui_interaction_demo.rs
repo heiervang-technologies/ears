@@ -33,7 +33,7 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
 
 #[test]
 fn test_interactive_session_scripted() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     println!("\n=== INITIAL STATE ===");
     let output = render_to_string(&mut app, 80, 24);
@@ -85,7 +85,7 @@ fn test_cannot_freely_interact() {
     // This test demonstrates the limitation:
     // We can only test PRE-SCRIPTED interactions
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // We CANNOT do:
     // - Wait for user input and respond dynamically
@@ -117,7 +117,7 @@ fn test_cannot_freely_interact() {
 fn test_complex_interaction_flow() {
     println!("\n=== SIMULATING A COMPLETE USER SESSION ===\n");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // User opens app
     println!("1. App opens on Configuration panel");

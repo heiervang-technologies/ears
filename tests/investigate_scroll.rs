@@ -3,7 +3,7 @@ use ears::tui::{App, Panel};
 
 #[test]
 fn investigate_scroll_on_different_panels() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs = vec![
         "Log 1".to_string(),
         "Log 2".to_string(),
@@ -78,7 +78,7 @@ fn investigate_scroll_on_different_panels() {
 
 #[test]
 fn investigate_scroll_on_empty_logs() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs.clear(); // No logs
     app.current_panel = Panel::Logs;
 

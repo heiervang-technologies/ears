@@ -5,14 +5,14 @@ use ears::tui::{App, Panel};
 
 #[test]
 fn test_app_initialization() {
-    let app = App::new();
+    let app = App::new().unwrap();
     assert_eq!(app.current_panel, Panel::Configuration);
     assert!(!app.command_mode);
 }
 
 #[test]
 fn test_panel_navigation_next() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start at Configuration
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -39,7 +39,7 @@ fn test_panel_navigation_next() {
 
 #[test]
 fn test_panel_navigation_prev() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Start at Configuration
     assert_eq!(app.current_panel, Panel::Configuration);
@@ -66,7 +66,7 @@ fn test_panel_navigation_prev() {
 
 #[test]
 fn test_tab_navigation() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Press Tab to go to next panel (Logs)
     let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
@@ -85,7 +85,7 @@ fn test_tab_navigation() {
 
 #[test]
 fn test_quit_with_q() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
     let result = app.handle_key(key);
@@ -95,7 +95,7 @@ fn test_quit_with_q() {
 
 #[test]
 fn test_quit_with_ctrl_c() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
     let result = app.handle_key(key);
@@ -105,7 +105,7 @@ fn test_quit_with_ctrl_c() {
 
 #[test]
 fn test_command_mode_entry() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     assert!(!app.command_mode);
 
     // Press ':' to enter command mode
@@ -119,7 +119,7 @@ fn test_command_mode_entry() {
 
 #[test]
 fn test_command_mode_typing() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     let key = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -143,7 +143,7 @@ fn test_command_mode_typing() {
 
 #[test]
 fn test_command_mode_quit() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode and type ':q'
     app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))
@@ -161,7 +161,7 @@ fn test_command_mode_quit() {
 
 #[test]
 fn test_command_mode_escape() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode
     app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))
@@ -182,7 +182,7 @@ fn test_command_mode_escape() {
 
 #[test]
 fn test_vad_toggle() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     assert!(!app.vad_active);
 
     // Press Space to enable VAD
@@ -204,7 +204,7 @@ fn test_panel_titles() {
 
 #[test]
 fn test_go_to_config_with_c() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
 
     // Press 'c' to jump to Configuration panel
@@ -215,7 +215,7 @@ fn test_go_to_config_with_c() {
 
 #[test]
 fn test_log_scrolling() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.current_panel = Panel::Logs;
 
     // Add some logs
@@ -253,7 +253,7 @@ fn test_log_scrolling() {
 
 #[test]
 fn test_command_mode_write() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let initial_log_count = app.logs.len();
 
     // Enter command mode and type ':w'
@@ -276,7 +276,7 @@ fn test_command_mode_write() {
 
 #[test]
 fn test_command_mode_write_quit() {
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode and type ':wq'
     app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))

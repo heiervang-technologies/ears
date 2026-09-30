@@ -219,15 +219,13 @@ pub async fn start_vad_pipeline(
 
 /// Run the TUI application
 pub async fn run(profile: Option<&str>) -> Result<()> {
+    // Resolve fallible configuration/state before entering raw terminal mode.
+    let config = Config::load_profile_or_defaults(profile)?;
+    let mut state_mgr = StateManager::new(&config.state_dir)?;
+    let mut app = App::from_config(config.clone());
     let mut terminal = init_terminal()?;
     let mut event_handler = EventHandler::new(250);
-    let mut app = App::with_profile(profile);
     app.event_tx = Some(event_handler.sender());
-
-    // Load config and create state manager for waybar integration
-    let config = Config::load_profile(profile)
-        .unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
-    let mut state_mgr = StateManager::new(&config.state_dir)?;
 
     // Drop guard ensures state resets to idle even on panic/crash
     let _state_guard = crate::state::StateResetGuard::new(&config.state_dir);

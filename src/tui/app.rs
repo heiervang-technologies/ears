@@ -267,14 +267,18 @@ pub struct App {
 
 impl App {
     /// Create a new application instance
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         Self::with_profile(None)
     }
 
-    pub fn with_profile(profile: Option<&str>) -> Self {
-        // Load config from files
-        let config = Config::load_profile(profile)
-            .unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
+    pub fn with_profile(profile: Option<&str>) -> Result<Self> {
+        Ok(Self::from_config(Config::load_profile_or_defaults(
+            profile,
+        )?))
+    }
+
+    /// Build the UI from the same already-loaded configuration as its pipeline.
+    pub fn from_config(config: Config) -> Self {
         let server_url = config.whisper_server.to_string();
         let device = config.device.clone();
         let language = config.language.clone();
@@ -1068,12 +1072,19 @@ impl App {
         let profile_name = next.map(|s| s.to_string());
         let display = profile_name.as_deref().unwrap_or("default").to_string();
 
-        // Persist the choice
-        Config::set_default_profile(profile_name.as_deref().unwrap_or("")).ok();
-
-        // Reload config from the new profile
-        let config = Config::load_profile(profile_name.as_deref())
-            .unwrap_or_else(|_| Config::new().expect("Failed to create default config"));
+        // Validate before persisting or changing the current session. A bad
+        // profile must not silently replace the active settings with defaults.
+        let config = match Config::load_profile(Some(profile_name.as_deref().unwrap_or(""))) {
+            Ok(config) => config,
+            Err(error) => {
+                self.add_log(&format!("Profile switch failed: {error:#}"));
+                return;
+            }
+        };
+        if let Err(error) = Config::set_default_profile(profile_name.as_deref().unwrap_or("")) {
+            self.add_log(&format!("Cannot persist profile switch: {error:#}"));
+            return;
+        }
         self.server = config.whisper_server.to_string();
         self.device = config.device.clone();
         self.language = config.language.clone();
@@ -1543,12 +1554,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1566,7 +1571,7 @@ mod tests {
 
     #[test]
     fn test_panel_navigation_tab() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert_eq!(app.current_panel, Panel::Configuration);
 
         app.handle_key(key(KeyCode::Tab)).unwrap();
@@ -1581,7 +1586,7 @@ mod tests {
 
     #[test]
     fn test_panel_navigation_hl() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.handle_key(key(KeyCode::Char('h'))).unwrap();
         assert_eq!(app.current_panel, Panel::LiveTranscription);
 
@@ -1597,7 +1602,7 @@ mod tests {
 
     #[test]
     fn test_help_overlay_toggle() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert!(!app.help_overlay_open);
 
         app.handle_key(key(KeyCode::Char('?'))).unwrap();
@@ -1614,7 +1619,7 @@ mod tests {
 
     #[test]
     fn test_help_overlay_close_with_question_mark() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.handle_key(key(KeyCode::Char('?'))).unwrap();
         assert!(app.help_overlay_open);
 
@@ -1626,7 +1631,7 @@ mod tests {
 
     #[test]
     fn test_command_mode_enter_exit() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert!(!app.command_mode);
 
         app.handle_key(key(KeyCode::Char(':'))).unwrap();
@@ -1638,7 +1643,7 @@ mod tests {
 
     #[test]
     fn test_command_mode_quit() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.handle_key(key(KeyCode::Char(':'))).unwrap();
         app.handle_key(key(KeyCode::Char('q'))).unwrap();
         let should_continue = app.handle_key(key(KeyCode::Enter)).unwrap();
@@ -1647,7 +1652,7 @@ mod tests {
 
     #[test]
     fn test_command_mode_unknown_command() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         let initial_logs = app.logs.len();
 
         app.handle_key(key(KeyCode::Char(':'))).unwrap();
@@ -1660,7 +1665,7 @@ mod tests {
 
     #[test]
     fn test_command_theme_toggle() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert_eq!(app.theme_name, ThemeName::Dark);
 
         // :theme toggles
@@ -1675,7 +1680,7 @@ mod tests {
 
     #[test]
     fn test_command_theme_set_specific() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
 
         // :theme dark
         app.handle_key(key(KeyCode::Char(':'))).unwrap();
@@ -1691,7 +1696,7 @@ mod tests {
 
     #[test]
     fn test_search_mode_enter_exit() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
 
         app.handle_key(key(KeyCode::Char('/'))).unwrap();
@@ -1703,7 +1708,7 @@ mod tests {
 
     #[test]
     fn test_search_finds_matches() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
         app.logs = vec![
             "Application started".to_string(),
@@ -1722,7 +1727,7 @@ mod tests {
 
     #[test]
     fn test_search_navigation_n() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
         app.logs = vec![
             "error one".to_string(),
@@ -1751,7 +1756,7 @@ mod tests {
 
     #[test]
     fn test_search_navigation_shift_n() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
         app.logs = vec![
             "error one".to_string(),
@@ -1774,7 +1779,7 @@ mod tests {
 
     #[test]
     fn test_log_filter_cycle() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
         assert_eq!(app.log_filter, LogFilter::All);
 
@@ -1802,7 +1807,7 @@ mod tests {
 
     #[test]
     fn test_scroll_in_logs_panel() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Logs;
         app.logs = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         app.selected_log = 0;
@@ -1825,7 +1830,7 @@ mod tests {
 
     #[test]
     fn test_vad_toggle() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert!(!app.vad_active);
 
         app.handle_key(key(KeyCode::Char('v'))).unwrap();
@@ -1839,7 +1844,7 @@ mod tests {
 
     #[test]
     fn test_space_toggles_vad() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         assert!(!app.vad_active);
 
         app.handle_key(key(KeyCode::Char(' '))).unwrap();
@@ -1850,7 +1855,7 @@ mod tests {
 
     #[test]
     fn test_toggle_lowercase_filter() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Configuration;
         let initial = app.text_filters.lowercase;
 
@@ -1860,7 +1865,7 @@ mod tests {
 
     #[test]
     fn test_toggle_punctuation_filter() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Configuration;
         let initial = app.text_filters.remove_punctuation;
 
@@ -1870,7 +1875,7 @@ mod tests {
 
     #[test]
     fn test_toggle_progressive_typing_in_configuration() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Configuration;
         let initial = app.progressive_typing;
 
@@ -1880,7 +1885,7 @@ mod tests {
 
     #[test]
     fn test_toggle_auto_correction_in_configuration() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::Configuration;
         let initial = app.auto_correction;
 
@@ -1892,7 +1897,7 @@ mod tests {
 
     #[test]
     fn test_toggle_progressive_typing_in_live() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::LiveTranscription;
         let initial = app.progressive_typing;
 
@@ -1902,7 +1907,7 @@ mod tests {
 
     #[test]
     fn test_toggle_auto_correction_in_live() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.current_panel = Panel::LiveTranscription;
         let initial = app.auto_correction;
 
@@ -1914,14 +1919,14 @@ mod tests {
 
     #[test]
     fn test_quit_with_q() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         let result = app.handle_key(key(KeyCode::Char('q'))).unwrap();
         assert!(!result);
     }
 
     #[test]
     fn test_quit_with_esc() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         let result = app.handle_key(key(KeyCode::Esc)).unwrap();
         assert!(!result);
     }
@@ -1930,7 +1935,7 @@ mod tests {
 
     #[test]
     fn test_handle_segment_completed() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.handle_streaming_event(StreamingEvent::SegmentCompleted {
             text: "hello world".to_string(),
             duration_ms: 500,
@@ -1943,7 +1948,7 @@ mod tests {
 
     #[test]
     fn test_handle_streaming_error() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.handle_streaming_event(StreamingEvent::Error("timeout".to_string()));
 
         assert_eq!(app.total_transcriptions, 1);
@@ -1954,7 +1959,7 @@ mod tests {
 
     #[test]
     fn test_env_server_blocks_edit() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.env_server = true;
         app.current_panel = Panel::Configuration;
 
@@ -1967,7 +1972,7 @@ mod tests {
 
     #[test]
     fn test_add_log_auto_scrolls() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         // Position at last log
         app.selected_log = app.logs.len() - 1;
 
@@ -1977,7 +1982,7 @@ mod tests {
 
     #[test]
     fn test_add_log_no_scroll_if_not_at_end() {
-        let mut app = App::new();
+        let mut app = App::new().unwrap();
         app.logs = vec!["a".to_string(), "b".to_string()];
         app.selected_log = 0;
 

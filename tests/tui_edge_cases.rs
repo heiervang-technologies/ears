@@ -33,7 +33,7 @@ fn render_to_string(app: &mut App, width: u16, height: u16) -> String {
 fn edge_case_tiny_terminal() {
     println!("\n🔍 EDGE CASE: Tiny terminal (10x5)");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 10, 5);
 
     println!("{}", output);
@@ -48,7 +48,7 @@ fn edge_case_tiny_terminal() {
 fn edge_case_very_wide_terminal() {
     println!("\n🔍 EDGE CASE: Very wide terminal (300x50)");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 300, 50);
 
     assert!(!output.is_empty());
@@ -59,7 +59,7 @@ fn edge_case_very_wide_terminal() {
 fn edge_case_very_tall_terminal() {
     println!("\n🔍 EDGE CASE: Very tall terminal (80x100)");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     let output = render_to_string(&mut app, 80, 100);
 
     assert!(!output.is_empty());
@@ -70,7 +70,7 @@ fn edge_case_very_tall_terminal() {
 fn edge_case_many_logs() {
     println!("\n🔍 EDGE CASE: 1000 log entries");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Add 1000 log entries
     for i in 0..1000 {
@@ -86,7 +86,7 @@ fn edge_case_many_logs() {
 fn edge_case_very_long_log_line() {
     println!("\n🔍 EDGE CASE: Log line with 1000 characters");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs.push("A".repeat(1000));
 
     let output = render_to_string(&mut app, 80, 24);
@@ -99,7 +99,7 @@ fn edge_case_very_long_log_line() {
 fn edge_case_special_characters_in_logs() {
     println!("\n🔍 EDGE CASE: Special characters in logs");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs.push("Special: \t\n\r\0".to_string());
     app.logs.push("Unicode: 你好世界 🚀 ñ ü".to_string());
     app.logs.push("Symbols: <>&\"'".to_string());
@@ -114,7 +114,7 @@ fn edge_case_special_characters_in_logs() {
 fn edge_case_very_long_command_buffer() {
     println!("\n🔍 EDGE CASE: Very long command buffer");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.command_mode = true;
     app.command_buffer = "x".repeat(200);
 
@@ -128,7 +128,7 @@ fn edge_case_very_long_command_buffer() {
 fn edge_case_vad_active_rendering() {
     println!("\n🔍 EDGE CASE: VAD active rendering");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.vad_active = true;
 
     let output = render_to_string(&mut app, 80, 24);
@@ -141,7 +141,7 @@ fn edge_case_vad_active_rendering() {
 fn edge_case_scroll_beyond_bounds() {
     println!("\n🔍 EDGE CASE: Scroll beyond log bounds");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs = vec!["Log 1".to_string(), "Log 2".to_string()];
 
     // Try scrolling down many times
@@ -170,7 +170,7 @@ fn edge_case_scroll_beyond_bounds() {
 fn edge_case_empty_logs() {
     println!("\n🔍 EDGE CASE: No logs at all");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.logs.clear();
     app.current_panel = ears::tui::Panel::Logs;
 
@@ -184,7 +184,7 @@ fn edge_case_empty_logs() {
 fn edge_case_rapid_panel_switching() {
     println!("\n🔍 EDGE CASE: Rapid panel switching");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Switch panels 1000 times
     for _ in 0..1000 {
@@ -202,7 +202,7 @@ fn edge_case_rapid_panel_switching() {
 fn edge_case_command_mode_spam() {
     println!("\n🔍 EDGE CASE: Spam enter command mode");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     // Enter command mode many times
     for _ in 0..100 {
@@ -220,7 +220,7 @@ fn edge_case_command_mode_spam() {
 fn edge_case_mixed_operations() {
     println!("\n🔍 EDGE CASE: Random mixed operations");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
 
     let operations = vec![
         KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
@@ -253,7 +253,7 @@ fn edge_case_mixed_operations() {
 fn edge_case_backspace_on_empty_buffer() {
     println!("\n🔍 EDGE CASE: Backspace on empty command buffer");
 
-    let mut app = App::new();
+    let mut app = App::new().unwrap();
     app.command_mode = true;
     app.command_buffer = String::new();
 

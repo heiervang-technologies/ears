@@ -89,7 +89,7 @@ fn explore_state_space(max_states: usize) -> HashMap<AppState, String> {
     let mut queue: VecDeque<App> = VecDeque::new();
 
     // Start with initial state
-    let mut initial_app = App::new();
+    let mut initial_app = App::new().unwrap();
     let initial_state = AppState::from(&initial_app);
 
     visited.insert(initial_state.clone());
