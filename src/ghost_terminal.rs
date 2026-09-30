@@ -144,8 +144,14 @@ fn exceeds(text: &str, remaining: usize) -> bool {
 /// way to an ellipsis. Returns the wrapped text and `frozen` (a char-boundary
 /// byte offset into `text`) mapped into it.
 pub(crate) fn wrap_into_pane(text: &str, frozen: usize, pane: &Pane) -> (String, usize) {
+    // Map the original prefix through the same normalization as the preview.
+    // Keeping the old offset after removing CR can freeze mutable text or
+    // leave an offset inside a multibyte character.
+    let frozen = text[..crate::freeze::boundary(text, frozen)]
+        .bytes()
+        .filter(|&b| b != b'\r')
+        .count();
     let text = text.replace('\r', "").replace('\t', " ");
-    let frozen = frozen.min(text.len());
     let first = pane.width.saturating_sub(pane.cursor_x).max(1);
     let rows = pane.rows.max(1);
 
@@ -308,6 +314,21 @@ mod tests {
         assert_eq!(out, "abcd\n  efghijklm\n  xy");
         let (out, _) = wrap_into_pane("a\tb\r", 0, &pane(0, 5));
         assert_eq!(out, "a b");
+    }
+
+    #[test]
+    fn carriage_returns_preserve_the_original_frozen_prefix() {
+        for (text, boundary, expected) in [
+            ("\raé tail", 2, "a"),
+            ("a\r\né tail", 3, "a\n  "),
+            ("\rblå\tmutable", 5, "blå"),
+            ("blå\r tail", 4, "blå"),
+            ("\rblå tail", 0, ""),
+        ] {
+            let (out, frozen) = wrap_into_pane(text, boundary, &pane(0, 5));
+            assert!(out.is_char_boundary(frozen), "{text:?}: {out:?}, {frozen}");
+            assert_eq!(&out[..frozen], expected, "{text:?}");
+        }
     }
 
     #[test]
