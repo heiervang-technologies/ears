@@ -40,13 +40,13 @@ With `live_decoding = "continuous"`, push-to-talk and VAD ghost previews
 send the boundary automatically. The updated fcitx5 addon draws the frozen
 prefix with `HighLight` and underlines both parts for inline preedit. The
 Wayland frontend exports the highlighted prefix as the preedit cursor range
-`[0, n)`, which
-patched Alacritty uses for the configured frozen color. Patched Hover maps
+`[0, n)`, which patched Alacritty uses for the configured frozen color.
+Patched Hover maps
 the GTK Wayland highlighted prefix to `hover.ime.ghost_frozen_color`.
 `ears ghost-style --frozen "#ffffff"` writes these app preferences; Alacritty
 reloads its configuration immediately, while Hover needs a restart.
-Both parts remain uncommitted until the existing commit path runs. Filters map the boundary
-into the displayed text, including Unicode case changes and punctuation
+Both parts remain uncommitted until the existing commit path runs. Filters
+map the boundary into the displayed text, including Unicode case changes and punctuation
 removal; invalid byte offsets freeze nothing.
 
 Applications and input-method themes can override preedit formatting.
