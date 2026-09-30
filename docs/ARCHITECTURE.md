@@ -500,3 +500,15 @@ An optional executable at `~/.config/ears/hooks/post-transcribe` is called after
 - `$2` -- The transcribed text
 
 The hook runs in a background thread (fire-and-forget) with stdin/stdout/stderr redirected to null.
+
+### Source boundaries for live previews
+
+The binary's push-to-talk preview lifecycle, recorder identity checks, stream
+rollover/fallback and final handoff live in `src/ghost_preview.rs`. `main.rs`
+dispatches commands and handles recording/transcription orchestration.
+
+The VAD engine stays in `src/streaming_engine.rs`; its ghost session bookkeeping,
+stream connection handling, partial previews and delivery methods live in
+`src/streaming_engine/ghost.rs`. Engine regression tests are in the sibling
+`tests.rs`. These private modules preserve the existing public API and decoding
+policy; they do not yet unify the distinct push-to-talk and VAD session loops.
