@@ -549,6 +549,16 @@ mod tests {
     }
 
     #[test]
+    fn frozen_len_is_the_shared_prefix() {
+        assert_eq!(frozen_len("Hello world, how", "Hello world,"), 12);
+        assert_eq!(frozen_len("Hello world", "Hello there"), 6);
+        assert_eq!(frozen_len("héllo", "hé"), 3);
+        assert_eq!(frozen_len("hello", ""), 0);
+        assert_eq!(frozen_len("hello", "  "), 0);
+        assert_eq!(frozen_len("hello", "hello there"), 5);
+    }
+
+    #[test]
     fn frozen_preedit_keeps_utf8_boundary_and_escapes_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
@@ -580,7 +590,7 @@ mod tests {
                         "OK preedit\n"
                     };
                     writer.write_all(response.as_bytes()).unwrap();
-                    let done = line.starts_with("P ");
+                    let done = line == "P hello again";
                     seen.push(line);
                     if done {
                         return seen;
@@ -589,13 +599,18 @@ mod tests {
             }
             seen
         });
+        let mut client = client(path);
         assert_eq!(
-            client(path).preedit_frozen("hello tail", 5).unwrap(),
+            client.preedit_frozen("hello tail", 5).unwrap(),
+            GhostDisplay::Preedit
+        );
+        assert_eq!(
+            client.preedit_frozen("hello again", 5).unwrap(),
             GhostDisplay::Preedit
         );
         assert_eq!(
             server.join().unwrap(),
-            ["S", "F 5 hello tail", "S", "P hello tail"]
+            ["S", "F 5 hello tail", "P hello tail", "S", "P hello again"]
         );
     }
 
