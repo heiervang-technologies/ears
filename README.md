@@ -306,19 +306,30 @@ the style once and ears writes it into the apps that support it:
 [ghost]
 color = "yellow"   # #rrggbb, #rgb, or grey | blue-grey | orange | yellow | green-yellow
 underline = false
+frozen_color = "#ffffff"   # the settled start, which will no longer change
 ```
 
 ```
 ears ghost-style                  # show the style and where it is applied
 ears ghost-style green-yellow     # set a preset (or "#c8d44a", or "default")
 ears ghost-style --underline
+ears ghost-style --frozen "#ffffff"  # colour the settled part (or "default")
 ```
 
-In the TUI's Configuration panel, `o` cycles the presets. Supported apps:
-- **Alacritty** with the preedit-colors patch: `[colors.preedit]` in
-  `alacritty.toml`. Alacritty reloads it immediately.
-- **Hover**: the `hover.ime.ghost_preedit_color` pref in each profile's
-  `user.js`, which applies from the next Hover start.
+With continuous live decoding, the start of the ghost settles while the last
+few words are still open to correction. ears marks the settled part as the
+input method's highlighted range (the fcitx5 addon must be current:
+`fcitx5-addon/install.sh`), and `frozen_color` colours it, so you can see
+what is final while you speak.
+
+In the TUI's Configuration panel, `o` cycles the ghost colour presets and `O`
+the frozen ones. Supported apps:
+- **Alacritty** with the preedit-colors patch: `[colors.preedit]`
+  (`foreground`, `highlight_foreground`) in `alacritty.toml`. Alacritty
+  reloads it immediately.
+- **Hover**: the `hover.ime.ghost_preedit_color` and
+  `hover.ime.ghost_frozen_color` prefs in each profile's `user.js`, which
+  apply from the next Hover start.
 
 Chromium, Firefox and GTK4 apps (Walker) keep their own preedit style. The
 style is also re-applied whenever `ears ghost` or `ears toggle --ghost` starts.

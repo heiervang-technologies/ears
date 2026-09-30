@@ -12,6 +12,8 @@
 //!
 //! ```text
 //! P <text>   show <text> as the ghost (replaces the previous one)
+//! F <n> <text>  as P, marking the first <n> bytes as frozen (settled:
+//!            they will not change); apps can colour them differently
 //! C <text>   clear the ghost and commit <text>
 //! X          clear the ghost
 //! S          status
@@ -218,6 +220,8 @@ pub struct GhostClient {
     path: PathBuf,
     conn: Option<(UnixStream, BufReader<UnixStream>)>,
     active_class: fn() -> Option<String>,
+    /// The addon predates `F`; send plain `P` instead.
+    no_frozen: bool,
 }
 
 impl GhostClient {
@@ -231,6 +235,7 @@ impl GhostClient {
             path,
             conn: None,
             active_class,
+            no_frozen: false,
         }
     }
 
@@ -263,9 +268,29 @@ impl GhostClient {
     /// [`GhostDisplay::None`] (and clears any ghost) when the focused window
     /// cannot show it.
     pub fn preedit(&mut self, text: &str) -> Result<GhostDisplay, GhostError> {
+        self.preedit_frozen(text, 0)
+    }
+
+    /// Like [`Self::preedit`], with the first `frozen` bytes of `text`
+    /// marked as settled. An addon without `F` gets plain `P`.
+    pub fn preedit_frozen(
+        &mut self,
+        text: &str,
+        frozen: usize,
+    ) -> Result<GhostDisplay, GhostError> {
         if !self.focus_matches()? {
             self.send("X")?;
             return Ok(GhostDisplay::None);
+        }
+        let frozen = floor_char_boundary(text, frozen);
+        if frozen > 0 && !self.no_frozen {
+            match self.send(&format!("F {} {}", frozen, escape(text))) {
+                Err(GhostError::Rejected(reply)) if reply.starts_with("ERR unknown") => {
+                    tracing::info!("Ghost addon has no frozen text; reinstall it for colours");
+                    self.no_frozen = true;
+                }
+                other => return other.map(|(shown, _)| shown),
+            }
         }
         self.send(&format!("P {}", escape(text)))
             .map(|(shown, _)| shown)
@@ -336,6 +361,29 @@ impl GhostClient {
     }
 }
 
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut end = index.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// Bytes at the start of `shown` that are settled: the longest prefix it
+/// shares with `settled`, both as displayed (filtered, spaced). Whatever
+/// the filters did differently to the settled text alone is left open.
+pub fn frozen_len(shown: &str, settled: &str) -> usize {
+    if settled.trim().is_empty() {
+        return 0;
+    }
+    shown
+        .char_indices()
+        .zip(settled.chars())
+        .take_while(|((_, a), b)| a == b)
+        .last()
+        .map_or(0, |((i, c), _)| i + c.len_utf8())
+}
+
 /// Parse "OK <display> [program]".
 fn parse_reply(reply: &str) -> Result<(GhostDisplay, Option<String>), GhostError> {
     let mut words = reply.splitn(3, ' ');
@@ -362,7 +410,11 @@ mod tests {
     /// Minimal stand-in for the addon: records lines, reports "TestApp" as
     /// focused and answers "OK preedit". With `drop_on_commit` it hangs up
     /// on `C` without replying, like an addon that crashed mid-commit.
-    fn fake_addon_with(path: PathBuf, drop_on_commit: bool) -> mpsc::Receiver<String> {
+    fn fake_addon_with(
+        path: PathBuf,
+        drop_on_commit: bool,
+        legacy: bool,
+    ) -> mpsc::Receiver<String> {
         let listener = UnixListener::bind(&path).unwrap();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -375,6 +427,8 @@ mod tests {
                     let commit = line.starts_with('C');
                     let reply: &[u8] = if line == "S" {
                         b"OK preedit TestApp\n"
+                    } else if legacy && line.starts_with("F ") {
+                        b"ERR unknown command\n"
                     } else {
                         b"OK preedit\n"
                     };
@@ -390,7 +444,7 @@ mod tests {
     }
 
     fn fake_addon(path: PathBuf) -> mpsc::Receiver<String> {
-        fake_addon_with(path, false)
+        fake_addon_with(path, false, false)
     }
 
     fn focus_on_test_app() -> Option<String> {
@@ -495,6 +549,35 @@ mod tests {
     }
 
     #[test]
+    fn frozen_text_is_marked_and_falls_back_for_old_addons() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let rx = fake_addon(path.clone());
+        let mut new = client(path);
+        new.preedit_frozen("hello wor", 5).unwrap();
+        new.preedit_frozen("hé", 2).unwrap(); // mid-character: floor
+        new.preedit_frozen("hi", 0).unwrap();
+        assert_eq!(commands(&rx), ["F 5 hello wor", "F 1 hé", "P hi"]);
+
+        let path = dir.path().join("old.sock");
+        let rx = fake_addon_with(path.clone(), false, true);
+        let mut old = client(path);
+        assert_eq!(old.preedit_frozen("ab", 1).unwrap(), GhostDisplay::Preedit);
+        assert_eq!(old.preedit_frozen("abc", 1).unwrap(), GhostDisplay::Preedit);
+        assert_eq!(commands(&rx), ["F 1 ab", "P ab", "P abc"]);
+    }
+
+    #[test]
+    fn frozen_len_is_the_shared_prefix() {
+        assert_eq!(frozen_len("Hello world, how", "Hello world,"), 12);
+        assert_eq!(frozen_len("Hello world", "Hello there"), 6);
+        assert_eq!(frozen_len("héllo", "hé"), 3);
+        assert_eq!(frozen_len("hello", ""), 0);
+        assert_eq!(frozen_len("hello", "  "), 0);
+        assert_eq!(frozen_len("hello", "hello there"), 5);
+    }
+
+    #[test]
     fn focus_mismatch_types_instead_of_committing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
@@ -537,7 +620,7 @@ mod tests {
     fn lost_commit_reply_is_unknown_not_retried() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
-        let _rx = fake_addon_with(path.clone(), true);
+        let _rx = fake_addon_with(path.clone(), true, false);
         let mut client = client(path);
         assert_eq!(client.commit("hi"), Delivery::Unknown);
     }

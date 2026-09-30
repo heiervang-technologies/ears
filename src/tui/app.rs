@@ -567,6 +567,13 @@ impl App {
                 self.cycle_ghost_color();
             }
 
+            // 'O' to cycle the frozen (settled) ghost text colour
+            (KeyCode::Char('O'), KeyModifiers::SHIFT)
+                if self.current_panel == Panel::Configuration =>
+            {
+                self.cycle_frozen_color();
+            }
+
             // 'c' to go to configuration panel
             (KeyCode::Char('c'), KeyModifiers::NONE) => {
                 self.current_panel = Panel::Configuration;
@@ -1196,6 +1203,23 @@ impl App {
         self.add_log(&format!("Cue volume: {}%", new_vol));
         // Play a preview beep so user can hear the new level
         crate::desktop::AudioFeedback::beep_start().ok();
+        self.save_config();
+    }
+
+    /// Next frozen-text colour (presets, then none), written into the apps.
+    pub fn cycle_frozen_color(&mut self) {
+        self.ghost_style.frozen_color = self.ghost_style.next_frozen().map(str::to_string);
+        let applied = crate::ghost_style::apply(&self.ghost_style);
+        let apps: Vec<&str> = applied.iter().map(|a| a.app).collect();
+        self.add_log(&format!(
+            "Frozen ghost colour: {} ({})",
+            self.ghost_style.frozen_label(),
+            if apps.is_empty() {
+                "no supported app found".to_string()
+            } else {
+                apps.join(", ")
+            }
+        ));
         self.save_config();
     }
 
