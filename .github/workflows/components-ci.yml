@@ -35,3 +35,19 @@ jobs:
         run: |
           cmake -S fcitx5-addon -B build/fcitx5 -DCMAKE_BUILD_TYPE=Release
           cmake --build build/fcitx5 --parallel 2
+
+  workflow-lint:
+    name: Agent workflow lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Validate agent workflow expressions and shell scripts
+        run: actionlint .github/workflows/mention-trigger.yml .github/workflows/assignment-trigger.yml

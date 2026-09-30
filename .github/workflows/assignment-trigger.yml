@@ -14,12 +14,12 @@ permissions:
 jobs:
   extract-context:
     runs-on: self-hosted
-    # TODO: Change the assignee and sender filters to match your setup
-    # - assignee should be your agent's GitHub username
-    # - sender should be the human user(s) who can assign to the agent
+    # The allowlist is a JSON array of GitHub logins, never a substring match.
+    # Missing variables disable assignment-triggered execution.
     if: |
-      github.event.assignee.login == 'marksverdhai' &&
-      (github.event.sender.login == 'marksverdhei' || github.event.sender.login == 'marksverdhai')
+      vars.AGENT_GITHUB_LOGIN != '' &&
+      github.event.assignee.login == vars.AGENT_GITHUB_LOGIN &&
+      contains(fromJSON(vars.AGENT_ASSIGNERS_JSON || '[]'), github.event.sender.login)
     outputs:
       prompt: ${{ steps.build-prompt.outputs.prompt }}
       issue_number: ${{ steps.extract.outputs.issue_number }}
@@ -39,24 +39,26 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          if [ "$EVENT_NAME" == "issues" ]; then
-            ISSUE_NUM="$ISSUE_NUMBER"
-            TITLE="$ISSUE_TITLE"
-            TYPE="issue"
-          else
-            ISSUE_NUM="$PR_NUMBER"
-            TITLE="$PR_TITLE"
-            TYPE="pull_request"
-          fi
-
-          echo "issue_number=$ISSUE_NUM" >> $GITHUB_OUTPUT
           {
-            echo 'title<<EOF'
-            printf '%s' "$TITLE"
-            echo
-            echo 'EOF'
-          } >> $GITHUB_OUTPUT
-          echo "type=$TYPE" >> $GITHUB_OUTPUT
+            if [ "$EVENT_NAME" == "issues" ]; then
+              ISSUE_NUM="$ISSUE_NUMBER"
+              TITLE="$ISSUE_TITLE"
+              TYPE="issue"
+            else
+              ISSUE_NUM="$PR_NUMBER"
+              TITLE="$PR_TITLE"
+              TYPE="pull_request"
+            fi
+
+            echo "issue_number=$ISSUE_NUM"
+            {
+              echo 'title<<EOF'
+              printf '%s' "$TITLE"
+              echo
+              echo 'EOF'
+            }
+            echo "type=$TYPE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Post progress tracking comment
         id: post-progress-comment
@@ -106,7 +108,7 @@ jobs:
             exit 1
           fi
 
-          echo "comment_id=$COMMENT_ID" >> $GITHUB_OUTPUT
+          echo "comment_id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
         id: build-prompt
@@ -143,7 +145,7 @@ jobs:
             printf '%s' "$PROMPT"
             echo
             echo 'EOF'
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
   spawn-agent:
     needs: extract-context
@@ -154,8 +156,7 @@ jobs:
       summary_metadata: '{"Repo": "${{ github.repository }}", "${{ needs.extract-context.outputs.type }}": "#${{ needs.extract-context.outputs.issue_number }}", "Title": "${{ needs.extract-context.outputs.title }}"}'
       progress_comment_id: ${{ needs.extract-context.outputs.progress_comment_id }}
       issue_number: ${{ needs.extract-context.outputs.issue_number }}
-      # TODO: Change to your agent's name
-      agent_name: 'marksverdhai'
+      agent_name: ${{ vars.AGENT_GITHUB_LOGIN }}
       agent_type: 'worker'
     secrets:
       DOCKER_PAT: ${{ secrets.HEI_DOCKER_PAT }}
