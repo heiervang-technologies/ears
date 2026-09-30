@@ -566,6 +566,51 @@ mod tests {
     }
 
     #[test]
+    fn old_addon_panel_fallback_preserves_freeze_and_is_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ghost.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for stream in listener.incoming() {
+                let stream = stream.unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                for line in BufReader::new(stream).lines() {
+                    let line = line.unwrap();
+                    let response = if line == "S" {
+                        "OK preedit TestApp\n"
+                    } else if line.starts_with("B ") {
+                        "ERR unknown command\n"
+                    } else {
+                        "OK preedit\n"
+                    };
+                    writer.write_all(response.as_bytes()).unwrap();
+                    let done = line == "F 5 hello again";
+                    seen.push(line);
+                    if done {
+                        return seen;
+                    }
+                }
+            }
+            seen
+        });
+        let mut client = client(path);
+        client.overflow_probe = |_| true;
+        client.preedit_frozen("hello tail", 5).unwrap();
+        client.preedit_frozen("hello again", 5).unwrap();
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "S",
+                "B 5 hello tail",
+                "F 5 hello tail",
+                "S",
+                "F 5 hello again"
+            ]
+        );
+    }
+
+    #[test]
     fn overflowing_preview_uses_panel_without_changing_commit_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ghost.sock");
