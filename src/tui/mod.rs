@@ -114,6 +114,7 @@ pub async fn start_vad_pipeline(
             .with_language(language)
             .with_api_key(config.api_key.clone())
             .with_model(model)
+            .with_silence_filter(config.filter_silence_artifacts)
             .with_prompt(config.prompt.clone()),
     );
 

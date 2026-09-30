@@ -474,6 +474,27 @@ ears requires a running ASR server that implements the OpenAI-compatible `/v1/au
 - Groq API (cloud)
 - Any OpenAI-compatible ASR endpoint
 
+### Fixed format contracts and configurable heuristics
+
+The streaming engine writes mono 16 kHz signed 16-bit PCM WAV, matching the
+capture/VAD pipeline. The channel count and sample representation describe that
+wire format; changing them requires resampling/conversion throughout the pipeline,
+not a profile-only setting. Qwen3-ASR continuous decoding likewise uses 16 kHz
+samples and fixed eight-second encoder windows.
+
+Keyboard layout names/codes in `desktop.rs` form a compatibility mapping for
+Hyprland and GNOME. Unknown layouts return no detected language, allowing the
+configured language fallback. These mappings are intentionally explicit rather
+than user-supplied executable probes.
+
+HTTP transcription's known silence-artifact phrases are heuristics, not audio
+format requirements. Profiles may set `filter_silence_artifacts = false` to retain
+legitimate short utterances such as “Thank you”. The default remains `true`,
+including the existing non-Chinese filler heuristic. This setting applies to
+ordinary and grammar-constrained HTTP transcription; it does not change the
+continuous decoder or vLLM streaming protocol. Other `[text_filters]` settings
+still apply independently. Restart listeners after changing it.
+
 ## 11. Error Handling
 
 ### Conventions

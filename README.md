@@ -113,6 +113,7 @@ device = "alsa_input.usb-..."
 # api_key = "sk-..."       # Optional (for authenticated ASR services)
 # model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
 # prompt = "vLLM, PyTorch" # Optional (context biasing: names, acronyms, jargon)
+filter_silence_artifacts = true # Set false to retain exact phrases such as "Thank you"
 
 [text_filters]
 lowercase = false
@@ -564,3 +565,11 @@ Built with:
 - [PipeWire](https://pipewire.org/) - Modern Linux audio
 - [ratatui](https://github.com/ratatui-org/ratatui) - TUI framework
 - [wtype](https://github.com/atx/wtype) / [ydotool](https://github.com/ReimuNotMoe/ydotool) - Text input automation
+
+The profile-level `filter_silence_artifacts` setting controls known whole-transcript
+hallucination heuristics in HTTP transcription, including grammar-constrained
+requests. It defaults to `true` for compatibility. Set it to `false` if legitimate
+short utterances such as “Thank you” are being discarded. This is separate from
+`[text_filters]` transformations and alphabet filtering. Continuous forced-prefix
+and vLLM streaming decoding do not use this HTTP heuristic. Restart an active
+listener after changing the setting.

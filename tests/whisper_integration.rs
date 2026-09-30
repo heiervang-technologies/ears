@@ -376,3 +376,52 @@ async fn grammar_response_distinguishes_malformed_from_empty_text() {
         }
     }
 }
+
+#[tokio::test]
+async fn silence_filter_can_preserve_legitimate_short_utterances() {
+    for grammar in [false, true] {
+        for enabled in [false, true] {
+            let server = MockServer::start().await;
+            let endpoint = if grammar {
+                "/v1/chat/completions"
+            } else {
+                "/v1/audio/transcriptions"
+            };
+            let body = if grammar {
+                serde_json::json!({"choices": [{"message": {"content": "Thank you"}}]})
+            } else {
+                serde_json::json!({"text": "Thank you"})
+            };
+            Mock::given(method("POST"))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = WhisperClient::with_retry_config(server.uri(), 0, 1, 2)
+                .with_model(Some("test-asr".into()))
+                .with_silence_filter(enabled);
+            let result = client
+                .transcribe_with_grammar(
+                    create_test_audio_file(),
+                    grammar.then_some("root ::= \"Thank you\""),
+                )
+                .await;
+            if enabled {
+                assert!(matches!(result, Err(WhisperError::EmptyTranscription)));
+            } else {
+                assert_eq!(result.unwrap(), "Thank you");
+            }
+        }
+    }
+}
+
+#[test]
+fn silence_filter_profile_defaults_and_roundtrips() {
+    let old: ears::Config = toml::from_str("").unwrap();
+    assert!(old.filter_silence_artifacts);
+    let disabled: ears::Config = toml::from_str("filter_silence_artifacts = false").unwrap();
+    assert!(!disabled.filter_silence_artifacts);
+    let roundtrip: ears::Config = toml::from_str(&toml::to_string(&disabled).unwrap()).unwrap();
+    assert!(!roundtrip.filter_silence_artifacts);
+}
