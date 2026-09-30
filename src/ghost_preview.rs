@@ -278,7 +278,8 @@ async fn stream_ghost_preview(
     let params = StartParams {
         language: language.map(str::to_string),
         context: config.prompt.clone().filter(|c| !c.trim().is_empty()),
-        ..StartParams::default()
+        rollback_words: config.live_rollback_words,
+        min_step_ms: config.min_step_ms(),
     };
     // One utterance per segment; a long recording rolls over to the next
     // before it outgrows the server's context.
@@ -434,6 +435,7 @@ pub(super) async fn run_ghost_preview(
         ContinuousDecoder::new(server_url.as_str(), config.api_key.clone(), model)
             .with_language(language.as_deref())
             .with_context(config.prompt.clone())
+            .with_rollback_words(config.rollback_words())
     });
     let state_file = ghost_continuous_state_file(config);
     let owner = recording_owner(recorder_pid, recorder_start);
@@ -505,6 +507,7 @@ pub(super) async fn run_ghost_preview(
                     )
                     .with_language(language.as_deref())
                     .with_context(config.prompt.clone())
+                    .with_rollback_words(config.rollback_words())
                     .resume(DecoderState {
                         header,
                         ..Default::default()
@@ -639,6 +642,7 @@ pub(super) async fn finish_continuous(
     let mut decoder = ContinuousDecoder::new(server_url, config.api_key.clone(), model)
         .with_language(language)
         .with_context(config.prompt.clone())
+        .with_rollback_words(config.rollback_words())
         .resume(state);
     match decoder.step(segment, true, DEADLINE).await {
         Ok(text) if !text.is_empty() => {

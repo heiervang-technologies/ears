@@ -60,8 +60,8 @@ impl StartParams {
         Self {
             language: spec.language.clone(),
             context: spec.context.clone().filter(|c| !c.trim().is_empty()),
-            rollback_words: None,
-            min_step_ms: None,
+            rollback_words: spec.rollback_words,
+            min_step_ms: spec.min_step_ms,
         }
     }
 }
@@ -736,6 +736,23 @@ pub(crate) mod fake {
 mod tests {
     use super::fake::{FakeServer, Mode};
     use super::*;
+
+    #[test]
+    fn start_params_carry_the_spec_tuning() {
+        let spec = crate::continuous::ContinuousSpec {
+            server_url: "http://gpu".into(),
+            api_key: None,
+            model: None,
+            language: Some("en".into()),
+            context: Some(" ".into()),
+            rollback_words: Some(1),
+            min_step_ms: Some(400),
+        };
+        let params = StartParams::from_spec(&spec);
+        assert_eq!(params.rollback_words, Some(1));
+        assert_eq!(params.min_step_ms, Some(400));
+        assert_eq!(params.context, None);
+    }
 
     #[test]
     fn stream_url_follows_the_server_url() {

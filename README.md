@@ -346,6 +346,8 @@ continuously instead:
 ```toml
 live_decoding = "continuous"   # default: "repeat"
 final_correction = false       # commit the live result instead of re-transcribing
+# live_rollback_words = 3      # words left open to revision; lower freezes sooner
+# live_min_step_ms = 150       # streaming: least new audio between decodes (max 5000)
 ```
 
 The audio is sent as 8 s encoder windows (Qwen3-ASR's encoder never attends

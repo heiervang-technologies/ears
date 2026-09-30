@@ -90,6 +90,11 @@ pub struct ContinuousSpec {
     pub language: Option<String>,
     /// Context-biasing text (the `prompt` config).
     pub context: Option<String>,
+    /// Words left open to revision; `None`: [`DEFAULT_ROLLBACK_WORDS`].
+    pub rollback_words: Option<usize>,
+    /// Streaming only: least new audio before the server decodes again;
+    /// `None`: the server default.
+    pub min_step_ms: Option<u64>,
 }
 
 impl ContinuousSpec {
@@ -97,6 +102,7 @@ impl ContinuousSpec {
         ContinuousDecoder::new(&self.server_url, self.api_key.clone(), self.model.clone())
             .with_language(self.language.as_deref())
             .with_context(self.context.clone())
+            .with_rollback_words(self.rollback_words.unwrap_or(DEFAULT_ROLLBACK_WORDS))
     }
 }
 

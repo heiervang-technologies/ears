@@ -107,6 +107,8 @@ pub async fn start_vad_pipeline(
             model: model.clone(),
             language: language.clone(),
             context: config.prompt.clone(),
+            rollback_words: config.live_rollback_words,
+            min_step_ms: config.min_step_ms(),
         }
     });
     let whisper_client = Arc::new(
