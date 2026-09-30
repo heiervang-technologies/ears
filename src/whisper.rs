@@ -85,6 +85,7 @@ pub struct WhisperClient {
     model: Option<String>,
     /// Prompt for context biasing (None = no prompt)
     prompt: Option<String>,
+    filter_silence_artifacts: bool,
     /// Maximum number of retry attempts
     max_retries: u32,
     /// Initial backoff delay in milliseconds
@@ -117,10 +118,18 @@ impl WhisperClient {
             api_key: None,
             model: None,
             prompt: None,
+            filter_silence_artifacts: true,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
         }
+    }
+
+    /// Enable known silence-hallucination heuristics (default: true).
+    /// Disable to retain legitimate utterances such as "Thank you".
+    pub fn with_silence_filter(mut self, enabled: bool) -> Self {
+        self.filter_silence_artifacts = enabled;
+        self
     }
 
     /// Sets the language for transcription
@@ -184,6 +193,7 @@ impl WhisperClient {
             api_key: None,
             model: None,
             prompt: None,
+            filter_silence_artifacts: true,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -570,6 +580,9 @@ impl WhisperClient {
     /// Filters out common silence artifacts from whisper.cpp and Qwen3-ASR
     fn filter_silence_artifacts(&self, text: &str) -> String {
         let trimmed = text.trim();
+        if !self.filter_silence_artifacts {
+            return trimmed.to_string();
+        }
 
         // Common silence artifacts from whisper.cpp and Qwen3-ASR
         let silence_patterns = [

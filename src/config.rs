@@ -18,6 +18,10 @@ fn read_optional_config(path: &Path) -> Result<Option<String>> {
     }
 }
 
+fn default_filter_silence_artifacts() -> bool {
+    true
+}
+
 fn default_server() -> Url {
     Url::parse("http://127.0.0.1:8178").expect("Default server URL is valid")
 }
@@ -154,6 +158,9 @@ pub struct Config {
     /// Passed as the `prompt` field in the OpenAI transcription API.
     /// Example: "Soumith Chintala, Safetensors, vLLM, PyTorch"
     pub prompt: Option<String>,
+    /// Suppress known whole-transcript silence hallucinations in HTTP transcription.
+    #[serde(default = "default_filter_silence_artifacts")]
+    pub filter_silence_artifacts: bool,
     /// Text filters for transcription output
     #[serde(default)]
     pub text_filters: TextFilters,
@@ -245,6 +252,7 @@ impl Config {
             api_key: None,
             model: None,
             prompt: None,
+            filter_silence_artifacts: true,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
@@ -395,6 +403,7 @@ impl Config {
             api_key: None,
             model: None,
             prompt: None,
+            filter_silence_artifacts: true,
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
