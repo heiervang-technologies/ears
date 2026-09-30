@@ -429,7 +429,9 @@ Place custom WAV files in `~/.local/share/ears-sounds/`:
 - `done.wav` - Transcription complete
 - `bell.wav` - Error occurred
 
-Falls back to embedded sounds if not found.
+Falls back to embedded sounds if not found. Embedded sounds are cached by content
+in `$XDG_CACHE_HOME/ears/sounds` (normally `~/.cache/ears/sounds`), so restarting
+Ears reuses the same files. Corrupted entries are repaired automatically.
 
 ## Troubleshooting
 
