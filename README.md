@@ -37,7 +37,7 @@ Backend-agnostic — works with local [whisper.cpp](https://github.com/ggerganov
 - `notify-send` for desktop notifications
 - `paplay` for audio feedback
 - `fzf` for interactive device selection
-- `wl-clipboard` (`wl-copy`/`wl-paste`) for clipboard-based text input on non-Hyprland systems
+- `wl-clipboard` (`wl-copy`) for clipboard-based text input on non-Hyprland systems
 
 ### Installing Dependencies
 
@@ -465,8 +465,9 @@ and existing IPC events keep their meanings.
 If typing or Enter delivery fails, Ears pauses further keyboard input while
 continuing to transcribe. Check the target for partial text, then stop and
 restart VAD to resume typing. Friend reports this pause through the health
-snapshot. A clipboard read timeout or oversized result aborts paste before
-changing the clipboard.
+snapshot. Clipboard paste leaves the transcript on the clipboard. Ears does not
+restore an older value, which could overwrite something copied during paste.
+If copying the transcript fails, Ears aborts before sending Ctrl+V.
 
 A stopped snapshot is intentionally retained. If rolling back to an older Ears
 binary that does not publish health, stop VAD and remove only
