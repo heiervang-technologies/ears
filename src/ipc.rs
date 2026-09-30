@@ -5,8 +5,10 @@
 
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
-use tokio::net::UnixListener;
+mod socket;
+use socket::OwnedSocket;
 use tokio::sync::broadcast;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info};
 
 use crate::streaming_engine::StreamingEvent;
@@ -18,53 +20,61 @@ pub fn socket_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp/ears.sock"))
 }
 
-/// Start the IPC server with a custom socket path in a background tokio task.
-pub fn start_ipc_server_at(path: PathBuf, rx: broadcast::Receiver<StreamingEvent>) {
-    tokio::spawn(async move {
-        let _ = std::fs::remove_file(&path);
-
-        let listener = match UnixListener::bind(&path) {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Failed to bind IPC socket at {}: {}", path.display(), e);
-                return;
-            }
-        };
-
-        info!("IPC server listening on {}", path.display());
-
-        loop {
-            tokio::select! {
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, _addr)) => {
-                            debug!("IPC client connected");
-                            let client_rx = rx.resubscribe();
-                            tokio::spawn(handle_client(stream, client_rx));
-                        }
-                        Err(e) => {
-                            error!("IPC accept error: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-    });
+/// Owns the server task and all its accepted connections. Dropping it cancels
+/// the server; `shutdown` additionally waits for socket/lock cleanup.
+#[must_use = "keep the server alive for the lifetime of the IPC owner"]
+pub struct IpcServer {
+    task: JoinHandle<()>,
 }
 
-/// Remove a specific socket file (best-effort cleanup).
-pub fn cleanup_socket_at(path: &std::path::Path) {
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
+impl IpcServer {
+    pub async fn shutdown(mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
     }
 }
 
-/// Start the IPC server in a background tokio task at the default socket path.
-///
-/// Accepts concurrent client connections and broadcasts every event received
-/// on `rx` as a newline-delimited JSON line to each connected client.
-pub fn start_ipc_server(rx: broadcast::Receiver<StreamingEvent>) {
-    start_ipc_server_at(socket_path(), rx);
+impl Drop for IpcServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Start an event server. Duplicate starts log an error and leave the owner intact.
+pub fn start_ipc_server_at(
+    path: PathBuf,
+    mut rx: broadcast::Receiver<StreamingEvent>,
+) -> IpcServer {
+    IpcServer {
+        task: tokio::spawn(async move {
+            let socket = match OwnedSocket::bind(path.clone()).await {
+                Ok(socket) => socket,
+                Err(e) => {
+                    error!("Failed to bind IPC socket at {}: {}", path.display(), e);
+                    return;
+                }
+            };
+            info!("IPC server listening on {}", path.display());
+            let mut clients = JoinSet::new();
+            loop {
+                tokio::select! {
+                    result = socket.listener.accept() => match result {
+                        Ok((stream, _)) => { clients.spawn(handle_client(stream, rx.resubscribe())); }
+                        Err(e) => { error!("IPC accept error: {}", e); break; }
+                    },
+                    result = rx.recv() => {
+                        if matches!(result, Err(broadcast::error::RecvError::Closed)) { break; }
+                    },
+                    Some(_) = clients.join_next(), if !clients.is_empty() => {}
+                }
+            }
+        }),
+    }
+}
+
+/// Start the event server at the default socket path.
+pub fn start_ipc_server(rx: broadcast::Receiver<StreamingEvent>) -> IpcServer {
+    start_ipc_server_at(socket_path(), rx)
 }
 
 /// Handle a single connected client, forwarding events until disconnect.
@@ -101,11 +111,6 @@ async fn handle_client(
     }
 }
 
-/// Remove the default socket file (best-effort cleanup).
-pub fn cleanup_socket() {
-    cleanup_socket_at(&socket_path());
-}
-
 // --- Command IPC (bidirectional) ---
 
 /// Return the command socket path.
@@ -128,91 +133,96 @@ pub enum EarsCommand {
     },
 }
 
-/// Start the command server, returning received commands via the channel.
-pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>) {
-    let sock_path = cmd_socket_path();
-    tokio::spawn(async move {
-        if sock_path.exists() {
-            let _ = std::fs::remove_file(&sock_path);
-        }
-
-        let listener = match UnixListener::bind(&sock_path) {
-            Ok(l) => l,
-            Err(e) => {
-                error!(
-                    "Failed to bind command socket at {}: {}",
-                    sock_path.display(),
-                    e
-                );
-                return;
-            }
-        };
-
-        info!("Command server listening on {}", sock_path.display());
-
-        loop {
-            match listener.accept().await {
-                Ok((mut stream, _)) => {
-                    let tx = cmd_tx.clone();
-                    tokio::spawn(async move {
-                        use tokio::io::{AsyncBufReadExt, BufReader};
-                        let (reader, mut writer) = stream.split();
-                        let mut lines = BufReader::new(reader).lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
-                            let verb = line.trim();
-                            let response = match verb {
-                                v if crate::typing_switch::TypingRequest::from_command(v)
-                                    .is_some() =>
-                                {
-                                    let request =
-                                        crate::typing_switch::TypingRequest::from_command(v)
-                                            .expect("checked above");
-                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                    let _ = tx.send(EarsCommand::Typing {
-                                        request,
-                                        respond: resp_tx,
-                                    });
-                                    resp_rx
-                                        .await
-                                        .unwrap_or_else(|_| "error:internal".to_string())
-                                }
-                                "toggle-auto-enter" => {
-                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                    let _ =
-                                        tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
-                                    resp_rx
-                                        .await
-                                        .unwrap_or_else(|_| "error:internal".to_string())
-                                }
-                                _ => "error:unknown-command".to_string(),
-                            };
-                            if writer
-                                .write_all(format!("{}\n", response).as_bytes())
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Command accept error: {}", e);
-                }
-            }
-        }
-    });
+/// Start the command server at the default socket path.
+pub fn start_cmd_server(cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>) -> IpcServer {
+    start_cmd_server_at(cmd_socket_path(), cmd_tx)
 }
 
-/// Remove the command socket file.
-pub fn cleanup_cmd_socket() {
-    cleanup_socket_at(&cmd_socket_path());
+/// Start a command server at an explicit path, with the same ownership rules as events.
+pub fn start_cmd_server_at(
+    sock_path: PathBuf,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<EarsCommand>,
+) -> IpcServer {
+    IpcServer {
+        task: tokio::spawn(async move {
+            let socket = match OwnedSocket::bind(sock_path.clone()).await {
+                Ok(socket) => socket,
+                Err(e) => {
+                    error!(
+                        "Failed to bind command socket at {}: {}",
+                        sock_path.display(),
+                        e
+                    );
+                    return;
+                }
+            };
+            info!("Command server listening on {}", sock_path.display());
+            let mut clients = JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = cmd_tx.closed() => break,
+                    Some(_) = clients.join_next(), if !clients.is_empty() => {},
+                    result = socket.listener.accept() => match result {
+                    Ok((mut stream, _)) => {
+                        let tx = cmd_tx.clone();
+                        clients.spawn(async move {
+                            use tokio::io::{AsyncBufReadExt, BufReader};
+                            let (reader, mut writer) = stream.split();
+                            let mut lines = BufReader::new(reader).lines();
+                            while let Ok(Some(line)) = lines.next_line().await {
+                                let verb = line.trim();
+                                let response = match verb {
+                                    v if crate::typing_switch::TypingRequest::from_command(v)
+                                        .is_some() =>
+                                    {
+                                        let request =
+                                            crate::typing_switch::TypingRequest::from_command(v)
+                                                .expect("checked above");
+                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                        let _ = tx.send(EarsCommand::Typing {
+                                            request,
+                                            respond: resp_tx,
+                                        });
+                                        resp_rx
+                                            .await
+                                            .unwrap_or_else(|_| "error:internal".to_string())
+                                    }
+                                    "toggle-auto-enter" => {
+                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                        let _ =
+                                            tx.send(EarsCommand::ToggleAutoEnter { respond: resp_tx });
+                                        resp_rx
+                                            .await
+                                            .unwrap_or_else(|_| "error:internal".to_string())
+                                    }
+                                    _ => "error:unknown-command".to_string(),
+                                };
+                                if writer
+                                    .write_all(format!("{}\n", response).as_bytes())
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => { error!("Command accept error: {}", e); break; }
+                    }
+                }
+            }
+        }),
+    }
 }
 
 /// Send a command to a running ears instance. Returns the response.
 pub async fn send_command(cmd: &str) -> anyhow::Result<String> {
+    send_command_at(&cmd_socket_path(), cmd).await
+}
+
+/// Send a command to an explicitly selected instance.
+pub async fn send_command_at(sock_path: &std::path::Path, cmd: &str) -> anyhow::Result<String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
-    let sock_path = cmd_socket_path();
     let mut stream = tokio::net::UnixStream::connect(&sock_path)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to ears: {}", e))?;
@@ -223,3 +233,6 @@ pub async fn send_command(cmd: &str) -> anyhow::Result<String> {
     reader.read_line(&mut response).await?;
     Ok(response.trim().to_string())
 }
+
+#[cfg(test)]
+mod tests;
