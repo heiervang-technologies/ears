@@ -641,9 +641,10 @@ impl App {
                 }
             }
 
-            // 'b' to toggle save to clipboard (in Configuration panel)
+            // 'b' to toggle save to clipboard (in Live/Configuration panels)
             (KeyCode::Char('b'), KeyModifiers::NONE)
-                if self.current_panel == Panel::Configuration =>
+                if (self.current_panel == Panel::LiveTranscription
+                    || self.current_panel == Panel::Configuration) =>
             {
                 self.toggle_save_to_clipboard();
             }
@@ -1589,6 +1590,21 @@ mod tests {
 
         app.handle_key(key(KeyCode::Tab)).unwrap();
         assert_eq!(app.current_panel, Panel::Configuration);
+    }
+
+    #[test]
+    fn clipboard_toggle_works_where_it_is_shown() {
+        let mut app = App::new().unwrap();
+        let before = app.save_to_clipboard;
+        app.current_panel = Panel::LiveTranscription;
+        app.handle_key(key(KeyCode::Char('b'))).unwrap();
+        assert_eq!(app.save_to_clipboard, !before);
+        app.current_panel = Panel::Configuration;
+        app.handle_key(key(KeyCode::Char('b'))).unwrap();
+        assert_eq!(app.save_to_clipboard, before);
+        app.current_panel = Panel::Logs;
+        app.handle_key(key(KeyCode::Char('b'))).unwrap();
+        assert_eq!(app.save_to_clipboard, before);
     }
 
     #[test]
