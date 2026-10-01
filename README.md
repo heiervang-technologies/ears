@@ -363,6 +363,12 @@ Recordings longer than the server's context (about 90 s) are decoded in segments
 With `final_correction = true` (the default) the committed text still comes
 from a full transcription.
 
+Words freeze (turn the frozen colour) once `live_rollback_words` newer words
+follow them, so a name the model mishears is fixed in the live preview only
+if it is spelled right in time. List names, acronyms and jargon you dictate
+in `prompt` (for example `prompt = "Heiervang, vLLM, Hyprland"`): it is sent
+as context with every live update and the final transcription.
+
 When the server runs the `ears_stream` vLLM plugin, ears streams instead of
 re-sending the audio on every tick: one WebSocket to `/v1/ears/stream` (the
 server URL with `ws://`/`wss://`, same API key), over which only new audio
