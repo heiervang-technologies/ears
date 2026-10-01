@@ -233,6 +233,9 @@ pub struct App {
     pub log_filter: LogFilter,
     /// Whether the help overlay is open
     pub help_overlay_open: bool,
+    pub(crate) help_scroll: u16,
+    pub(crate) help_scroll_max: u16,
+    pub(crate) help_page_rows: u16,
     /// Whether log search mode is active
     pub search_mode: bool,
     /// Current search query buffer
@@ -355,6 +358,9 @@ impl App {
             }),
             log_filter: LogFilter::All,
             help_overlay_open: false,
+            help_scroll: 0,
+            help_scroll_max: 0,
+            help_page_rows: 1,
             search_mode: false,
             search_buffer: String::new(),
             search_matches: Vec::new(),
@@ -425,12 +431,18 @@ impl App {
     /// Handle a key press event
     /// Returns false if the app should quit
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        // Handle help overlay — absorbs all keys except ? and Esc (which close it)
+        // Help navigation is modal: never dispatch these keys to the panel below.
         if self.help_overlay_open {
             match key.code {
                 KeyCode::Char('?') | KeyCode::Esc => {
                     self.help_overlay_open = false;
                 }
+                KeyCode::Down | KeyCode::Char('j') => self.scroll_help(1),
+                KeyCode::Up | KeyCode::Char('k') => self.scroll_help(-1),
+                KeyCode::PageDown => self.scroll_help(i32::from(self.help_page_rows)),
+                KeyCode::PageUp => self.scroll_help(-i32::from(self.help_page_rows)),
+                KeyCode::Home => self.help_scroll = 0,
+                KeyCode::End => self.help_scroll = self.help_scroll_max,
                 _ => {}
             }
             return Ok(true);
@@ -466,6 +478,7 @@ impl App {
             // Toggle help overlay with '?'
             (KeyCode::Char('?'), KeyModifiers::NONE) => {
                 self.help_overlay_open = true;
+                self.help_scroll = 0;
             }
 
             // Enter command mode with ':'
@@ -684,9 +697,21 @@ impl App {
         Ok(true)
     }
 
-    /// Handle a mouse event
-    /// Returns false if the app should quit
+    fn scroll_help(&mut self, rows: i32) {
+        self.help_scroll =
+            (i32::from(self.help_scroll) + rows).clamp(0, i32::from(self.help_scroll_max)) as u16;
+    }
+
+    /// Handle a mouse event. Returns false if the app should quit.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<bool> {
+        if self.help_overlay_open {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.scroll_help(3),
+                MouseEventKind::ScrollUp => self.scroll_help(-3),
+                _ => {}
+            }
+            return Ok(true);
+        }
         // Only handle left clicks
         if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
             let x = mouse.column;

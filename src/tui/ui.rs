@@ -43,7 +43,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     // Render help overlay on top of everything
     if app.help_overlay_open {
-        render_help_overlay(frame, size, &app.theme);
+        render_help_overlay(app, frame, size);
     }
 }
 
@@ -1060,7 +1060,8 @@ fn render_live_transcription_panel(app: &mut App, frame: &mut Frame, area: Rect)
 }
 
 /// Render a centered help overlay
-fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
+fn render_help_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
+    let theme = &app.theme;
     let help_text = vec![
         Line::from(Span::styled(
             "Help (press ? or Esc to close)",
@@ -1137,16 +1138,119 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         overlay_height.min(area.height),
     );
 
+    app.help_page_rows = overlay_area.height.saturating_sub(2).max(1);
+    app.help_scroll_max = (help_text.len() as u16).saturating_sub(app.help_page_rows);
+    app.help_scroll = app.help_scroll.min(app.help_scroll_max);
     frame.render_widget(Clear, overlay_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
-        .title(" Help ");
+        .title(" Help (?/Esc close) ")
+        .title_bottom(" ↑/↓ j/k PgUp/PgDn Home/End ");
 
     let paragraph = Paragraph::new(help_text)
+        .scroll((app.help_scroll, 0))
         .block(block)
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, overlay_area);
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn key(app: &mut App, code: KeyCode) {
+        assert!(app
+            .handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap());
+    }
+
+    fn draw_help(app: &mut App, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
+        terminal
+            .draw(|frame| render_help_overlay(app, frame, frame.area()))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn short_help_reaches_last_entry_and_clamps_after_resize() {
+        let mut app = App::new().unwrap();
+        key(&mut app, KeyCode::Char('?'));
+        let top = draw_help(&mut app, 24);
+        assert!(top.contains("PgUp/PgDn"));
+        assert!(!top.contains(":theme"));
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.help_scroll, 1);
+        key(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.help_scroll, 0);
+        key(&mut app, KeyCode::PageDown);
+        assert!(app.help_scroll > 0);
+        key(&mut app, KeyCode::End);
+        assert!(draw_help(&mut app, 24).contains(":theme"));
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.help_scroll, app.help_scroll_max);
+        key(&mut app, KeyCode::Home);
+        assert_eq!(app.help_scroll, 0);
+        key(&mut app, KeyCode::End);
+        key(&mut app, KeyCode::PageUp);
+        assert_eq!(app.help_scroll, 0);
+        key(&mut app, KeyCode::End);
+        assert!(draw_help(&mut app, 60).contains(":theme"));
+        assert_eq!(app.help_scroll, 0);
+        draw_help(&mut app, 24);
+        key(&mut app, KeyCode::End);
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn help_absorbs_panel_keys_and_clicks_and_scrolls_with_wheel() {
+        let mut app = App::new().unwrap();
+        key(&mut app, KeyCode::Char('?'));
+        draw_help(&mut app, 24);
+        let before = app.save_to_clipboard;
+        key(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.save_to_clipboard, before);
+        app.add_clickable_region(
+            Rect::new(0, 0, 80, 24),
+            ClickAction::SwitchPanel(Panel::Logs),
+        );
+        let panel = app.current_panel;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column: 10,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            })
+            .unwrap();
+        }
+        assert_eq!(app.current_panel, panel);
+        assert_eq!(app.help_scroll, 3);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+        assert_eq!(app.help_scroll, 0);
+    }
 }
