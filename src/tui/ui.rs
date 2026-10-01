@@ -787,6 +787,8 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw("Punct  "),
             Span::styled("[n] ", key_style),
             Span::raw("Enter  "),
+            Span::styled("[o/O] ", key_style),
+            Span::raw("Ghost  "),
             Span::styled("[q] ", key_style),
             Span::raw("Quit"),
         ])
@@ -1091,6 +1093,11 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  p           Toggle punctuation filter"),
         Line::from("  s           Toggle strict alphabet filter"),
         Line::from("  n           Toggle auto-enter"),
+        Line::from("  b           Toggle save to clipboard"),
+        Line::from("  m           Cycle typing mode"),
+        Line::from("  g           Toggle bash mode"),
+        Line::from("  +/-         Cue volume"),
+        Line::from("  o / O       Cycle ghost / frozen colour"),
         Line::from("  [ / ]       Adjust duck percent ±5%"),
         Line::from(""),
         Line::from(Span::styled(
@@ -1099,6 +1106,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         )),
         Line::from("  t           Toggle progressive typing"),
         Line::from("  a           Toggle auto-correction"),
+        Line::from("  b           Toggle save to clipboard"),
         Line::from(""),
         Line::from(Span::styled(
             "Logs Panel:",
