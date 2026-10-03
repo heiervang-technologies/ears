@@ -54,6 +54,14 @@ fn default_duck_percent() -> u8 {
     50
 }
 
+fn default_auto_gain() -> bool {
+    true
+}
+
+fn default_min_mean_probability() -> f32 {
+    0.4
+}
+
 fn default_auto_enter() -> bool {
     true
 }
@@ -131,6 +139,22 @@ pub struct VadSettings {
     /// uses it. Colours come from `[ghost]`.
     #[serde(default)]
     pub ghost: bool,
+    /// Probability below which speech that has started counts as silence
+    /// (hysteresis). Unset: `speech_threshold - 0.15`. Lower keeps soft
+    /// mid-sentence speech in the segment; it must stay below
+    /// `speech_threshold`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_threshold: Option<f32>,
+    /// Level quiet speech up to a steady volume before detection and
+    /// transcription (default: true). The level is measured on speech only
+    /// and capped at +12 dB, so silence is never boosted into noise.
+    #[serde(default = "default_auto_gain")]
+    pub auto_gain: bool,
+    /// Drop a segment whose mean speech probability is below this
+    /// (default: 0.4): coughs, clicks and music that barely passed the
+    /// gate, which the ASR model would otherwise turn into words. 0 disables.
+    #[serde(default = "default_min_mean_probability")]
+    pub min_mean_probability: f32,
 }
 
 impl Default for VadSettings {
@@ -143,6 +167,9 @@ impl Default for VadSettings {
             duck_enabled: default_duck_enabled(),
             duck_percent: default_duck_percent(),
             ghost: false,
+            end_threshold: None,
+            auto_gain: default_auto_gain(),
+            min_mean_probability: default_min_mean_probability(),
         }
     }
 }
@@ -945,6 +972,9 @@ another_unknown = 42
         assert_eq!(vad.max_silence_duration_ms, 1200);
         assert_eq!(vad.pre_speech_buffer_ms, 500);
         assert!(!vad.ghost);
+        assert_eq!(vad.end_threshold, None);
+        assert!(vad.auto_gain);
+        assert_eq!(vad.min_mean_probability, 0.4);
     }
 
     #[test]

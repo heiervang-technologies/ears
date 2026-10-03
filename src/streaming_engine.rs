@@ -190,6 +190,10 @@ pub struct StreamingEngine {
     /// Ghost completion state; `Some` when output goes to the fcitx5 ghost
     /// addon as inline preedit instead of being typed.
     ghost: Option<GhostState>,
+    /// Segments with a lower mean speech probability are dropped.
+    min_mean_probability: f32,
+    /// Level each segment before its final transcription.
+    normalize_segments: bool,
     /// Decode ghost partials continuously (issue #144) instead of
     /// re-transcribing the growing utterance: over the ears stream when the
     /// server has it, else per tick over HTTP.
@@ -212,6 +216,8 @@ impl StreamingEngine {
     ) -> Result<Self, StreamingEngineError> {
         let audio_buffer = AudioBuffer::new(config.buffer_size_seconds, vad_config.sample_rate);
 
+        let min_mean_probability = vad_config.min_mean_probability;
+        let normalize_segments = vad_config.auto_gain;
         let vad_detector = VadSegmentDetector::new(vad_config)
             .map_err(|e| StreamingEngineError::VadError(e.to_string()))?;
         let local_agreement = LocalAgreementPolicy::new(config.agreement_threshold);
@@ -230,6 +236,8 @@ impl StreamingEngine {
             accumulated_text: String::new(),
             was_speaking: false,
             health: None,
+            min_mean_probability,
+            normalize_segments,
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
@@ -341,8 +349,30 @@ impl StreamingEngine {
     /// Process a complete speech segment
     async fn process_segment(
         &mut self,
-        segment: SpeechSegment,
+        mut segment: SpeechSegment,
     ) -> Result<(), StreamingEngineError> {
+        let dropped =
+            !segment.samples.is_empty() && segment.mean_probability < self.min_mean_probability;
+        if let Some(ref health) = self.health {
+            health.segment(segment.mean_probability, dropped);
+        }
+        if dropped {
+            // Barely speech (a cough, a click, music): the ASR model would
+            // only invent words for it.
+            info!(
+                "Dropping segment {}-{} ms: mean speech probability {:.3} < {:.3}",
+                segment.start_ms,
+                segment.end_ms,
+                segment.mean_probability,
+                self.min_mean_probability
+            );
+            if let Some(ghost) = self.ghost.as_mut() {
+                ghost.stream_cancel();
+                ghost.next_utterance();
+            }
+            self.ghost_clear();
+            return Ok(());
+        }
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
         if let Some(ghost) = self.ghost.as_mut() {
@@ -364,6 +394,11 @@ impl StreamingEngine {
             segment.end_ms,
             segment.samples.len()
         );
+
+        if self.normalize_segments {
+            let gain = crate::agc::normalize_segment(&mut segment.samples);
+            debug!("Segment normalized by {:.2}x", gain);
+        }
 
         // Save segment to temporary WAV file
         let wav_start = Instant::now();

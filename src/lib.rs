@@ -4,6 +4,7 @@
 //! and whisper.cpp integration for speech recognition.
 
 // Audio device discovery
+pub mod agc;
 pub mod audio;
 
 // Iteration 1: Configuration

@@ -232,7 +232,8 @@ via `vad.pid` + `kill(pid,0)`.
 `capture_last_ms`, `captured_samples`, `processed_frames`, `queue_chunks`,
 `audio_backlog_ms`), levels (`rms`, `peak`), detector (`probability`,
 `threshold`, `candidate_frames`, `speaking`, `rejected_candidates`,
-`last_rejected_frames`, `last_rejection_probability`), and failures
+`last_rejected_frames`, `last_rejection_probability`, `last_rejection_peak`,
+`gain`, `last_segment_mean_probability`, `dropped_segments`), and failures
 (`capture_error`, `typing_paused`). `problem()` ranks: pipeline stopped,
 capture stopped, no audio, typing paused, slow stage (5 s, 20 s while
 transcribing), detection stalled, backlog.

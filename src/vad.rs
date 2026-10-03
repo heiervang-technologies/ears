@@ -53,7 +53,44 @@ pub struct VadConfig {
     /// Audio before VAD triggers is kept in a ring buffer and prepended to the
     /// segment so the beginning of utterances is not clipped.
     pub pre_speech_buffer_ms: u64,
+    /// Probability below which a frame counts as silence once speech has
+    /// started (hysteresis). `None`: `speech_threshold - 0.15`, as Silero
+    /// recommends, but never below half the threshold.
+    pub end_threshold: Option<f32>,
+    /// Level quiet speech up before detection and transcription
+    /// (see [`crate::agc::SpeechGain`]).
+    pub auto_gain: bool,
+    /// Drop finished segments whose mean speech probability is below this
+    /// (0 keeps everything).
+    pub min_mean_probability: f32,
 }
+
+impl VadConfig {
+    /// Detector settings from the `[vad]` config section.
+    pub fn from_settings(settings: &crate::config::VadSettings) -> Self {
+        Self {
+            sample_rate: SILERO_SAMPLE_RATE,
+            speech_threshold: settings.speech_threshold,
+            min_speech_duration_ms: settings.min_speech_duration_ms,
+            max_silence_duration_ms: settings.max_silence_duration_ms,
+            pre_speech_buffer_ms: settings.pre_speech_buffer_ms,
+            end_threshold: settings.end_threshold,
+            auto_gain: settings.auto_gain,
+            min_mean_probability: settings.min_mean_probability,
+        }
+    }
+
+    /// The effective end-of-speech threshold.
+    pub fn end_threshold(&self) -> f32 {
+        self.end_threshold
+            .unwrap_or_else(|| (self.speech_threshold - 0.15).max(self.speech_threshold / 2.0))
+    }
+}
+
+/// Frames below the end threshold a not-yet-confirmed candidate survives:
+/// a soft consonant or breath inside the first word must not throw the
+/// onset away (about 96 ms).
+const CANDIDATE_DIP_FRAMES: usize = 3;
 
 impl Default for VadConfig {
     fn default() -> Self {
@@ -63,6 +100,9 @@ impl Default for VadConfig {
             min_speech_duration_ms: 300,
             max_silence_duration_ms: 1200,
             pre_speech_buffer_ms: 500,
+            end_threshold: None,
+            auto_gain: false,
+            min_mean_probability: 0.0,
         }
     }
 }
@@ -74,9 +114,26 @@ impl Default for VadConfig {
 pub struct SileroVad {
     config: VadConfig,
     vad: VoiceActivityDetector,
+    /// Candidate/speech frames at or above the end threshold.
     speech_frames: usize,
+    /// Candidate frames at or above the start threshold.
+    strong_frames: usize,
+    /// Consecutive candidate frames below the end threshold.
+    dip_frames: usize,
+    /// Highest probability of the current candidate.
+    candidate_peak: f32,
     silence_frames: usize,
     in_speech: bool,
+    /// Probability sum/count over the voiced span of the current segment:
+    /// from its first frame to its last frame above the end threshold.
+    voiced_sum: f32,
+    voiced_frames: usize,
+    trail_sum: f32,
+    trail_frames: usize,
+    /// Mean probability of the last segment that ended.
+    last_mean_probability: f32,
+    /// Probability of the last frame.
+    last_probability: f32,
     health: Option<crate::health::PipelineHealth>,
 }
 
@@ -93,8 +150,17 @@ impl SileroVad {
             config,
             vad,
             speech_frames: 0,
+            strong_frames: 0,
+            dip_frames: 0,
+            candidate_peak: 0.0,
             silence_frames: 0,
             in_speech: false,
+            voiced_sum: 0.0,
+            voiced_frames: 0,
+            trail_sum: 0.0,
+            trail_frames: 0,
+            last_mean_probability: 0.0,
+            last_probability: 0.0,
             health: None,
         })
     }
@@ -121,59 +187,126 @@ impl SileroVad {
     /// probability. Separated from [`SileroVad::process_frame`] so the state
     /// machine can be driven deterministically in tests without the model.
     pub(crate) fn apply_probability(&mut self, probability: f32) -> VadResult {
-        let is_speech = probability >= self.config.speech_threshold;
-
-        let rejected = !self.in_speech && self.speech_frames > 0 && !is_speech;
-
-        // Update counters
-        if is_speech {
-            self.speech_frames += 1;
-            self.silence_frames = 0;
-        } else {
-            self.silence_frames += 1;
-            if !self.in_speech {
-                self.speech_frames = 0;
-            }
-        }
-
-        // Calculate durations (32ms per frame at 16kHz with 512 samples)
+        self.last_probability = probability;
+        let start = self.config.speech_threshold;
+        let end = self.config.end_threshold();
         let ms_per_frame = (SILERO_FRAME_SIZE * 1000) / self.config.sample_rate;
-        let speech_duration_ms = (self.speech_frames * ms_per_frame) as u64;
-        let silence_duration_ms = (self.silence_frames * ms_per_frame) as u64;
+        let mut rejected = false;
+        let mut rejected_peak = 0.0;
 
-        // State machine: determine if we're in a speech segment
         let result = if !self.in_speech {
-            if speech_duration_ms >= self.config.min_speech_duration_ms {
+            if self.speech_frames == 0 {
+                // A candidate opens only on the start threshold.
+                if probability >= start {
+                    self.speech_frames = 1;
+                    self.strong_frames = 1;
+                    self.dip_frames = 0;
+                    self.candidate_peak = probability;
+                    self.voiced_sum = probability;
+                    self.voiced_frames = 1;
+                    self.trail_sum = 0.0;
+                    self.trail_frames = 0;
+                }
+            } else if probability >= end {
+                self.speech_frames += 1;
+                self.strong_frames += usize::from(probability >= start);
+                self.dip_frames = 0;
+                self.candidate_peak = self.candidate_peak.max(probability);
+                self.voiced_sum += self.trail_sum + probability;
+                self.voiced_frames += self.trail_frames + 1;
+                self.trail_sum = 0.0;
+                self.trail_frames = 0;
+            } else {
+                self.dip_frames += 1;
+                self.trail_sum += probability;
+                self.trail_frames += 1;
+                if self.dip_frames > CANDIDATE_DIP_FRAMES {
+                    rejected = true;
+                    rejected_peak = self.candidate_peak;
+                    debug!(
+                        "Speech candidate rejected after {} frames (peak {:.3})",
+                        self.speech_frames, self.candidate_peak
+                    );
+                    self.speech_frames = 0;
+                    self.strong_frames = 0;
+                    self.dip_frames = 0;
+                    self.candidate_peak = 0.0;
+                }
+            }
+            // Confirm on enough voiced time, at least half of it clearly so:
+            // a single spike cannot carry a run of borderline noise.
+            let voiced_ms = (self.speech_frames * ms_per_frame) as u64;
+            if self.speech_frames > 0
+                && voiced_ms >= self.config.min_speech_duration_ms
+                && self.strong_frames * 2 >= self.speech_frames
+            {
                 self.in_speech = true;
+                self.silence_frames = 0;
                 debug!(
-                    "Speech started (prob={:.3}, threshold={:.3}, after {}ms)",
-                    probability, self.config.speech_threshold, speech_duration_ms
+                    "Speech started (prob={:.3}, peak={:.3}, start={:.3}, end={:.3}, after {}ms)",
+                    probability, self.candidate_peak, start, end, voiced_ms
                 );
                 VadResult::Speech
             } else {
                 VadResult::Silence
             }
-        } else if silence_duration_ms >= self.config.max_silence_duration_ms {
-            self.in_speech = false;
-            self.speech_frames = 0;
-            self.silence_frames = 0;
-            debug!("Speech ended (silence for {}ms)", silence_duration_ms);
-            VadResult::Silence
         } else {
-            VadResult::Speech
+            if probability >= end {
+                self.silence_frames = 0;
+                self.voiced_sum += self.trail_sum + probability;
+                self.voiced_frames += self.trail_frames + 1;
+                self.trail_sum = 0.0;
+                self.trail_frames = 0;
+            } else {
+                self.silence_frames += 1;
+                self.trail_sum += probability;
+                self.trail_frames += 1;
+            }
+            let silence_ms = (self.silence_frames * ms_per_frame) as u64;
+            if silence_ms >= self.config.max_silence_duration_ms {
+                self.in_speech = false;
+                self.last_mean_probability = if self.voiced_frames > 0 {
+                    self.voiced_sum / self.voiced_frames as f32
+                } else {
+                    0.0
+                };
+                self.speech_frames = 0;
+                self.strong_frames = 0;
+                self.dip_frames = 0;
+                self.candidate_peak = 0.0;
+                self.silence_frames = 0;
+                debug!(
+                    "Speech ended (silence for {}ms, mean probability {:.3})",
+                    silence_ms, self.last_mean_probability
+                );
+                VadResult::Silence
+            } else {
+                VadResult::Speech
+            }
         };
 
         if let Some(ref health) = self.health {
             health.frame(
                 probability,
-                self.config.speech_threshold,
+                start,
                 self.speech_frames,
                 self.in_speech,
-                rejected,
+                rejected.then_some(rejected_peak),
             );
         }
 
         result
+    }
+
+    /// Probability of the last frame processed.
+    pub fn last_probability(&self) -> f32 {
+        self.last_probability
+    }
+
+    /// Mean speech probability over the voiced span of the last segment that
+    /// ended: low for coughs, clicks and music that barely passed the gate.
+    pub fn last_mean_probability(&self) -> f32 {
+        self.last_mean_probability
     }
 
     /// Check if currently in a confirmed speech segment
@@ -198,8 +331,15 @@ impl SileroVad {
             self.vad = fresh_vad;
         }
         self.speech_frames = 0;
+        self.strong_frames = 0;
+        self.dip_frames = 0;
+        self.candidate_peak = 0.0;
         self.silence_frames = 0;
         self.in_speech = false;
+        self.voiced_sum = 0.0;
+        self.voiced_frames = 0;
+        self.trail_sum = 0.0;
+        self.trail_frames = 0;
     }
 
     /// Get the frame size in samples (always 512 for Silero at 16kHz)
@@ -217,6 +357,9 @@ pub struct SpeechSegment {
     pub end_ms: u64,
     /// Audio samples for this segment
     pub samples: Vec<f32>,
+    /// Mean speech probability over the voiced span (see
+    /// [`SileroVad::last_mean_probability`]).
+    pub mean_probability: f32,
 }
 
 /// VAD segment detector that tracks speech segments
@@ -240,6 +383,8 @@ pub struct VadSegmentDetector {
     pre_speech_buffer: VecDeque<f32>,
     /// Maximum number of samples to keep in the pre-speech buffer
     pre_speech_buffer_capacity: usize,
+    /// Speech-gated gain applied to every frame before detection
+    gain: crate::agc::SpeechGain,
 }
 
 impl VadSegmentDetector {
@@ -247,6 +392,7 @@ impl VadSegmentDetector {
     pub fn new(config: VadConfig) -> Result<Self, VadError> {
         let sample_rate = config.sample_rate;
         let pre_speech_samples = (config.pre_speech_buffer_ms as usize * sample_rate) / 1000;
+        let gain = crate::agc::SpeechGain::new(config.auto_gain);
         let vad = SileroVad::new(config)?;
         Ok(Self {
             vad,
@@ -257,6 +403,7 @@ impl VadSegmentDetector {
             reframe_buffer: Vec::with_capacity(SILERO_FRAME_SIZE * 2),
             pre_speech_buffer: VecDeque::with_capacity(pre_speech_samples),
             pre_speech_buffer_capacity: pre_speech_samples,
+            gain,
         })
     }
 
@@ -297,8 +444,16 @@ impl VadSegmentDetector {
 
         // Process in exact 512-sample frames
         while self.reframe_buffer.len() >= frame_size {
-            let frame: Vec<f32> = self.reframe_buffer.drain(..frame_size).collect();
+            let mut frame: Vec<f32> = self.reframe_buffer.drain(..frame_size).collect();
+            let raw_rms = crate::agc::rms(&frame);
+            self.gain.apply(&mut frame);
             let result = self.vad.process_frame(&frame)?;
+            if self.vad.last_probability() >= self.vad.config.speech_threshold {
+                self.gain.observe_speech(raw_rms);
+                if let Some(ref health) = self.vad.health {
+                    health.gain(self.gain.gain());
+                }
+            }
             if let Some(segment) = self.apply_result(result, &frame) {
                 segment_complete = Some(segment);
             }
@@ -355,6 +510,7 @@ impl VadSegmentDetector {
                             start_ms: self.segment_start_ms,
                             end_ms: self.total_processed_ms,
                             samples: segment_samples,
+                            mean_probability: self.vad.last_mean_probability(),
                         });
                     }
                     // During silence, accumulate into the pre-speech ring buffer
@@ -666,17 +822,54 @@ mod tests {
     }
 
     #[test]
-    fn seq_candidate_rejected_by_single_dip_before_confirmation() {
+    fn seq_short_dip_does_not_reset_the_candidate() {
         let mut det = seq_detector();
-        // Two positives, a dip, two positives: never reaches 3 consecutive.
-        let segs = drive(&mut det, &[0.9, 0.9, 0.1, 0.9, 0.9]);
+        // A soft consonant inside the first word: positives, a dip, positives.
+        let segs = drive(&mut det, &[0.9, 0.9, 0.1]);
         assert!(segs.is_empty());
-        assert!(!det.is_speaking());
-        // After the dip the counter restarted; two positives = still probable.
+        assert!(det.is_probably_speaking(), "a dip keeps the candidate");
+        drive(&mut det, &[0.9]);
+        assert!(
+            det.is_speaking(),
+            "three voiced frames confirm despite the dip"
+        );
+    }
+
+    #[test]
+    fn seq_candidate_rejected_once_silence_outlasts_the_dip_tolerance() {
+        let mut det = seq_detector();
+        drive(&mut det, &[0.9, 0.9, 0.0, 0.0, 0.0]);
         assert!(det.is_probably_speaking());
-        // One more silence frame clears the candidate entirely.
         drive(&mut det, &[0.0]);
         assert!(!det.is_probably_speaking());
+        assert!(!det.is_speaking());
+    }
+
+    #[test]
+    fn seq_borderline_frames_extend_but_cannot_carry_a_candidate() {
+        // end threshold is 0.35 by default: 0.4 counts as voiced...
+        let mut det = seq_detector();
+        drive(&mut det, &[0.6, 0.4, 0.6]);
+        assert!(det.is_speaking(), "borderline frame between strong ones");
+        // ...but one spike followed by borderline noise is not speech.
+        let mut det = seq_detector();
+        drive(&mut det, &[0.6, 0.4, 0.4, 0.4, 0.4]);
+        assert!(!det.is_speaking());
+    }
+
+    #[test]
+    fn seq_soft_speech_inside_an_utterance_does_not_end_it() {
+        let mut det = seq_detector();
+        drive(&mut det, &[0.9, 0.9, 0.9]);
+        // 0.4 is below the start threshold but above the end threshold.
+        let segs = drive(&mut det, &[0.4, 0.4, 0.4, 0.4, 0.4]);
+        assert!(segs.is_empty());
+        assert!(det.is_speaking());
+        let segs = drive(&mut det, &[0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        let mean = segs[0].mean_probability;
+        // Voiced span: 3 x 0.9 + 5 x 0.4; trailing silence is excluded.
+        assert!((mean - (2.7 + 2.0) / 8.0).abs() < 1e-5, "mean {mean}");
     }
 
     #[test]
@@ -732,7 +925,7 @@ mod tests {
     fn seq_rejected_candidate_then_real_utterance_still_works() {
         let mut det = seq_detector();
         // Rejected blip.
-        assert!(drive(&mut det, &[0.9, 0.1, 0.0, 0.0]).is_empty());
+        assert!(drive(&mut det, &[0.9, 0.1, 0.0, 0.0, 0.0]).is_empty());
         assert!(!det.is_probably_speaking());
         // Real utterance.
         let segs = drive(&mut det, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);

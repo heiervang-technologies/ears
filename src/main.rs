@@ -671,13 +671,7 @@ async fn handle_ws_listen(
 
     // Create streaming engine
     let streaming_config = ears::streaming::StreamingConfig::default();
-    let vad_config = ears::vad::VadConfig {
-        sample_rate: 16000,
-        speech_threshold: config.vad.speech_threshold,
-        min_speech_duration_ms: config.vad.min_speech_duration_ms,
-        max_silence_duration_ms: config.vad.max_silence_duration_ms,
-        pre_speech_buffer_ms: config.vad.pre_speech_buffer_ms,
-    };
+    let vad_config = ears::vad::VadConfig::from_settings(&config.vad);
     let typing_config = ears::progressive_typing::ProgressiveTypingConfig::default();
     let temp_dir = config.state_dir.clone();
     let mut engine = ears::streaming_engine::StreamingEngine::new(
