@@ -35,9 +35,9 @@ expression: output
 │  [ ] Bash Mode [g]                                                                                                   │
 │  Cue Volume: 100% [+/-]                                                                                              │
 │  Ghost Colour: app default [o]  Frozen: same [O]                                                                     │
+│  [ ] Ghost Text in VAD [Shift+G]                                                                                     │
 │                                                                                                                      │
 │Volume Ducking:                                                                                                       │
-│  [ ] Enabled [Shift+D]                                                                                               │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │[P] Profile  [e] URL  [d] Device  [L] Lang  [f] Lower  [p] Punct  [n] Enter  [o/O] Ghost  [q] Quit                    │

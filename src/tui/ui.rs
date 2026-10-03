@@ -433,6 +433,15 @@ fn render_config_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         Span::styled(" [O]", Style::default().fg(Color::DarkGray)),
     ]));
+    text.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            if app.vad_ghost { "[x]" } else { "[ ]" },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" Ghost Text in VAD"),
+        Span::styled(" [Shift+G]", Style::default().fg(Color::DarkGray)),
+    ]));
 
     // Volume Ducking section
     text.push(Line::from(""));
@@ -1079,6 +1088,7 @@ fn render_help_overlay(app: &mut App, frame: &mut Frame, area: Rect) {
         Line::from("  j/k         Scroll"),
         Line::from("  v/Space     Toggle VAD"),
         Line::from("  Shift+D     Toggle volume ducking"),
+        Line::from("  Shift+G     Toggle ghost text in VAD"),
         Line::from("  :           Command mode"),
         Line::from("  ?           This help"),
         Line::from(""),

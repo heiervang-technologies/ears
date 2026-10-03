@@ -237,11 +237,15 @@ impl ContinuousDecoder {
             return Ok(self.stable.clone());
         }
 
-        // Without a known header the model writes it first; only then can
-        // settled text follow it.
+        // The header is forced only once text has settled. Forced onto audio
+        // with no speech yet, it makes the model write *something*, and with
+        // a context it copies the context verbatim; those words would then
+        // settle and be forced into every later decode. Unforced, the model
+        // answers "language None" until it hears speech.
+        let forced = self.header.is_some() && !self.stable.is_empty();
         let prefix = match &self.header {
-            Some(h) => format!("{h}{}", self.stable),
-            None => String::new(),
+            Some(h) if forced => format!("{h}{}", self.stable),
+            _ => String::new(),
         };
         let content: Vec<_> = audio
             .into_iter()
@@ -302,19 +306,34 @@ impl ContinuousDecoder {
             ));
         }
 
-        let hypothesis = if self.header.is_some() {
+        // Unforced, settle only text written under the pinned language.
+        let mut settles = forced;
+        let hypothesis = if forced {
             format!("{}{}", self.stable, continuation)
         } else {
             match continuation.split_once(ASR_TAG) {
                 Some((lang, rest)) => {
-                    self.learn_language(lang.trim(), pcm.len());
-                    rest.to_string()
+                    let lang = lang.trim();
+                    match &self.header {
+                        Some(h) => settles = h.strip_suffix(ASR_TAG) == Some(lang),
+                        None => {
+                            self.learn_language(lang, pcm.len());
+                            settles = self.header.is_some();
+                        }
+                    }
+                    // Silence, or a live misdetection of the pinned
+                    // language (a stray "他。" on a breath): show nothing.
+                    if lang == "language None" || (self.header.is_some() && !settles && !last) {
+                        String::new()
+                    } else {
+                        rest.to_string()
+                    }
                 }
                 None => continuation.to_string(),
             }
         };
         let hypothesis = hypothesis.trim_start().to_string();
-        if !last && self.header.is_some() {
+        if !last && settles {
             // A shorter continuation must never retract the forced prefix.
             let settled = settled_prefix(&hypothesis, self.rollback_words);
             if settled.len() > self.stable.len() && settled.starts_with(&self.stable) {
@@ -676,6 +695,54 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("audio_pad"));
+    }
+
+    #[tokio::test]
+    async fn pinned_language_is_not_forced_before_speech() {
+        let server = MockServer::start().await;
+        // Silence, then a misdetection, then speech in the pinned language.
+        for body in [
+            "language None<asr_text>",
+            "language German<asr_text>Hallo da",
+            "language English<asr_text>Hello there friend",
+        ] {
+            Mock::given(path("/v1/chat/completions"))
+                .respond_with(reply(body))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(reply(" my friend."))
+            .mount(&server)
+            .await;
+        let mut d = ContinuousDecoder::new(&server.uri(), None, Some("Qwen/Qwen3-ASR-1.7B".into()))
+            .with_language(Some("en"))
+            .with_context(Some("Heiervang, Hyprland".into()))
+            .with_rollback_words(1);
+        let pcm = vec![0i16; SAMPLE_RATE];
+        assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "");
+        assert_eq!(d.snapshot().stable, "");
+        assert_eq!(d.step(&pcm, false, TICK).await.unwrap(), "");
+        assert_eq!(d.snapshot().stable, "", "another language never settles");
+        assert_eq!(
+            d.step(&pcm, false, TICK).await.unwrap(),
+            "Hello there friend"
+        );
+        assert_eq!(
+            d.step(&pcm, false, TICK).await.unwrap(),
+            "Hello there my friend."
+        );
+        let sent = bodies(&server).await;
+        // Nothing forced while nothing has settled: a header forced onto
+        // silence makes the model copy the context into the transcript.
+        for body in &sent[..3] {
+            assert_eq!(body["messages"][2]["content"], "");
+        }
+        assert_eq!(
+            sent[3]["messages"][2]["content"],
+            "language English<asr_text>Hello there"
+        );
     }
 
     #[tokio::test]

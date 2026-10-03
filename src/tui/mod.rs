@@ -258,6 +258,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             let prev_auto_enter = app.auto_enter;
             let prev_text_filters = app.text_filters.clone();
             let prev_bash_mode = app.bash_mode;
+            let prev_vad_ghost = app.vad_ghost;
             let prev_typing = typing;
 
             match event_handler.next().await? {
@@ -330,8 +331,12 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                 || app.auto_enter != prev_auto_enter
                 || app.text_filters != prev_text_filters
                 || app.bash_mode != prev_bash_mode
+                || app.vad_ghost != prev_vad_ghost
                 || typing != prev_typing
             {
+                if app.vad_ghost && !prev_vad_ghost && vad_running {
+                    crate::ghost_style::apply(&app.ghost_style);
+                }
                 if let Some(ref tx) = vad_settings {
                     let _ = tx.send(TypingSettings {
                         progressive_typing: app.progressive_typing && typing,
@@ -341,7 +346,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         text_filters: app.text_filters.clone(),
                         language: app.language.clone(),
                         guided_grammar: app.active_grammar(),
-                        ghost: false,
+                        ghost: app.vad_ghost,
                     });
                 }
             }
@@ -355,6 +360,9 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
             // Check if VAD state changed
             if app.vad_active && !vad_running {
                 // Start VAD pipeline
+                if app.vad_ghost {
+                    crate::ghost_style::apply(&app.ghost_style);
+                }
                 match start_vad_pipeline(&config, event_tx.clone()).await {
                     Ok((shutdown, settings, handle)) => {
                         // Send current settings immediately so engine matches TUI state
@@ -369,7 +377,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             text_filters: app.text_filters.clone(),
                             language: app.language.clone(),
                             guided_grammar: app.active_grammar(),
-                            ghost: false,
+                            ghost: app.vad_ghost,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

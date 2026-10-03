@@ -298,6 +298,18 @@ Notes:
 - `ears ghost` and `ears vad` share the toggle: either one stops the other.
 - Auto-Enter is not sent in VAD ghost mode; push-to-talk keeps `auto_enter`.
 
+To make ghost text the default for VAD, so that the TUI's VAD mode and plain
+`ears vad` use it too, set it under `[vad]`:
+
+```toml
+[vad]
+ghost = true
+```
+
+In the TUI, `Shift+G` toggles it from any panel, saves it to the config, and
+switches over a running VAD session immediately. The ghost and frozen colours
+come from `[ghost]` (below) in every mode.
+
 #### Ghost text style
 
 The input method passes text and formatting hints; each app draws the ghost. Set
@@ -326,7 +338,7 @@ preedit; with `final_correction = true`, a separate final transcription can
 still replace it.
 
 In the TUI's Configuration panel, `o` cycles the ghost colour presets and `O`
-the frozen ones. Supported apps:
+the frozen ones; `Shift+G` toggles ghost text in VAD mode. Supported apps:
 - **Alacritty** with the preedit-colors patch: `[colors.preedit]`
   (`foreground`, `highlight_foreground`) in `alacritty.toml`. Alacritty
   reloads it immediately. With `wrap = true` (which `ears ghost-style`

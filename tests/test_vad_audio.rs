@@ -287,6 +287,7 @@ fn test_vad_settings_toml_roundtrip() {
         pre_speech_buffer_ms: 300,
         duck_enabled: true,
         duck_percent: 60,
+        ghost: true,
     };
 
     let toml_str = toml::to_string_pretty(&settings).unwrap();
@@ -296,6 +297,7 @@ fn test_vad_settings_toml_roundtrip() {
     assert_eq!(loaded.min_speech_duration_ms, 200);
     assert_eq!(loaded.max_silence_duration_ms, 500);
     assert_eq!(loaded.pre_speech_buffer_ms, 300);
+    assert!(loaded.ghost);
 }
 
 #[test]
