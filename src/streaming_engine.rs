@@ -482,7 +482,7 @@ impl StreamingEngine {
             _ if guided_command => transcript,
             Some(crate::commands::Command::Literal(rest)) => rest,
             Some(command) => {
-                self.run_command(&command, &transcript);
+                self.run_command(&command, &transcript).await;
                 return Ok(());
             }
             None => transcript,
@@ -576,14 +576,16 @@ impl StreamingEngine {
     }
 
     /// Execute a spoken command in place of typing the utterance.
-    fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
+    async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
         use crate::commands::Command;
-        // The ghost shows the command word; it must not be committed.
-        self.ghost_clear();
         if self.typing_mode == TypingMode::None || self.typing_suspended {
+            self.ghost_clear();
             info!("Voice command {} ignored: typing is off", command.name());
             return;
         }
+        // The ghost shows the command word; it must not be committed. It
+        // turns the accept colour, then goes before the key is pressed.
+        self.ghost_accept(heard).await;
         let start = Instant::now();
         let outcome = match command {
             Command::Enter => run_blocking(TextInput::send_enter),

@@ -432,12 +432,16 @@ enabled = true
 enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"])
 new_line = ["new line"]   # Shift+Enter: a new line without sending
 literal = ["literal"]     # "Literal over." types "over." instead
+accept_ms = 200           # how long the accepted command shows (0: off)
 ```
 
 A command counts only when it is the entire utterance, said on its own
 between pauses. "It's over now" is ordinary text. Case and punctuation are
-ignored. The ghost of the command word is cleared rather than committed, the
-"done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
+ignored. With ghost text on, a command word turns the accept colour (the
+ghost's `frozen_color`) as soon as the live decoder hears it alone, and stays
+that colour for `accept_ms` before its key is pressed. If you keep talking it
+turns back into ordinary ghost text. The ghost is cleared rather than
+committed, the "done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
 `SegmentCompleted`, so a command is never forwarded to an agent as text.
 Commands are off in bash mode and when typing is off.
 

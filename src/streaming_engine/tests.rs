@@ -873,3 +873,49 @@ async fn test_literal_types_the_command_word() {
         .unwrap();
     assert_eq!(engine.accumulated_text.trim(), "over.");
 }
+
+fn over_commands(accept_ms: u64) -> crate::commands::VoiceCommands {
+    crate::commands::VoiceCommands {
+        enabled: true,
+        enter: vec!["over".into()],
+        accept_ms,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_ghost_command_partial_is_drawn_in_accept_colour() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(over_commands(200));
+    feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+    let ghost = engine.ghost.as_mut().unwrap();
+    let current = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::plain(current, Ok("Over.".into())))
+        .unwrap();
+    ghost
+        .partial_tx
+        .send(Partial::plain(current, Ok("Over and out".into())))
+        .unwrap();
+    engine.ghost_poll_partials();
+    assert_eq!(next_cmd(&lines), "F 5 Over.", "whole command is frozen");
+    assert_eq!(next_cmd(&lines), "P Over and out", "dictation is not");
+}
+
+#[tokio::test]
+async fn test_ghost_accept_flashes_then_clears_without_committing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(over_commands(1));
+    engine.ghost_accept("Over.").await;
+    assert_eq!(next_cmd(&lines), "F 5 Over.");
+    assert_eq!(next_cmd(&lines), "X");
+    // With no hold, the ghost just goes.
+    engine.set_commands(over_commands(0));
+    engine.ghost.as_mut().unwrap().showing = true;
+    engine.ghost_accept("Over.").await;
+    assert_eq!(next_cmd(&lines), "X");
+    assert!(lines.try_iter().all(|l| l == "S"), "nothing committed");
+}

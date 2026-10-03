@@ -24,6 +24,11 @@ pub struct VoiceCommands {
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal")]
     pub literal: Vec<String>,
+    /// How long a recognized command is shown in the accept colour (the
+    /// ghost's frozen colour) before its key is pressed, in milliseconds.
+    /// 0: press at once.
+    #[serde(default = "default_accept_ms")]
+    pub accept_ms: u64,
 }
 
 fn default_enter() -> Vec<String> {
@@ -38,6 +43,10 @@ fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
 
+fn default_accept_ms() -> u64 {
+    200
+}
+
 impl Default for VoiceCommands {
     fn default() -> Self {
         Self {
@@ -45,6 +54,7 @@ impl Default for VoiceCommands {
             enter: default_enter(),
             new_line: default_new_line(),
             literal: default_literal(),
+            accept_ms: default_accept_ms(),
         }
     }
 }
@@ -68,6 +78,11 @@ impl Command {
             Command::NewLine => "new_line",
             Command::Literal(_) => "literal",
         }
+    }
+
+    /// Whether the command presses a key (rather than typing text).
+    pub fn presses_key(&self) -> bool {
+        !matches!(self, Command::Literal(_))
     }
 }
 
@@ -131,6 +146,14 @@ mod tests {
             enter: vec!["over".into(), "enter".into()],
             ..VoiceCommands::default()
         }
+    }
+
+    #[test]
+    fn only_key_commands_press_keys() {
+        let commands = over();
+        assert!(commands.parse("Over.").unwrap().presses_key());
+        assert!(!commands.parse("literal over").unwrap().presses_key());
+        assert_eq!(VoiceCommands::default().accept_ms, 200);
     }
 
     #[test]
