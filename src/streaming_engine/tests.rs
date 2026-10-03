@@ -789,7 +789,7 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
         .mount(&whisper)
         .await;
     let dir = tempfile::tempdir().unwrap();
-    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
     engine.min_mean_probability = 0.6;
 
     // Barely over the start threshold all the way: passes the gate, but its
@@ -802,6 +802,26 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
         .await
         .unwrap();
     assert!(engine.accumulated_text.is_empty());
+    assert!(
+        drain(&mut rx).contains(&"SegmentDiscarded { reason: \"not speech-like enough\" }".into()),
+        "a dropped segment is reported, not silent"
+    );
+}
+
+#[tokio::test]
+async fn test_segment_with_no_words_is_reported_as_discarded() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    let events = drain(&mut rx);
+    assert!(
+        events.contains(&"SegmentDiscarded { reason: \"no words heard\" }".into()),
+        "{events:?}"
+    );
 }
 
 async fn command_engine(

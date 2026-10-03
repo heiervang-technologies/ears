@@ -503,6 +503,10 @@ Place custom WAV files in `~/.local/share/ears-sounds/`:
 - `start.wav` - Recording started
 - `done.wav` - Transcription complete
 - `bell.wav` - Error occurred
+- `vad_discard.wav` - VAD heard speech but typed nothing (two low blips).
+  The TUI log says why: not speech-like enough, no words heard, filtered
+  out, or transcription failed. A candidate that never got the second VAD
+  note was not confirmed and stays silent. An empty WAV mutes this cue.
 
 Falls back to embedded sounds if not found. Embedded sounds are cached by content
 in `$XDG_CACHE_HOME/ears/sounds` (normally `~/.cache/ears/sounds`), so restarting

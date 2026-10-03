@@ -60,6 +60,12 @@ pub enum StreamingEvent {
     /// that reaction here. Carries no audio cue.
     SpeechRejected,
 
+    /// A confirmed speech segment produced nothing to type: dropped as
+    /// unlikely speech, heard as silence, filtered out, or failed to
+    /// transcribe. `reason` says which. Consumers play the discard cue so
+    /// an utterance never vanishes silently.
+    SegmentDiscarded { reason: String },
+
     /// Audio capture ended without being asked to (device unplugged,
     /// PipeWire restart, pw-record exit). No further audio will arrive; the
     /// owner must stop claiming to listen.
@@ -379,6 +385,7 @@ impl StreamingEngine {
                 ghost.next_utterance();
             }
             self.ghost_clear();
+            self.discard("not speech-like enough");
             return Ok(());
         }
         // Skip segments with no audio data — sending an empty WAV crashes
@@ -391,6 +398,7 @@ impl StreamingEngine {
         if segment.samples.is_empty() {
             debug!("Skipping empty speech segment");
             self.ghost_clear();
+            self.discard("no audio");
             return Ok(());
         }
 
@@ -440,10 +448,13 @@ impl StreamingEngine {
             .await
         {
             Ok(text) => text,
+            // An empty reply is silence or noise, not a failure.
+            Err(crate::whisper::WhisperError::EmptyTranscription) => String::new(),
             Err(e) => {
                 warn!("Transcription error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("Transcription error: {}", e)));
                 self.ghost_clear();
+                self.discard("transcription failed");
                 return Err(StreamingEngineError::TranscriptionError(e.to_string()));
             }
         };
@@ -457,6 +468,7 @@ impl StreamingEngine {
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");
             self.ghost_clear();
+            self.discard("no words heard");
             return Ok(());
         }
 
@@ -472,6 +484,7 @@ impl StreamingEngine {
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
             self.ghost_clear();
+            self.discard("filtered out");
             return Ok(());
         }
 
@@ -604,6 +617,14 @@ impl StreamingEngine {
                 text: heard.to_string(),
             });
         }
+    }
+
+    /// Report a segment that typed nothing.
+    fn discard(&self, reason: &str) {
+        info!("Segment discarded: {}", reason);
+        self.send_event(StreamingEvent::SegmentDiscarded {
+            reason: reason.to_string(),
+        });
     }
 
     /// Spoken commands to recognize.

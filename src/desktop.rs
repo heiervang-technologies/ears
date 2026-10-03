@@ -299,6 +299,7 @@ static SOUND_VAD_SPEECH: &[u8] = include_bytes!("../sounds/vad_speech.wav");
 static SOUND_VAD_SPEECH_START: &[u8] = include_bytes!("../sounds/vad_speech_start.wav");
 static SOUND_VAD_SPEECH_CONFIRM: &[u8] = include_bytes!("../sounds/vad_speech_confirm.wav");
 static SOUND_VAD_END: &[u8] = include_bytes!("../sounds/vad_end.wav");
+static SOUND_VAD_DISCARD: &[u8] = include_bytes!("../sounds/vad_discard.wav");
 static SOUND_TOGGLE_ON: &[u8] = include_bytes!("../sounds/toggle_on.wav");
 static SOUND_TOGGLE_OFF: &[u8] = include_bytes!("../sounds/toggle_off.wav");
 
@@ -448,6 +449,12 @@ impl AudioFeedback {
     /// Play VAD speech ended sound (descending E5→C5)
     pub fn beep_vad_end() -> Result<()> {
         Self::play_named("vad_end", SOUND_VAD_END)
+    }
+
+    /// Play VAD discarded-segment sound (two low D4 blips): speech ended
+    /// but nothing was typed.
+    pub fn beep_vad_discard() -> Result<()> {
+        Self::play_named("vad_discard", SOUND_VAD_DISCARD)
     }
 
     /// Play toggle-on sound (ascending G5→B5)
