@@ -30,7 +30,11 @@ fn main() {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(300),
                 max_silence_duration_ms: 700,
-                end_threshold: end,
+                speech_threshold: std::env::var("THRESHOLD")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.5),
+                end_threshold: end.filter(|_| std::env::var("THRESHOLD").is_err()),
                 auto_gain: gain,
                 ..VadConfig::default()
             })

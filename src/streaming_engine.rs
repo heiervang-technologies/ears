@@ -592,8 +592,17 @@ impl StreamingEngine {
     async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
         use crate::commands::Command;
         if self.typing_mode == TypingMode::None || self.typing_suspended {
+            // No key is pressed, but the command is still published, so
+            // socket consumers (talking-stick, fay) never lose an utterance.
             self.ghost_clear();
-            info!("Voice command {} ignored: typing is off", command.name());
+            info!(
+                "Voice command {} not pressed: typing is off",
+                command.label()
+            );
+            self.send_event(StreamingEvent::VoiceCommand {
+                name: command.label(),
+                text: heard.to_string(),
+            });
             return;
         }
         // The ghost shows the command word; it must not be committed. It

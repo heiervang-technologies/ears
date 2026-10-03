@@ -79,3 +79,32 @@ RNNoise keeps speech, any speech: a TV, a call or a colleague still opens
 segments. Keeping only *your* voice needs speaker verification (compare each
 segment with an enrolled voiceprint and drop mismatches); that is tracked as a
 separate experiment.
+
+## Short words from across the room
+
+Measured with `examples/vad_calibrate.rs` (`THRESHOLD`, `MIN_SPEECH_MS`)
+on six reverberant "Over"s (148-332 ms, three tempos, two voices) in
+noise, hysteresis plus gain, out of 6:
+
+| word RMS | 0.5 / 200 ms | 0.5 / 160 ms | 0.4 / 160 ms | 0.3 / 160 ms |
+|---|---|---|---|---|
+| 0.004 | 0 | 2 | 4 | 5 |
+| 0.008 | 4 | 5 | 6 | 6 |
+
+None of the noise-only clips (knock, breath, burst, clicks, babble, room,
+silence) produced a segment at any setting. Segments at 0.4 averaged
+0.40-0.48 speech probability, so lower `min_mean_probability` to about
+0.3 together with the threshold. Settings for picking up single-word
+commands at a distance:
+
+```toml
+[vad]
+speech_threshold = 0.4
+min_speech_duration_ms = 160
+min_mean_probability = 0.3
+```
+
+`examples/vad_drift.rs` checks whether Silero's recurrent state dulls
+over a long session: the same quiet word every 20 s for 10 minutes peaked
+at 0.88-0.95 throughout with the state carried over (0.98 with a fresh
+state), so no periodic reset is needed.

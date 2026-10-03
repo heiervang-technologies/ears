@@ -865,6 +865,10 @@ async fn test_command_utterance_is_not_dictation() {
         !events.iter().any(|e| e.starts_with("SegmentCompleted")),
         "a command is never published as dictation: {events:?}"
     );
+    assert!(
+        events.contains(&"VoiceCommand { name: \"enter\", text: \"Over.\" }".into()),
+        "with typing off the command is still published: {events:?}"
+    );
 }
 
 #[tokio::test]
