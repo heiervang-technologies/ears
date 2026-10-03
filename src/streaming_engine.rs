@@ -81,6 +81,11 @@ pub enum StreamingEvent {
         audio_path: Option<String>,
     },
 
+    /// A whole utterance was a spoken command (see `crate::commands`) and
+    /// was executed instead of typed. `text` is what was heard. No
+    /// `SegmentCompleted` follows: the words are not dictation.
+    VoiceCommand { name: String, text: String },
+
     /// Error occurred
     Error(String),
 
@@ -194,6 +199,8 @@ pub struct StreamingEngine {
     min_mean_probability: f32,
     /// Level each segment before its final transcription.
     normalize_segments: bool,
+    /// Spoken commands (whole utterances only).
+    commands: crate::commands::VoiceCommands,
     /// Decode ghost partials continuously (issue #144) instead of
     /// re-transcribing the growing utterance: over the ears stream when the
     /// server has it, else per tick over HTTP.
@@ -238,6 +245,7 @@ impl StreamingEngine {
             health: None,
             min_mean_probability,
             normalize_segments,
+            commands: Default::default(),
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
@@ -470,6 +478,15 @@ impl StreamingEngine {
         info!("Transcribed: {}", transcript);
 
         let guided_command = self.guided_grammar.is_some();
+        let transcript = match self.commands.parse(&transcript) {
+            _ if guided_command => transcript,
+            Some(crate::commands::Command::Literal(rest)) => rest,
+            Some(command) => {
+                self.run_command(&command, &transcript);
+                return Ok(());
+            }
+            None => transcript,
+        };
         let newly_committed = self.commit_transcript(&transcript);
 
         let typing = self
@@ -556,6 +573,40 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Execute a spoken command in place of typing the utterance.
+    fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
+        use crate::commands::Command;
+        // The ghost shows the command word; it must not be committed.
+        self.ghost_clear();
+        if self.typing_mode == TypingMode::None || self.typing_suspended {
+            info!("Voice command {} ignored: typing is off", command.name());
+            return;
+        }
+        let start = Instant::now();
+        let outcome = match command {
+            Command::Enter => run_blocking(TextInput::send_enter),
+            Command::NewLine => run_blocking(TextInput::send_new_line),
+            Command::Literal(_) => return,
+        }
+        .map(|()| 0)
+        .map_err(|e| {
+            crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
+        });
+        if self.handle_typing_outcome(outcome, start) {
+            info!("Voice command: {} ({:?})", command.name(), heard);
+            crate::desktop::AudioFeedback::beep_done().ok();
+            self.send_event(StreamingEvent::VoiceCommand {
+                name: command.name().to_string(),
+                text: heard.to_string(),
+            });
+        }
+    }
+
+    /// Spoken commands to recognize.
+    pub fn set_commands(&mut self, commands: crate::commands::VoiceCommands) {
+        self.commands = commands;
     }
 
     /// Commit a completed VAD transcript according to the active mode.

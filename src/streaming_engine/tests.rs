@@ -803,3 +803,73 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
         .unwrap();
     assert!(engine.accumulated_text.is_empty());
 }
+
+async fn command_engine(
+    heard: &str,
+) -> (
+    StreamingEngine,
+    mpsc::UnboundedReceiver<StreamingEvent>,
+    wiremock::MockServer,
+    tempfile::TempDir,
+) {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription(heard))
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    // Never drive the real keyboard from a test.
+    engine.typing_mode = TypingMode::None;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        enter: vec!["over".into()],
+        ..Default::default()
+    });
+    (engine, rx, whisper, dir)
+}
+
+#[tokio::test]
+async fn test_command_utterance_is_not_dictation() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Over.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert!(engine.accumulated_text.is_empty(), "a command is not typed");
+    let events = drain(&mut rx);
+    assert!(
+        !events.iter().any(|e| e.starts_with("SegmentCompleted")),
+        "a command is never published as dictation: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_command_word_inside_a_sentence_is_dictation() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("It's over now.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(engine.accumulated_text.trim(), "It's over now.");
+    assert!(drain(&mut rx)
+        .iter()
+        .any(|e| e.starts_with("SegmentCompleted")));
+}
+
+#[tokio::test]
+async fn test_literal_types_the_command_word() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Literal over.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(engine.accumulated_text.trim(), "over.");
+}

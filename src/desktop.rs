@@ -721,6 +721,28 @@ impl TextInput {
         Ok(())
     }
 
+    /// Press Shift+Enter: a new line without sending in chat boxes and
+    /// agent prompts. Same ydotool path as [`TextInput::send_enter`].
+    pub fn send_new_line() -> Result<()> {
+        use std::process::Stdio;
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let mut cmd = Command::new("ydotool");
+        // KEY_LEFTSHIFT down, KEY_ENTER press and release, KEY_LEFTSHIFT up
+        cmd.args(["key", "42:1", "28:1", "28:0", "42:0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let status =
+            run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for Shift+Enter")?;
+        if !status.success() {
+            anyhow::bail!("ydotool Shift+Enter failed with status: {}", status);
+        }
+
+        Ok(())
+    }
+
     /// Type text using the specified mode
     ///
     /// - `Auto`: wtype on Omarchy/Hyprland, clipboard paste otherwise

@@ -422,6 +422,32 @@ Frozen means fixed during live decoding; full final correction can replace
 it. See [token freeze tracking](docs/TOKEN_FREEZE.md) for the guarantees,
 visualization, and protocol fields.
 
+### Spoken commands (VAD)
+
+In VAD mode a whole utterance can be a command instead of text:
+
+```toml
+[commands]
+enabled = true
+enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"])
+new_line = ["new line"]   # Shift+Enter: a new line without sending
+literal = ["literal"]     # "Literal over." types "over." instead
+```
+
+A command counts only when it is the entire utterance, said on its own
+between pauses. "It's over now" is ordinary text. Case and punctuation are
+ignored. The ghost of the command word is cleared rather than committed, the
+"done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
+`SegmentCompleted`, so a command is never forwarded to an agent as text.
+Commands are off in bash mode and when typing is off.
+
+Pick words you would never say alone as content. Rare real words work best:
+in tests on Qwen3-ASR, "Transmit", "Execute", "Over" and "Enter" were always
+recognized, while "Send" once came back as "Send it" and an invented word
+("Kazam") always came back as a real one ("Chasm"). Avoid "yes", "okay" and
+"go": they are real answers to agents, and "Okay." is also what the model
+writes for silence.
+
 ### All Commands
 
 ```

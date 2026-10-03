@@ -225,6 +225,7 @@ Events emitted by the engine:
 | `SpeechEnded` | Speech segment ended |
 | `TranscriptUpdate { committed, uncommitted }` | Text update with stable and unstable portions |
 | `SegmentCompleted { text, duration_ms }` | Full segment transcribed |
+| `VoiceCommand { name, text }` | A whole utterance was a spoken command and was executed instead of typed |
 | `Error(String)` | Error in the pipeline |
 | `StatsUpdate { segments_processed, avg_latency_ms }` | Performance statistics |
 

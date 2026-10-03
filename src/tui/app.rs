@@ -1588,6 +1588,9 @@ impl App {
                     crate::desktop::TextInput::copy_to_clipboard(&text);
                 }
             }
+            StreamingEvent::VoiceCommand { name, text } => {
+                self.add_log(&format!("Voice command: {} (\"{}\")", name, text));
+            }
             StreamingEvent::StatsUpdate {
                 segments_processed,
                 avg_latency_ms,
