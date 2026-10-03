@@ -603,6 +603,10 @@ impl StreamingEngine {
         let outcome = match command {
             Command::Enter => run_blocking(TextInput::send_enter),
             Command::NewLine => run_blocking(TextInput::send_new_line),
+            Command::Keys(combo) => match crate::commands::keycodes(combo) {
+                Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
+                None => return,
+            },
             Command::Literal(_) => return,
         }
         .map(|()| 0)
@@ -610,10 +614,10 @@ impl StreamingEngine {
             crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
         });
         if self.handle_typing_outcome(outcome, start) {
-            info!("Voice command: {} ({:?})", command.name(), heard);
+            info!("Voice command: {} ({:?})", command.label(), heard);
             crate::desktop::AudioFeedback::beep_done().ok();
             self.send_event(StreamingEvent::VoiceCommand {
-                name: command.name().to_string(),
+                name: command.label(),
                 text: heard.to_string(),
             });
         }

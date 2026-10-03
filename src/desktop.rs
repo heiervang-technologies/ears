@@ -632,6 +632,15 @@ fn drain_available(
 }
 
 /// Put a file descriptor into O_NONBLOCK mode.
+/// `ydotool key` arguments: every code down in order, then up in reverse.
+fn key_args(codes: &[u16]) -> Vec<String> {
+    codes
+        .iter()
+        .map(|c| format!("{c}:1"))
+        .chain(codes.iter().rev().map(|c| format!("{c}:0")))
+        .collect()
+}
+
 fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
     // SAFETY: fcntl on a valid, owned fd with well-formed flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -745,6 +754,30 @@ impl TextInput {
             run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for Shift+Enter")?;
         if !status.success() {
             anyhow::bail!("ydotool Shift+Enter failed with status: {}", status);
+        }
+
+        Ok(())
+    }
+
+    /// Press a key combination given as Linux keycodes, modifiers first
+    /// (see `crate::commands::keycodes`): all down in order, then up in
+    /// reverse. Same ydotool path as [`TextInput::send_enter`].
+    pub fn send_keys(codes: &[u16]) -> Result<()> {
+        use std::process::Stdio;
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let mut args = vec!["key".to_string()];
+        args.extend(key_args(codes));
+        let mut cmd = Command::new("ydotool");
+        cmd.args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let status =
+            run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for key combination")?;
+        if !status.success() {
+            anyhow::bail!("ydotool key combination failed with status: {}", status);
         }
 
         Ok(())
@@ -901,6 +934,11 @@ impl TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_combination_presses_then_releases_in_reverse() {
+        assert_eq!(key_args(&[29, 48]), ["29:1", "48:1", "48:0", "29:0"]);
+    }
 
     #[test]
     fn test_run_bounded_kills_and_reaps_hung_child() {

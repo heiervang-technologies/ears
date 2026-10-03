@@ -433,7 +433,17 @@ enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"]
 new_line = ["new line"]   # Shift+Enter: a new line without sending
 literal = ["literal"]     # "Literal over." types "over." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
+
+[commands.keys]           # any phrase to any key combination
+background = "ctrl+b"     # "Background." on its own presses Ctrl+B
+"go back" = "alt+left"
 ```
+
+Key names: `ctrl`, `shift`, `alt`, `super`, `a`-`z`, `0`-`9`, `f1`-`f12`,
+`enter`, `tab`, `esc`, `space`, `backspace`, `delete`, the arrows (`up`,
+`down`, `left`, `right`), `home`, `end`, `pageup` and `pagedown`, joined
+with `+`. A phrase with a combination ears does not understand stays
+ordinary dictation.
 
 A command counts only when it is the entire utterance, said on its own
 between pauses. "It's over now" is ordinary text. Case and punctuation are
