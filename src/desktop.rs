@@ -759,6 +759,29 @@ impl TextInput {
         Ok(())
     }
 
+    /// Press Backspace `count` times (deleting a dictated utterance).
+    /// Same ydotool path as [`TextInput::send_enter`], with a short key
+    /// delay so long utterances go in well under the key timeout.
+    pub fn send_backspaces(count: usize) -> Result<()> {
+        use std::process::Stdio;
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let mut cmd = Command::new("ydotool");
+        cmd.args(["key", "-d", "2"])
+            .args((0..count).flat_map(|_| ["14:1", "14:0"]))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let status =
+            run_bounded(cmd, KEY_TIMEOUT).context("Failed to run ydotool for Backspace")?;
+        if !status.success() {
+            anyhow::bail!("ydotool Backspace failed with status: {}", status);
+        }
+
+        Ok(())
+    }
+
     /// Press a key combination given as Linux keycodes, modifiers first
     /// (see `crate::commands::keycodes`): all down in order, then up in
     /// reverse. Same ydotool path as [`TextInput::send_enter`].

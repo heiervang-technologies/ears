@@ -392,7 +392,10 @@ text matched a full transcription. The server needs
 `--trust-request-chat-template`; otherwise ears falls back to `repeat`.
 Recordings longer than the server's context (about 90 s) are decoded in segments: after 60 s the current segment is finished at the next pause (at 80 s at the latest) and a new one starts there, so long dictation keeps its live preview.
 With `final_correction = true` (the default) the committed text still comes
-from a full transcription.
+from a full transcription. With `false`, VAD ghost mode commits the ears
+stream's `final` directly: no second decode, and the text that lands is
+the ghost you watched (short results of three words or fewer still get the
+full transcription and its no-speech check).
 
 Words freeze (turn the frozen colour) once `live_rollback_words` newer words
 follow them, so a name the model mishears is fixed in the live preview only
@@ -431,6 +434,7 @@ In VAD mode a whole utterance can be a command instead of text:
 enabled = true
 enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"])
 new_line = ["new line"]   # Shift+Enter: a new line without sending
+undo = ["scratch that"]   # delete the last dictated utterance
 literal = ["literal"]     # "Literal over." types "over." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
 
@@ -438,6 +442,12 @@ accept_ms = 200           # how long the accepted command shows (0: off)
 background = "ctrl+b"     # "Background." on its own presses Ctrl+B
 "go back" = "alt+left"
 ```
+
+"Scratch that." deletes the last utterance ears typed, with Backspace;
+say it again to delete the one before (up to 20). It only works in the
+window the text went into (Hyprland tells windows apart), and Enter or a
+key command ends what can be scratched, since the text was sent. With
+nothing to scratch, the discard cue plays.
 
 Key names: `ctrl`, `shift`, `alt`, `super`, `a`-`z`, `0`-`9`, `f1`-`f12`,
 `enter`, `tab`, `esc`, `space`, `backspace`, `delete`, the arrows (`up`,
