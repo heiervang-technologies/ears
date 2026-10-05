@@ -86,6 +86,12 @@ pub enum Commands {
         /// Custom IPC socket path (avoids conflicting with desktop ears instance)
         #[arg(long)]
         socket: Option<String>,
+
+        /// Keep each transcribed utterance as a 16 kHz mono WAV in this
+        /// directory and report it as `audio_path` on `SegmentCompleted`
+        /// (newest 32 kept; the consumer may delete them)
+        #[arg(long, value_name = "DIR")]
+        keep_audio: Option<std::path::PathBuf>,
     },
 
     /// Audio device management

@@ -71,8 +71,15 @@ pub enum StreamingEvent {
         uncommitted: String,
     },
 
-    /// Transcription segment completed
-    SegmentCompleted { text: String, duration_ms: u64 },
+    /// Transcription segment completed. `audio_path` is the utterance as a
+    /// 16 kHz mono WAV, present only when the engine keeps audio
+    /// ([`StreamingEngine::set_keep_audio_dir`]); the consumer owns the file.
+    SegmentCompleted {
+        text: String,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio_path: Option<String>,
+    },
 
     /// Error occurred
     Error(String),
@@ -189,6 +196,9 @@ pub struct StreamingEngine {
     continuous: Option<crate::continuous::ContinuousSpec>,
     /// The per-tick HTTP decoder still works (false: repeat instead).
     continuous_http: bool,
+    /// Keep each transcribed utterance as a WAV here and report it on
+    /// `SegmentCompleted` (ws-listen `--keep-audio`).
+    keep_audio_dir: Option<PathBuf>,
 }
 
 impl StreamingEngine {
@@ -230,6 +240,7 @@ impl StreamingEngine {
             ghost: None,
             continuous: None,
             continuous_http: false,
+            keep_audio_dir: None,
         })
     }
 
@@ -486,9 +497,15 @@ impl StreamingEngine {
             uncommitted: String::new(),
         });
 
+        let audio_path = self
+            .keep_audio_dir
+            .as_deref()
+            .and_then(|dir| keep_segment_audio(dir, &segment.samples));
+
         self.send_event(StreamingEvent::SegmentCompleted {
             text: transcript,
             duration_ms: segment.end_ms - segment.start_ms,
+            audio_path,
         });
 
         self.send_event(StreamingEvent::StatsUpdate {
@@ -634,6 +651,63 @@ impl StreamingEngine {
     }
 }
 
+/// Most kept utterance clips retained in a keep-audio directory.
+pub const KEEP_AUDIO_MAX: usize = 32;
+
+/// Write a kept utterance clip into `dir` and prune the oldest beyond
+/// [`KEEP_AUDIO_MAX`]. Failure only costs the audio: the transcript is still
+/// delivered, without `audio_path`.
+fn keep_segment_audio(dir: &std::path::Path, samples: &[f32]) -> Option<String> {
+    let kept = std::fs::create_dir_all(dir).and_then(|()| {
+        let file = tempfile::Builder::new()
+            .prefix(&format!(
+                "utterance_{}_",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            ))
+            .suffix(".wav")
+            .tempfile_in(dir)?;
+        write_wav(file.path(), samples)?;
+        file.keep().map(|(_, path)| path).map_err(|e| e.error)
+    });
+    match kept {
+        Ok(path) => {
+            prune_kept_audio(dir, KEEP_AUDIO_MAX);
+            Some(path.to_string_lossy().into_owned())
+        }
+        Err(e) => {
+            warn!("Failed to keep utterance audio in {}: {}", dir.display(), e);
+            None
+        }
+    }
+}
+
+fn prune_kept_audio(dir: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut clips: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "wav")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("utterance_"))
+        })
+        .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+        .collect();
+    if clips.len() <= keep {
+        return;
+    }
+    clips.sort();
+    for (_, old) in &clips[..clips.len() - keep] {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
 fn f32_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * 32767.0) as i16
 }
@@ -763,6 +837,14 @@ impl StreamingEngine {
     pub fn set_text_filters(&mut self, filters: TextFilters, language: Option<String>) {
         self.text_filters = filters;
         self.language = language;
+    }
+
+    /// Keep every transcribed utterance as a WAV in `dir` and report its path
+    /// on `SegmentCompleted`, for consumers that want the audio itself (e.g. a
+    /// model that hears speech). At most [`KEEP_AUDIO_MAX`] clips are retained,
+    /// so an absent consumer cannot fill the disk.
+    pub fn set_keep_audio_dir(&mut self, dir: Option<PathBuf>) {
+        self.keep_audio_dir = dir;
     }
 
     /// Update the active guided grammar (bash mode). `None` disables constrained
