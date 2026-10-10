@@ -102,6 +102,24 @@ pub enum StreamingEvent {
     },
 }
 
+/// How many utterances "scratch that" can delete in a row.
+const UNDO_DEPTH: usize = 20;
+
+/// Longest utterance "scratch that" deletes; longer ones are refused rather
+/// than holding Backspace for seconds.
+const UNDO_MAX_CHARS: usize = 1000;
+
+/// A dictated utterance that reached the focused window.
+#[derive(Debug, Clone, PartialEq)]
+struct UndoMark {
+    /// Characters typed for it, including its leading space.
+    chars: usize,
+    /// Length of `accumulated_text` before it.
+    accumulated_len: usize,
+    /// Window it was typed into.
+    window: Option<String>,
+}
+
 /// Statistics for the streaming engine
 #[derive(Debug, Clone, Default)]
 pub struct StreamingStats {
@@ -207,6 +225,13 @@ pub struct StreamingEngine {
     normalize_segments: bool,
     /// Spoken commands (whole utterances only).
     commands: crate::commands::VoiceCommands,
+    /// Re-transcribe each segment in full even when the live stream has a
+    /// final for it.
+    final_correction: bool,
+    /// Utterances "scratch that" can delete, oldest first.
+    undo_marks: Vec<UndoMark>,
+    /// Focused window id (Hyprland address), to keep undo in its window.
+    focus_probe: fn() -> Option<String>,
     /// Decode ghost partials continuously (issue #144) instead of
     /// re-transcribing the growing utterance: over the ears stream when the
     /// server has it, else per tick over HTTP.
@@ -252,6 +277,9 @@ impl StreamingEngine {
             min_mean_probability,
             normalize_segments,
             commands: Default::default(),
+            final_correction: true,
+            undo_marks: Vec::new(),
+            focus_probe: crate::ghost::hyprland_active_address,
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
@@ -390,8 +418,9 @@ impl StreamingEngine {
         }
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
+        let mut streamed_id = None;
         if let Some(ghost) = self.ghost.as_mut() {
-            ghost.stream_end(&segment.samples);
+            streamed_id = ghost.stream_end(&segment.samples);
             // Partials still in flight belong to this finished utterance.
             ghost.next_utterance();
         }
@@ -442,11 +471,26 @@ impl StreamingEngine {
             .health
             .as_ref()
             .map(|h| h.enter(crate::health::Stage::Transcribing));
-        let transcript = match self
-            .whisper_client
-            .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
-            .await
-        {
+        // With final_correction off, the live stream's final is the
+        // committed text: no second decode, and nothing jumps at the end.
+        let live_final = match streamed_id {
+            Some(id) if !self.final_correction && self.guided_grammar.is_none() => {
+                self.ghost_stream_final(id).await
+            }
+            _ => None,
+        };
+        let transcript = match live_final {
+            Some(text) => {
+                info!("Committing the live stream's final");
+                Ok(text)
+            }
+            None => {
+                self.whisper_client
+                    .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
+                    .await
+            }
+        };
+        let transcript = match transcript {
             Ok(text) => text,
             // An empty reply is silence or noise, not a failure.
             Err(crate::whisper::WhisperError::EmptyTranscription) => String::new(),
@@ -500,6 +544,8 @@ impl StreamingEngine {
             }
             None => transcript,
         };
+        let accumulated_before = self.accumulated_text.len();
+        let accumulated_chars_before = self.accumulated_text.chars().count();
         let newly_committed = self.commit_transcript(&transcript);
 
         let typing = self
@@ -512,8 +558,8 @@ impl StreamingEngine {
             if self.typing_suspended {
                 debug!("Typing suspended after earlier failure; ghost cleared, nothing committed");
                 self.ghost_clear();
-            } else {
-                self.ghost_commit(&transcript);
+            } else if let Some(chars) = self.ghost_commit(&transcript) {
+                self.note_typed(chars, accumulated_before);
             }
         } else if self.typing_suspended {
             debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
@@ -542,6 +588,10 @@ impl StreamingEngine {
             let accumulated = &self.accumulated_text;
             let outcome = run_blocking(|| progressive_typing.update(accumulated));
             let delivered = self.handle_typing_outcome(outcome, typing_start);
+            if delivered {
+                let chars = self.accumulated_text.chars().count() - accumulated_chars_before;
+                self.note_typed(chars, accumulated_before);
+            }
             self.send_enter_if_delivered(delivered, typing_start);
         }
 
@@ -608,6 +658,10 @@ impl StreamingEngine {
         // The ghost shows the command word; it must not be committed. It
         // turns the accept colour, then goes before the key is pressed.
         self.ghost_accept(heard).await;
+        if *command == Command::Undo {
+            self.undo_last(heard);
+            return;
+        }
         let start = Instant::now();
         let outcome = match command {
             Command::Enter => run_blocking(TextInput::send_enter),
@@ -616,13 +670,16 @@ impl StreamingEngine {
                 Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
                 None => return,
             },
-            Command::Literal(_) => return,
+            Command::Literal(_) | Command::Undo => return,
         }
         .map(|()| 0)
         .map_err(|e| {
             crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
         });
         if self.handle_typing_outcome(outcome, start) {
+            // Enter submitted (or a key changed) what was typed: nothing
+            // before this point can be scratched any more.
+            self.undo_marks.clear();
             info!("Voice command: {} ({:?})", command.label(), heard);
             crate::desktop::AudioFeedback::beep_done().ok();
             self.send_event(StreamingEvent::VoiceCommand {
@@ -638,6 +695,87 @@ impl StreamingEngine {
         self.send_event(StreamingEvent::SegmentDiscarded {
             reason: reason.to_string(),
         });
+    }
+
+    /// Commit the live stream's final instead of transcribing each VAD
+    /// segment again (`final_correction = false`). Default: true.
+    pub fn set_final_correction(&mut self, enabled: bool) {
+        self.final_correction = enabled;
+    }
+
+    /// Remember a dictated utterance that reached the focused window, so
+    /// "scratch that" can delete it. Typing into another window starts over.
+    fn note_typed(&mut self, chars: usize, accumulated_len: usize) {
+        if chars == 0 {
+            return;
+        }
+        let window = (self.focus_probe)();
+        if self.undo_marks.last().is_some_and(|m| m.window != window) {
+            self.undo_marks.clear();
+        }
+        self.undo_marks.push(UndoMark {
+            chars,
+            accumulated_len,
+            window,
+        });
+        if self.undo_marks.len() > UNDO_DEPTH {
+            self.undo_marks.remove(0);
+        }
+    }
+
+    /// The utterance "scratch that" may delete now, if any. Only in the
+    /// window it was typed into, and only when that window is known.
+    fn undoable(&self) -> Result<UndoMark, &'static str> {
+        let mark = self.undo_marks.last().ok_or("nothing to scratch")?;
+        let window = (self.focus_probe)();
+        if window.is_none() || window != mark.window {
+            return Err("scratch only works in the window it was typed into");
+        }
+        if mark.chars > UNDO_MAX_CHARS {
+            return Err("too long to scratch");
+        }
+        Ok(mark.clone())
+    }
+
+    /// Delete the last dictated utterance with Backspace.
+    fn undo_last(&mut self, heard: &str) {
+        let mark = match self.undoable() {
+            Ok(mark) => mark,
+            Err(reason) => {
+                self.discard(reason);
+                return;
+            }
+        };
+        let start = Instant::now();
+        let chars = mark.chars;
+        let outcome = run_blocking(move || TextInput::send_backspaces(chars))
+            .map(|()| 0)
+            .map_err(|e| {
+                crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
+            });
+        if self.handle_typing_outcome(outcome, start) {
+            self.forget_last_typed(&mark);
+            info!("Voice command: undo, {} characters ({:?})", chars, heard);
+            crate::desktop::AudioFeedback::beep_done().ok();
+            self.send_event(StreamingEvent::VoiceCommand {
+                name: "undo".to_string(),
+                text: heard.to_string(),
+            });
+        }
+    }
+
+    /// The last utterance is gone from the screen: drop it from the text
+    /// ears believes it typed.
+    fn forget_last_typed(&mut self, mark: &UndoMark) {
+        self.undo_marks.pop();
+        self.accumulated_text.truncate(mark.accumulated_len);
+        self.progressive_typing
+            .set_typed_text(&self.accumulated_text);
+        if self.undo_marks.is_empty() && self.accumulated_text.is_empty() {
+            if let Some(ghost) = self.ghost.as_mut() {
+                ghost.committed_any = false;
+            }
+        }
     }
 
     /// Spoken commands to recognize.

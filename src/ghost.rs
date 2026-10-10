@@ -129,8 +129,20 @@ pub fn hyprland_active_class() -> Option<String> {
     active_class_from(cmd)
 }
 
+/// Address of the window Hyprland has focused, if it can be asked in
+/// time. Unlike the class it tells two terminals apart.
+pub fn hyprland_active_address() -> Option<String> {
+    let mut cmd = std::process::Command::new("hyprctl");
+    cmd.args(["activewindow", "-j"]);
+    active_field_from(cmd, "address")
+}
+
 /// Run a Hyprland `activewindow -j` style command and read its `class`.
-fn active_class_from(mut cmd: std::process::Command) -> Option<String> {
+fn active_class_from(cmd: std::process::Command) -> Option<String> {
+    active_field_from(cmd, "class")
+}
+
+fn active_field_from(mut cmd: std::process::Command, field: &str) -> Option<String> {
     cmd.stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let out = crate::desktop::output_bounded(cmd, FOCUS_PROBE_TIMEOUT).ok()?;
@@ -138,7 +150,7 @@ fn active_class_from(mut cmd: std::process::Command) -> Option<String> {
         return None;
     }
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get("class")?.as_str().map(str::to_string)
+    v.get(field)?.as_str().map(str::to_string)
 }
 
 /// Default socket path, shared with the addon: `$XDG_RUNTIME_DIR/ears/ghost.sock`.
