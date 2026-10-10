@@ -87,6 +87,9 @@ class VllmDecoder:
         except (TypeError, AttributeError, KeyError, NotImplementedError, ValueError):
             return None
 
+    # The session may pass the previous decode's open words as `draft`.
+    supports_draft = True
+
     async def __call__(
         self,
         windows: Sequence[np.ndarray],
@@ -94,15 +97,89 @@ class VllmDecoder:
         max_tokens: int,
         *,
         context: str = "",
+        draft: str = "",
     ) -> str:
+        """Greedy continuation of `prefix_text` over `windows`.
+
+        With a `draft` (the open words of the previous decode) the draft is
+        appended to the prompt and checked rather than decoded: prompt
+        logprobs give the model's own top-1 token at every draft position,
+        and the longest run where the draft token *is* the top-1 is exactly
+        what greedy decoding would have produced, so it is kept for the cost
+        of one prefill. A full match keeps the generation that followed it.
+        At the first mismatch the top-1 token is known too; one more request
+        continues from there, its prompt served by the prefix cache.
+        """
+        audio = [np.asarray(w, dtype=np.float32) for w in windows]
+        base = self.prompt_token_ids(context, len(windows), prefix_text)
+        draft_ids = self._draft_ids(base, context, len(windows), prefix_text, draft)
+        if not draft_ids:
+            return (await self._generate(base, audio, max_tokens)).text
+
+        out = await self._generate(base + draft_ids, audio,
+                                   max(1, max_tokens - len(draft_ids)), verify=True)
+        checked = self._check_draft(out, len(draft_ids))
+        if checked is None:  # the draft's logprobs were not computed
+            return (await self._generate(base, audio, max_tokens)).text
+        accepted, top = checked
+        if accepted == len(draft_ids):
+            return self._text(draft_ids + list(out.outputs[0].token_ids))
+        kept = draft_ids[:accepted] + [top]
+        if top in self._stop_ids() or max_tokens - len(kept) < 1:
+            return self._text(kept)
+        rest = await self._generate(base + kept, audio, max_tokens - len(kept))
+        return self._text(kept + list(rest.token_ids))
+
+    def _draft_ids(self, base, context, n_windows, prefix_text, draft) -> list[int]:
+        """Draft tokens appended to `base`, or [] when there is no draft or
+        tokenizing prefix and draft together changes the prefix's tokens."""
+        if not prefix_text or not draft.strip():
+            return []
+        full = self.prompt_token_ids(context, n_windows, prefix_text + draft)
+        if len(full) <= len(base) or full[:len(base)] != base:
+            return []
+        return full[len(base):]
+
+    @staticmethod
+    def _check_draft(out, n_draft: int) -> tuple[int, int] | None:
+        """(accepted draft tokens, top-1 token at the first mismatch).
+
+        None when a draft position's logprobs are missing: with the prefix
+        cache read, positions served from the cache are never computed."""
+        ids = out.prompt_token_ids
+        plp = out.prompt_logprobs
+        start = len(ids) - n_draft
+        if plp is None or start < (out.num_cached_tokens or 0) + 1:
+            return None
+        for i in range(start, len(ids)):
+            entry = plp[i]
+            if not entry or ids[i] not in entry:
+                return None
+            if entry[ids[i]].rank == 1:
+                continue
+            top = next((t for t, lp in entry.items() if lp.rank == 1), None)
+            return None if top is None else (i - start, top)
+        return n_draft, -1
+
+    def _stop_ids(self) -> set[int]:
+        ids = {self.tokenizer.eos_token_id}
+        for tok in ("<|im_end|>", "<|endoftext|>"):
+            tid = self.tokenizer.convert_tokens_to_ids(tok)
+            if isinstance(tid, int):
+                ids.add(tid)
+        return ids - {None}
+
+    def _text(self, token_ids: list[int]) -> str:
+        return self.tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    async def _generate(self, token_ids, audio, max_tokens, *, verify=False):
+        """One engine request. Returns the CompletionOutput, or with `verify`
+        the RequestOutput (prompt logprobs and cached-token count needed)."""
         from vllm.inputs import TokensPrompt
         from vllm.renderers.inputs.preprocess import parse_model_prompt
         from vllm.sampling_params import SamplingParams
 
-        prompt = TokensPrompt(
-            prompt_token_ids=self.prompt_token_ids(context, len(windows), prefix_text),
-            multi_modal_data={"audio": [np.asarray(w, dtype=np.float32) for w in windows]},
-        )
+        prompt = TokensPrompt(prompt_token_ids=token_ids, multi_modal_data={"audio": audio})
         parsed = parse_model_prompt(self.model_config, prompt)
         (engine_input,) = await self.renderer.render_cmpl_async([parsed])
 
@@ -114,9 +191,22 @@ class VllmDecoder:
                 f"prompt of {prompt_len} tokens leaves no room in "
                 f"max_model_len={self.max_model_len}"
             )
-        params = SamplingParams.from_optional(
-            temperature=0.0, max_tokens=min(max_tokens, budget)
-        )
+        if verify:
+            # Top-1 at every computed prompt position. vLLM skips reading the
+            # prefix cache for prompt logprobs unless told otherwise; the draft
+            # follows the open audio window, so its positions are recomputed
+            # anyway and the cached part is only skipped, never misread
+            # (`_check_draft`). No detokenization: rows of cached positions
+            # are left unfilled, and the caller decodes the token ids itself.
+            params = SamplingParams.from_optional(
+                temperature=0.0, max_tokens=min(max_tokens, budget),
+                prompt_logprobs=1, detokenize=False,
+            )
+            params.skip_reading_prefix_cache = False
+        else:
+            params = SamplingParams.from_optional(
+                temperature=0.0, max_tokens=min(max_tokens, budget)
+            )
 
         request_id = f"ears-stream-{uuid.uuid4().hex}"
         last = None
@@ -128,7 +218,7 @@ class VllmDecoder:
             raise RuntimeError("engine returned no output")
         if last.outputs[0].finish_reason == "error":
             raise RuntimeError("engine reported an internal error")
-        return last.outputs[0].text
+        return last if verify else last.outputs[0]
 
 
 __all__ = ["VllmDecoder", "PromptTooLong", "is_qwen3_asr", "default_max_audio_ms", "SAMPLE_RATE"]

@@ -68,6 +68,8 @@ class Utterance:
     header: str | None = None
     candidate: str | None = None  # language detected last while unpinned
     stable: str = ""
+    verify_draft: bool = False  # check the open words instead of re-decoding them
+    draft: str = ""  # open words of the last decode, checked by the next one
     pcm: bytearray = field(default_factory=bytearray)  # PCM16 LE, capped
     odd: bytes = b""  # trailing odd byte kept for the next frame
     closed: list[np.ndarray] = field(default_factory=list)  # cached windows
@@ -219,6 +221,9 @@ class StreamSession:
             or min_step_ms > self.max_audio_ms
         ):
             raise BadRequest("min_step_ms must be a number in [0, max_audio_ms]", uid)
+        verify_draft = msg.get("verify_draft", False)
+        if not isinstance(verify_draft, bool):
+            raise BadRequest("verify_draft must be a boolean", uid)
 
         # A start while another utterance is active supersedes it silently.
         self._drop_active()
@@ -232,6 +237,7 @@ class StreamSession:
             min_step=max(1, int(min_step_ms * SAMPLE_RATE / 1000)),
             max_samples=self._max_samples,
             header=header_for(name) if name else None,
+            verify_draft=verify_draft,
         )
 
     def _end(self, msg: dict) -> None:
@@ -305,9 +311,13 @@ class StreamSession:
             # Forced only once text has settled: a header forced onto audio
             # with no speech yet makes the model copy the context verbatim.
             prefix = f"{utt.header}{utt.stable}" if utt.header and utt.stable else ""
+            extra = {}
+            if (utt.verify_draft and prefix and utt.draft
+                    and getattr(self._decode, "supports_draft", False)):
+                extra["draft"] = utt.draft
             try:
                 continuation = await self._decode(
-                    windows, prefix, max_tokens_for(n), context=utt.context
+                    windows, prefix, max_tokens_for(n), context=utt.context, **extra
                 )
             except asyncio.CancelledError:
                 raise
@@ -413,6 +423,10 @@ class StreamSession:
             settled = settled_prefix(hypothesis, utt.rollback_words)
             if len(settled) > len(utt.stable) and settled.startswith(utt.stable):
                 utt.stable = settled
+        # What the next forced decode would most likely write after the
+        # settled text; it only saves work, the decoder checks every token.
+        utt.draft = (hypothesis[len(utt.stable):]
+                     if settles and utt.stable and hypothesis.startswith(utt.stable) else "")
         return hypothesis.rstrip()
 
     async def _error(self, code: str, message: str, utterance: int | None) -> None:

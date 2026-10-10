@@ -562,3 +562,58 @@ def test_pinned_language_is_not_forced_onto_silence():
         texts = [p["text"] for p in h.of("partial")]
         assert texts == ["Hello there friend", "Hello there my friend."]
     run(go())
+
+
+class DraftDecoder(FakeDecoder):
+    """FakeDecoder that also takes the previous decode's open words."""
+
+    supports_draft = True
+
+    async def __call__(self, windows, prefix_text, max_tokens, *, context, draft=None):
+        out = await super().__call__(windows, prefix_text, max_tokens, context=context)
+        self.calls[-1]["draft"] = draft
+        return out
+
+
+def test_open_words_are_offered_as_draft_to_forced_decodes():
+    async def go():
+        d = DraftDecoder("language English<asr_text>Hello there friend", " my friend.",
+                         " friend. Bye.")
+        h = Harness(d)
+        await h.text(type="start", utterance=7, language="en", rollback_words=1,
+                     verify_draft=True)
+        await h.audio(0.3)
+        await h.audio(0.3)
+        await h.text(type="end", utterance=7)
+        # Unforced first decode: no draft. Then the words left open each time.
+        assert [c["draft"] for c in d.calls] == [None, " friend", " friend."]
+        assert [p["text"] for p in h.of("partial")] == [
+            "Hello there friend", "Hello there my friend."]
+        (final,) = h.of("final")
+        assert final["text"] == "Hello there my friend. Bye."
+    run(go())
+
+
+def test_decoder_without_draft_support_gets_no_draft():
+    async def go():
+        d = FakeDecoder("language English<asr_text>Hello there friend", " my friend.")
+        h = Harness(d)
+        await h.text(type="start", utterance=1, language="en", rollback_words=1,
+                     verify_draft=True)
+        await h.audio(0.3)
+        await h.audio(0.3)  # FakeDecoder.__call__ would reject a draft kwarg
+        assert not h.of("error")
+    run(go())
+
+
+def test_draft_is_opt_in():
+    async def go():
+        d = DraftDecoder("language English<asr_text>Hello there friend", " my friend.")
+        h = Harness(d)
+        await h.text(type="start", utterance=1, language="en", rollback_words=1)
+        await h.audio(0.3)
+        await h.audio(0.3)
+        assert [c["draft"] for c in d.calls] == [None, None]
+        await h.text(type="start", utterance=2, verify_draft="yes")
+        assert h.of("error")[-1]["code"] == "bad_request"
+    run(go())

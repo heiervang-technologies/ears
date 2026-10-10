@@ -90,6 +90,12 @@ Begins utterance `utterance` (client-chosen, increasing). All fields but
 - `rollback_words`: default 3.
 - `min_step_ms`: decode only once at least this much new audio arrived since
   the last decode (default 150).
+- `verify_draft`: default false. When true, each forced decode appends the
+  previous decode's open words to the prompt and checks them against the
+  model's own top-1 tokens (prompt logprobs) instead of decoding them again
+  token by token. Accepted tokens are exactly what greedy decoding would
+  write, so the text is the same; a decode usually generates 1-2 tokens
+  instead of 5-6. Servers that cannot verify ignore it.
 
 A `start` while another utterance is active cancels the active one (no
 `final` for it).

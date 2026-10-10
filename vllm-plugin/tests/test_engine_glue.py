@@ -123,3 +123,121 @@ def test_token_spans_use_utf8_and_keep_seam_tokens_mutable():
     assert all(t["state"] == "mutable" for t in d.transcript_tokens("a你 bc", 0))
     d.tokenizer = Tokenizer()  # tokenizer without offsets: no invented word tokens
     assert d.transcript_tokens("abc", 2) is None
+
+
+# --- draft verification -----------------------------------------------------
+#
+# A character-level fake model: one token per character, and greedy decoding
+# writes TRUTH after the `<asr_text>` tag. Its top-1 at any assistant position
+# is TRUTH's next character while the forced text still agrees with TRUTH.
+
+EOS = 0
+TRUTH = " here is the plan."
+PREFIX = "language English<asr_text>Okay, so"
+
+
+class CharTokenizer(Tokenizer):
+    eos_token_id = EOS
+
+    def decode(self, ids, skip_special_tokens=True):
+        return "".join(chr(i) for i in ids if i != EOS)
+
+    def convert_tokens_to_ids(self, tok):
+        return None
+
+
+def greedy_after(text):
+    """(top-1 next token, full greedy continuation) after prompt `text`."""
+    if "<asr_text>Okay, so" not in text:
+        return EOS, [EOS]
+    answer = text.split("<asr_text>Okay, so", 1)[1]
+    if not TRUTH.startswith(answer):
+        return EOS, []
+    rest = TRUTH[len(answer):]
+    return (ord(rest[0]) if rest else EOS), [ord(c) for c in rest] + [EOS]
+
+
+def draft_engine(num_cached=0):
+    calls = []
+
+    class Renderer:
+        def get_tokenizer(self):
+            return CharTokenizer()
+
+        async def render_cmpl_async(self, prompts):
+            return [{"prompt_token_ids": list(prompts[0]["prompt_token_ids"])}]
+
+    async def generate(engine_input, params, request_id):
+        ids = engine_input["prompt_token_ids"]
+        calls.append((ids, params))
+        _, gen = greedy_after("".join(map(chr, ids)))
+        plp = None
+        if getattr(params, "prompt_logprobs", None):
+            start = "".join(map(chr, ids)).index("<asr_text>Okay, so") + len("<asr_text>Okay, so")
+            plp = [None]
+            for i in range(1, len(ids)):
+                if i < start:
+                    plp.append({ids[i]: SimpleNamespace(rank=1)})
+                    continue
+                top, _ = greedy_after("".join(map(chr, ids[:i])))
+                entry = {top: SimpleNamespace(rank=1)}
+                if ids[i] != top:
+                    entry[ids[i]] = SimpleNamespace(rank=2)
+                plp.append(entry)
+        yield SimpleNamespace(
+            prompt_token_ids=ids, prompt_logprobs=plp, num_cached_tokens=num_cached,
+            outputs=[SimpleNamespace(text="".join(chr(t) for t in gen if t != EOS),
+                                     token_ids=gen, finish_reason="stop")])
+
+    model_config = SimpleNamespace(
+        max_model_len=4096, model="Qwen/Qwen3-ASR-1.7B",
+        hf_config=SimpleNamespace(architectures=["Qwen3ASRForConditionalGeneration"]))
+    return SimpleNamespace(model_config=model_config, renderer=Renderer(),
+                           generate=generate), calls
+
+
+def decode_with_draft(draft, num_cached=0):
+    client, calls = draft_engine(num_cached)
+    d = VllmDecoder(client)
+    out = asyncio.run(d([np.zeros(1600, np.float32)], PREFIX, 100, draft=draft))
+    return out, calls
+
+
+def test_correct_draft_is_kept_and_generation_continues_in_one_request(fake_vllm):
+    out, calls = decode_with_draft(" here is")
+    assert out == TRUTH
+    ((ids, params),) = calls
+    assert "".join(map(chr, ids)).endswith(PREFIX + " here is")
+    assert params.prompt_logprobs == 1 and params.detokenize is False
+    assert params.skip_reading_prefix_cache is False
+    assert params.max_tokens == 100 - len(" here is")
+
+
+def test_wrong_draft_continues_from_the_models_own_token(fake_vllm):
+    out, calls = decode_with_draft(" here as the")
+    assert out == TRUTH  # identical to decoding without a draft
+    (_, verify), (ids, plain) = calls
+    # Kept " here " (accepted) + "i" (top-1 at the mismatch), then generated.
+    assert "".join(map(chr, ids)).endswith(PREFIX + " here i")
+    assert getattr(plain, "prompt_logprobs", None) is None
+    assert plain.max_tokens == 100 - len(" here i")
+
+
+def test_draft_rejected_by_end_of_sequence_needs_no_second_request(fake_vllm):
+    out, calls = decode_with_draft(" here is the plan. And")
+    assert out == TRUTH
+    assert len(calls) == 1
+
+
+def test_draft_positions_served_from_cache_fall_back_to_plain_decode(fake_vllm):
+    out, calls = decode_with_draft(" here is", num_cached=10_000)
+    assert out == TRUTH
+    (_, verify), (ids, plain) = calls
+    assert "".join(map(chr, ids)).endswith(PREFIX)  # no draft in the retry
+
+
+def test_no_draft_without_forced_prefix(fake_vllm):
+    client, calls = draft_engine()
+    asyncio.run(VllmDecoder(client)([np.zeros(1600, np.float32)], "", 100, draft=" hi"))
+    ((ids, params),) = calls
+    assert getattr(params, "prompt_logprobs", None) is None

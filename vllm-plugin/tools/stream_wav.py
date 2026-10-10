@@ -59,6 +59,8 @@ async def run(args) -> int:
 
     start = {"type": "start", "utterance": args.utterance,
              "rollback_words": args.rollback_words, "min_step_ms": args.min_step_ms}
+    if args.verify_draft:
+        start["verify_draft"] = True
     if args.language:
         start["language"] = args.language
     if args.context:
@@ -144,6 +146,8 @@ def main() -> int:
     p.add_argument("--context", help="context-biasing text")
     p.add_argument("--rollback-words", type=int, default=3)
     p.add_argument("--min-step-ms", type=float, default=150)
+    p.add_argument("--verify-draft", action="store_true",
+                   help="check the previous open words instead of re-decoding them")
     p.add_argument("--chunk-ms", type=float, default=50, help="audio per binary frame")
     p.add_argument("--speed", type=float, default=1.0, help="1 = real time, 0 = as fast as possible")
     p.add_argument("--utterance", type=int, default=1)
