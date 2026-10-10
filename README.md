@@ -422,6 +422,46 @@ Frozen means fixed during live decoding; full final correction can replace
 it. See [token freeze tracking](docs/TOKEN_FREEZE.md) for the guarantees,
 visualization, and protocol fields.
 
+### Spoken commands (VAD)
+
+In VAD mode a whole utterance can be a command instead of text:
+
+```toml
+[commands]
+enabled = true
+enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"])
+new_line = ["new line"]   # Shift+Enter: a new line without sending
+literal = ["literal"]     # "Literal over." types "over." instead
+accept_ms = 200           # how long the accepted command shows (0: off)
+
+[commands.keys]           # any phrase to any key combination
+background = "ctrl+b"     # "Background." on its own presses Ctrl+B
+"go back" = "alt+left"
+```
+
+Key names: `ctrl`, `shift`, `alt`, `super`, `a`-`z`, `0`-`9`, `f1`-`f12`,
+`enter`, `tab`, `esc`, `space`, `backspace`, `delete`, the arrows (`up`,
+`down`, `left`, `right`), `home`, `end`, `pageup` and `pagedown`, joined
+with `+`. A phrase with a combination ears does not understand stays
+ordinary dictation.
+
+A command counts only when it is the entire utterance, said on its own
+between pauses. "It's over now" is ordinary text. Case and punctuation are
+ignored. With ghost text on, a command word turns the accept colour (the
+ghost's `frozen_color`) as soon as the live decoder hears it alone, and stays
+that colour for `accept_ms` before its key is pressed. If you keep talking it
+turns back into ordinary ghost text. The ghost is cleared rather than
+committed, the "done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
+`SegmentCompleted`, so a command is never forwarded to an agent as text.
+Commands are off in bash mode and when typing is off.
+
+Pick words you would never say alone as content. Rare real words work best:
+in tests on Qwen3-ASR, "Transmit", "Execute", "Over" and "Enter" were always
+recognized, while "Send" once came back as "Send it" and an invented word
+("Kazam") always came back as a real one ("Chasm"). Avoid "yes", "okay" and
+"go": they are real answers to agents, and "Okay." is also what the model
+writes for silence.
+
 ### All Commands
 
 ```
@@ -473,6 +513,10 @@ Place custom WAV files in `~/.local/share/ears-sounds/`:
 - `start.wav` - Recording started
 - `done.wav` - Transcription complete
 - `bell.wav` - Error occurred
+- `vad_discard.wav` - VAD heard speech but typed nothing (two low blips).
+  The TUI log says why: not speech-like enough, no words heard, filtered
+  out, or transcription failed. A candidate that never got the second VAD
+  note was not confirmed and stays silent. An empty WAV mutes this cue.
 
 Falls back to embedded sounds if not found. Embedded sounds are cached by content
 in `$XDG_CACHE_HOME/ears/sounds` (normally `~/.cache/ears/sounds`), so restarting

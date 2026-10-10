@@ -789,7 +789,7 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
         .mount(&whisper)
         .await;
     let dir = tempfile::tempdir().unwrap();
-    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
     engine.min_mean_probability = 0.6;
 
     // Barely over the start threshold all the way: passes the gate, but its
@@ -802,4 +802,144 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
         .await
         .unwrap();
     assert!(engine.accumulated_text.is_empty());
+    assert!(
+        drain(&mut rx).contains(&"SegmentDiscarded { reason: \"not speech-like enough\" }".into()),
+        "a dropped segment is reported, not silent"
+    );
+}
+
+#[tokio::test]
+async fn test_segment_with_no_words_is_reported_as_discarded() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    let events = drain(&mut rx);
+    assert!(
+        events.contains(&"SegmentDiscarded { reason: \"no words heard\" }".into()),
+        "{events:?}"
+    );
+}
+
+async fn command_engine(
+    heard: &str,
+) -> (
+    StreamingEngine,
+    mpsc::UnboundedReceiver<StreamingEvent>,
+    wiremock::MockServer,
+    tempfile::TempDir,
+) {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription(heard))
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    // Never drive the real keyboard from a test.
+    engine.typing_mode = TypingMode::None;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        enter: vec!["over".into()],
+        ..Default::default()
+    });
+    (engine, rx, whisper, dir)
+}
+
+#[tokio::test]
+async fn test_command_utterance_is_not_dictation() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Over.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert!(engine.accumulated_text.is_empty(), "a command is not typed");
+    let events = drain(&mut rx);
+    assert!(
+        !events.iter().any(|e| e.starts_with("SegmentCompleted")),
+        "a command is never published as dictation: {events:?}"
+    );
+    assert!(
+        events.contains(&"VoiceCommand { name: \"enter\", text: \"Over.\" }".into()),
+        "with typing off the command is still published: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_command_word_inside_a_sentence_is_dictation() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("It's over now.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(engine.accumulated_text.trim(), "It's over now.");
+    assert!(drain(&mut rx)
+        .iter()
+        .any(|e| e.starts_with("SegmentCompleted")));
+}
+
+#[tokio::test]
+async fn test_literal_types_the_command_word() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Literal over.").await;
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    drain(&mut rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(engine.accumulated_text.trim(), "over.");
+}
+
+fn over_commands(accept_ms: u64) -> crate::commands::VoiceCommands {
+    crate::commands::VoiceCommands {
+        enabled: true,
+        enter: vec!["over".into()],
+        accept_ms,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_ghost_command_partial_is_drawn_in_accept_colour() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(over_commands(200));
+    feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+    let ghost = engine.ghost.as_mut().unwrap();
+    let current = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::plain(current, Ok("Over.".into())))
+        .unwrap();
+    ghost
+        .partial_tx
+        .send(Partial::plain(current, Ok("Over and out".into())))
+        .unwrap();
+    engine.ghost_poll_partials();
+    assert_eq!(next_cmd(&lines), "F 5 Over.", "whole command is frozen");
+    assert_eq!(next_cmd(&lines), "P Over and out", "dictation is not");
+}
+
+#[tokio::test]
+async fn test_ghost_accept_flashes_then_clears_without_committing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(over_commands(1));
+    engine.ghost_accept("Over.").await;
+    assert_eq!(next_cmd(&lines), "F 5 Over.");
+    assert_eq!(next_cmd(&lines), "X");
+    // With no hold, the ghost just goes.
+    engine.set_commands(over_commands(0));
+    engine.ghost.as_mut().unwrap().showing = true;
+    engine.ghost_accept("Over.").await;
+    assert_eq!(next_cmd(&lines), "X");
+    assert!(lines.try_iter().all(|l| l == "S"), "nothing committed");
 }

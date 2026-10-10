@@ -469,6 +469,7 @@ impl StreamingEngine {
         let filters = self.text_filters.clone();
         let language = self.language.clone();
         let bash = self.guided_grammar.is_some();
+        let commands = (!bash && self.commands.enabled).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
         self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
@@ -520,7 +521,15 @@ impl StreamingEngine {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
             let shown = ghost.spaced(&text);
-            let frozen_bytes = if frozen_bytes > 0 {
+            let command = commands
+                .as_ref()
+                .and_then(|c| c.parse(&text))
+                .is_some_and(|c| c.presses_key());
+            // A command word so far is drawn whole in the accept (frozen)
+            // colour, so you see it will press its key, not be typed.
+            let frozen_bytes = if command {
+                shown.len()
+            } else if frozen_bytes > 0 {
                 frozen_bytes + shown.len() - text.len()
             } else {
                 0
@@ -673,6 +682,24 @@ impl StreamingEngine {
                 );
             }
         }
+    }
+
+    /// Show a recognized command in the accept (frozen) colour for
+    /// `accept_ms`, then remove it. Nothing is committed.
+    pub(super) async fn ghost_accept(&mut self, heard: &str) {
+        let hold = Duration::from_millis(self.commands.accept_ms);
+        if let Some(ghost) = self.ghost.as_mut() {
+            if !hold.is_zero() {
+                let shown = ghost.spaced(heard.trim());
+                let r = ghost.client.preedit_frozen(&shown, shown.len());
+                ghost.note_result(&r);
+                if r.is_ok() {
+                    ghost.showing = true;
+                    tokio::time::sleep(hold).await;
+                }
+            }
+        }
+        self.ghost_clear();
     }
 
     /// Remove the ghost (utterance produced nothing to commit).

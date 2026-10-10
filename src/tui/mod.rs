@@ -160,6 +160,7 @@ pub async fn start_vad_pipeline(
     engine.set_event_sender(event_tx);
     engine.set_health(health.clone());
     engine.set_continuous(continuous);
+    engine.set_commands(config.commands.clone());
 
     // Shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

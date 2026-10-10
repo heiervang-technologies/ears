@@ -60,6 +60,12 @@ pub enum StreamingEvent {
     /// that reaction here. Carries no audio cue.
     SpeechRejected,
 
+    /// A confirmed speech segment produced nothing to type: dropped as
+    /// unlikely speech, heard as silence, filtered out, or failed to
+    /// transcribe. `reason` says which. Consumers play the discard cue so
+    /// an utterance never vanishes silently.
+    SegmentDiscarded { reason: String },
+
     /// Audio capture ended without being asked to (device unplugged,
     /// PipeWire restart, pw-record exit). No further audio will arrive; the
     /// owner must stop claiming to listen.
@@ -80,6 +86,11 @@ pub enum StreamingEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         audio_path: Option<String>,
     },
+
+    /// A whole utterance was a spoken command (see `crate::commands`) and
+    /// was executed instead of typed. `text` is what was heard. No
+    /// `SegmentCompleted` follows: the words are not dictation.
+    VoiceCommand { name: String, text: String },
 
     /// Error occurred
     Error(String),
@@ -194,6 +205,8 @@ pub struct StreamingEngine {
     min_mean_probability: f32,
     /// Level each segment before its final transcription.
     normalize_segments: bool,
+    /// Spoken commands (whole utterances only).
+    commands: crate::commands::VoiceCommands,
     /// Decode ghost partials continuously (issue #144) instead of
     /// re-transcribing the growing utterance: over the ears stream when the
     /// server has it, else per tick over HTTP.
@@ -238,6 +251,7 @@ impl StreamingEngine {
             health: None,
             min_mean_probability,
             normalize_segments,
+            commands: Default::default(),
             was_probably_speaking: false,
             auto_enter: false,
             typing_mode: TypingMode::Auto,
@@ -371,6 +385,7 @@ impl StreamingEngine {
                 ghost.next_utterance();
             }
             self.ghost_clear();
+            self.discard("not speech-like enough");
             return Ok(());
         }
         // Skip segments with no audio data — sending an empty WAV crashes
@@ -383,6 +398,7 @@ impl StreamingEngine {
         if segment.samples.is_empty() {
             debug!("Skipping empty speech segment");
             self.ghost_clear();
+            self.discard("no audio");
             return Ok(());
         }
 
@@ -432,10 +448,13 @@ impl StreamingEngine {
             .await
         {
             Ok(text) => text,
+            // An empty reply is silence or noise, not a failure.
+            Err(crate::whisper::WhisperError::EmptyTranscription) => String::new(),
             Err(e) => {
                 warn!("Transcription error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("Transcription error: {}", e)));
                 self.ghost_clear();
+                self.discard("transcription failed");
                 return Err(StreamingEngineError::TranscriptionError(e.to_string()));
             }
         };
@@ -449,6 +468,7 @@ impl StreamingEngine {
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");
             self.ghost_clear();
+            self.discard("no words heard");
             return Ok(());
         }
 
@@ -464,12 +484,22 @@ impl StreamingEngine {
         if transcript.is_empty() {
             debug!("Transcript filtered out (empty after filters)");
             self.ghost_clear();
+            self.discard("filtered out");
             return Ok(());
         }
 
         info!("Transcribed: {}", transcript);
 
         let guided_command = self.guided_grammar.is_some();
+        let transcript = match self.commands.parse(&transcript) {
+            _ if guided_command => transcript,
+            Some(crate::commands::Command::Literal(rest)) => rest,
+            Some(command) => {
+                self.run_command(&command, &transcript).await;
+                return Ok(());
+            }
+            None => transcript,
+        };
         let newly_committed = self.commit_transcript(&transcript);
 
         let typing = self
@@ -556,6 +586,63 @@ impl StreamingEngine {
         );
 
         Ok(())
+    }
+
+    /// Execute a spoken command in place of typing the utterance.
+    async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
+        use crate::commands::Command;
+        if self.typing_mode == TypingMode::None || self.typing_suspended {
+            // No key is pressed, but the command is still published, so
+            // socket consumers (talking-stick, fay) never lose an utterance.
+            self.ghost_clear();
+            info!(
+                "Voice command {} not pressed: typing is off",
+                command.label()
+            );
+            self.send_event(StreamingEvent::VoiceCommand {
+                name: command.label(),
+                text: heard.to_string(),
+            });
+            return;
+        }
+        // The ghost shows the command word; it must not be committed. It
+        // turns the accept colour, then goes before the key is pressed.
+        self.ghost_accept(heard).await;
+        let start = Instant::now();
+        let outcome = match command {
+            Command::Enter => run_blocking(TextInput::send_enter),
+            Command::NewLine => run_blocking(TextInput::send_new_line),
+            Command::Keys(combo) => match crate::commands::keycodes(combo) {
+                Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
+                None => return,
+            },
+            Command::Literal(_) => return,
+        }
+        .map(|()| 0)
+        .map_err(|e| {
+            crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
+        });
+        if self.handle_typing_outcome(outcome, start) {
+            info!("Voice command: {} ({:?})", command.label(), heard);
+            crate::desktop::AudioFeedback::beep_done().ok();
+            self.send_event(StreamingEvent::VoiceCommand {
+                name: command.label(),
+                text: heard.to_string(),
+            });
+        }
+    }
+
+    /// Report a segment that typed nothing.
+    fn discard(&self, reason: &str) {
+        info!("Segment discarded: {}", reason);
+        self.send_event(StreamingEvent::SegmentDiscarded {
+            reason: reason.to_string(),
+        });
+    }
+
+    /// Spoken commands to recognize.
+    pub fn set_commands(&mut self, commands: crate::commands::VoiceCommands) {
+        self.commands = commands;
     }
 
     /// Commit a completed VAD transcript according to the active mode.

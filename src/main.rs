@@ -533,6 +533,10 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                 ears::streaming_engine::StreamingEvent::SpeechRejected => {
                     event_ducker.on_speech_rejected();
                 }
+                ears::streaming_engine::StreamingEvent::SegmentDiscarded { reason } => {
+                    tracing::info!("Nothing typed: {}", reason);
+                    AudioFeedback::beep_vad_discard().ok();
+                }
                 ears::streaming_engine::StreamingEvent::CaptureStopped { reason } => {
                     tracing::warn!("Microphone capture stopped: {}", reason);
                     eprintln!("Microphone capture stopped: {}", reason);

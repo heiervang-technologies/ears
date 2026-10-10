@@ -1588,6 +1588,13 @@ impl App {
                     crate::desktop::TextInput::copy_to_clipboard(&text);
                 }
             }
+            StreamingEvent::SegmentDiscarded { reason } => {
+                crate::desktop::AudioFeedback::beep_vad_discard().ok();
+                self.add_log(&format!("Nothing typed: {}", reason));
+            }
+            StreamingEvent::VoiceCommand { name, text } => {
+                self.add_log(&format!("Voice command: {} (\"{}\")", name, text));
+            }
             StreamingEvent::StatsUpdate {
                 segments_processed,
                 avg_latency_ms,
