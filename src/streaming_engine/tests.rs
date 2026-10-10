@@ -55,8 +55,8 @@ fn test_rejected_candidate_emits_speech_rejected() {
     feed(&mut engine, &[0.9]);
     assert_eq!(drain(&mut rx), vec!["SpeechProbable"]);
 
-    // Dip before confirmation: the candidate is rejected.
-    feed(&mut engine, &[0.0]);
+    // Silence outlasting the dip tolerance: the candidate is rejected.
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
     assert_eq!(drain(&mut rx), vec!["SpeechRejected"]);
 
     // Nothing further while silent.
@@ -78,7 +78,7 @@ fn test_confirmed_speech_emits_started_and_ended_not_rejected() {
 #[test]
 fn test_rejected_then_confirmed_sequence() {
     let (mut engine, mut rx) = seq_engine();
-    feed(&mut engine, &[0.9, 0.9, 0.0, 0.0]);
+    feed(&mut engine, &[0.9, 0.9, 0.0, 0.0, 0.0, 0.0]);
     assert_eq!(drain(&mut rx), vec!["SpeechProbable", "SpeechRejected"]);
 
     let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
@@ -228,7 +228,7 @@ fn test_ghost_rejected_candidate_clears_visible_ghost() {
     // Simulate a visible partial, then a rejected candidate.
     engine.ghost.as_mut().unwrap().showing = true;
     feed(&mut engine, &[0.9]);
-    feed(&mut engine, &[0.0]);
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
     assert_eq!(next_cmd(&lines), "X");
     assert!(!engine.ghost.as_ref().unwrap().showing);
 }
@@ -777,4 +777,29 @@ async fn test_without_keep_audio_no_audio_path_and_no_clip() {
     }
     assert!(seen);
     assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn test_unlikely_segment_is_dropped_before_transcription() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Thank you."))
+        .expect(0)
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.min_mean_probability = 0.6;
+
+    // Barely over the start threshold all the way: passes the gate, but its
+    // mean (0.55) is below the floor.
+    let segs = feed(&mut engine, &[0.55, 0.55, 0.55, 0.0, 0.0, 0.0]);
+    assert_eq!(segs.len(), 1);
+    assert!((segs[0].mean_probability - 0.55).abs() < 1e-6);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    assert!(engine.accumulated_text.is_empty());
 }

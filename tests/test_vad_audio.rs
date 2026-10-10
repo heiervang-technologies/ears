@@ -288,6 +288,9 @@ fn test_vad_settings_toml_roundtrip() {
         duck_enabled: true,
         duck_percent: 60,
         ghost: true,
+        end_threshold: Some(0.3),
+        auto_gain: false,
+        min_mean_probability: 0.6,
     };
 
     let toml_str = toml::to_string_pretty(&settings).unwrap();
@@ -298,6 +301,9 @@ fn test_vad_settings_toml_roundtrip() {
     assert_eq!(loaded.max_silence_duration_ms, 500);
     assert_eq!(loaded.pre_speech_buffer_ms, 300);
     assert!(loaded.ghost);
+    assert_eq!(loaded.end_threshold, Some(0.3));
+    assert!(!loaded.auto_gain);
+    assert_eq!(loaded.min_mean_probability, 0.6);
 }
 
 #[test]

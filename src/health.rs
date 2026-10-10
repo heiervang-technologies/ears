@@ -60,6 +60,14 @@ pub struct HealthSnapshot {
     pub rejected_candidates: u64,
     pub last_rejected_frames: usize,
     pub last_rejection_probability: f32,
+    /// Highest probability the last rejected candidate reached.
+    pub last_rejection_peak: f32,
+    /// Speech-level gain currently applied before detection (1.0 = none).
+    pub gain: f32,
+    /// Mean probability over the voiced span of the last segment.
+    pub last_segment_mean_probability: f32,
+    /// Segments dropped as too unlikely to be speech.
+    pub dropped_segments: u64,
     pub speaking: bool,
     pub capture_error: Option<String>,
     pub typing_paused: bool,
@@ -144,12 +152,14 @@ impl PipelineHealth {
         threshold: f32,
         candidate_frames: usize,
         speaking: bool,
-        rejected: bool,
+        rejected_peak: Option<f32>,
     ) {
+        let rejected = rejected_peak.is_some();
         self.update(|s| {
-            if rejected {
+            if let Some(peak) = rejected_peak {
                 s.last_rejected_frames = s.candidate_frames;
                 s.last_rejection_probability = probability;
+                s.last_rejection_peak = peak;
             }
             s.detector_last_ms = Some(monotonic_ms());
             s.processed_frames += 1;
@@ -158,6 +168,18 @@ impl PipelineHealth {
             s.candidate_frames = candidate_frames;
             s.speaking = speaking;
             s.rejected_candidates += u64::from(rejected);
+        });
+    }
+
+    pub fn gain(&self, gain: f32) {
+        self.update(|s| s.gain = gain);
+    }
+
+    /// A finished segment's mean probability, and whether it was dropped.
+    pub fn segment(&self, mean_probability: f32, dropped: bool) {
+        self.update(|s| {
+            s.last_segment_mean_probability = mean_probability;
+            s.dropped_segments += u64::from(dropped);
         });
     }
 
@@ -280,6 +302,10 @@ impl HealthMonitor {
             rejected_candidates: 0,
             last_rejected_frames: 0,
             last_rejection_probability: 0.0,
+            last_rejection_peak: 0.0,
+            gain: 1.0,
+            last_segment_mean_probability: 0.0,
+            dropped_segments: 0,
             speaking: false,
             capture_error: None,
             typing_paused: false,
@@ -393,13 +419,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let monitor = HealthMonitor::start(dir.path()).unwrap();
         let health = monitor.health();
-        health.frame(0.8, 0.5, 1, false, false);
-        health.frame(0.2, 0.5, 0, false, true);
+        health.frame(0.8, 0.5, 1, false, None);
+        health.frame(0.2, 0.5, 0, false, Some(0.8));
         let snap = health.snapshot();
         assert_eq!(snap.processed_frames, 2);
         assert_eq!(snap.rejected_candidates, 1);
         assert_eq!(snap.last_rejected_frames, 1);
         assert_eq!(snap.last_rejection_probability, 0.2);
+        assert_eq!(snap.last_rejection_peak, 0.8);
         assert_eq!(snap.probability, 0.2);
     }
 
@@ -418,7 +445,7 @@ mod tests {
             Some("audio backlog")
         );
         for _ in 0..78 {
-            health.frame(0.0, 0.5, 0, false, false);
+            health.frame(0.0, 0.5, 0, false, None);
         }
         assert_eq!(health.snapshot().audio_backlog_ms, 4);
     }

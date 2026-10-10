@@ -124,6 +124,25 @@ remove_punctuation = false
 max_silence_duration_ms = 1200
 ```
 
+VAD sensitivity: once a word has started, speech continues down to
+`end_threshold` (default `speech_threshold - 0.15`), so soft syllables and
+short dips do not throw away the start of an utterance or end it early.
+`auto_gain = true` (the default) levels quiet speech before detection; it
+measures the level on speech only and never boosts by more than +12 dB, so
+room noise is not amplified into hallucinations. Segments that were barely
+speech (`min_mean_probability`, default 0.4) are dropped before
+transcription.
+
+With hysteresis, `min_speech_duration_ms = 200` is safe and catches quick
+one-word answers ("Stop", "No", "Sure") that 300 ms misses. Against noise,
+ears relies on a no-speech check: when a result has at most three words and
+the server is Qwen3-ASR on vLLM, ears asks the model once more without
+forcing the language. Forced to a language, it writes "Okay." or "Oh." for
+silence, a breath or a click; left to itself it answers `language None`, and
+the result is dropped. Real short words still come back as words. The check
+is part of the silence-artifact filter (`filter_silence_artifacts`). For a noisy room, see
+[voice isolation](docs/VOICE_ISOLATION.md).
+
 > **Server URL:** ears sends requests to `{server}/v1/audio/transcriptions`,
 > appending `/v1/audio/transcriptions` for you. Set `server` to the host (and
 > base path) **without** a trailing `/v1` — e.g. Groq is

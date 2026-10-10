@@ -147,13 +147,7 @@ pub async fn start_vad_pipeline(
 
     // Create streaming engine with VAD settings from config
     let streaming_config = StreamingConfig::default();
-    let vad_config = VadConfig {
-        sample_rate: 16000,
-        speech_threshold: config.vad.speech_threshold,
-        min_speech_duration_ms: config.vad.min_speech_duration_ms,
-        max_silence_duration_ms: config.vad.max_silence_duration_ms,
-        pre_speech_buffer_ms: config.vad.pre_speech_buffer_ms,
-    };
+    let vad_config = VadConfig::from_settings(&config.vad);
     let typing_config = ProgressiveTypingConfig::default();
     let mut engine = StreamingEngine::new(
         whisper_client,

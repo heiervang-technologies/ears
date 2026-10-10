@@ -103,7 +103,15 @@ async fn test_transcribe_success() {
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello world");
-    assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
+    // One transcription; a short result may add the no-speech check's probes.
+    let transcriptions = mock_server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+        .count();
+    assert_eq!(transcriptions, 1);
 }
 
 #[tokio::test]
@@ -263,7 +271,15 @@ async fn test_transcribe_trims_whitespace() {
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello world");
-    assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
+    // One transcription; a short result may add the no-speech check's probes.
+    let transcriptions = mock_server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+        .count();
+    assert_eq!(transcriptions, 1);
 }
 
 #[tokio::test]
@@ -315,7 +331,8 @@ async fn bearer_auth_covers_health_fallback_and_transcription() {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"choices":[{"message":{"content":"hello"}}]})),
         )
-        .expect(1)
+        // The grammar call and the short result's no-speech check.
+        .expect(2)
         .mount(&server)
         .await;
     let client = WhisperClient::with_retry_config(server.uri(), 0, 1, 2)

@@ -156,6 +156,9 @@ Uses the Silero VAD v5 neural network model via ONNX Runtime (`voice_activity_de
 | `min_speech_duration_ms` | 300 | Minimum speech duration before a segment starts |
 | `max_silence_duration_ms` | 1200 | Silence duration that ends a segment |
 | `pre_speech_buffer_ms` | 500 | Ring buffer of recent audio prepended to segments to avoid clipping utterance onsets |
+| `end_threshold` | `speech_threshold - 0.15` | Probability below which a started candidate or segment counts as silence (hysteresis) |
+| `auto_gain` | true | Speech-gated gain before detection, plus per-segment leveling before the final transcription |
+| `min_mean_probability` | 0.4 | Finished segments with a lower mean probability over their voiced span are dropped |
 
 The model operates on fixed 512-sample frames (32ms at 16kHz). `VadSegmentDetector` handles reframing: incoming 1600-sample chunks from `ContinuousCapture` are buffered and processed in exact 512-sample frames. Any remainder is kept for the next call.
 
@@ -163,9 +166,13 @@ The model operates on fixed 512-sample frames (32ms at 16kHz). `VadSegmentDetect
 
 The VAD tracks two levels of speech detection:
 
-- **Probable speech** (`is_probably_speaking`): Speech frames are accumulating but haven't yet met the `min_speech_duration_ms` threshold. Emits `SpeechProbable` event.
-- **Confirmed speech** (`is_speaking`): Duration threshold met. Emits `SpeechStarted` event.
-- **Speech ended**: Silence has persisted beyond `max_silence_duration_ms`. Emits `SpeechEnded` event and yields a `SpeechSegment` with the collected audio samples.
+- **Probable speech** (`is_probably_speaking`): A frame reached `speech_threshold` and voiced frames (at or above `end_threshold`) are accumulating but haven't yet met `min_speech_duration_ms`. Up to 3 frames (~96 ms) below `end_threshold` are tolerated; one more rejects the candidate (`SpeechRejected`). Emits `SpeechProbable` event.
+- **Confirmed speech** (`is_speaking`): Voiced duration met, with at least half of those frames at or above `speech_threshold`, so one spike cannot carry borderline noise. Emits `SpeechStarted` event.
+- **Speech ended**: Frames below `end_threshold` have persisted beyond `max_silence_duration_ms`. Emits `SpeechEnded` event and yields a `SpeechSegment` with the collected audio samples and the mean probability of its voiced span (trailing silence excluded). The engine drops segments below `min_mean_probability` before transcription.
+
+### Speech-gated gain
+
+`SpeechGain` (`src/agc.rs`) scales every frame before Silero sees it. The level is an average over frames scored at or above `speech_threshold` only, so silence never raises the gain; the gain aims speech at about -20 dBFS and is capped at +12 dB / -6 dB. A finished segment is also leveled (louder half of its frames to the same target, peaks below full scale) before its final transcription. Gain and segment statistics are in the health snapshot.
 
 ### Pre-speech Replay Buffer
 
@@ -397,6 +404,9 @@ speech_threshold = 0.5               # VAD speech probability threshold (0.0-1.0
 min_speech_duration_ms = 300         # Minimum speech duration before segment starts
 max_silence_duration_ms = 1200       # Silence duration that ends a segment
 pre_speech_buffer_ms = 500           # Pre-speech replay buffer duration
+# end_threshold = 0.35               # Hysteresis: speech continues down to this (default threshold - 0.15)
+auto_gain = true                     # Level quiet speech (speech-gated, capped at +12 dB)
+min_mean_probability = 0.4           # Drop segments that were barely speech (0 disables)
 ```
 
 ### Profile System
