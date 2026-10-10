@@ -85,7 +85,10 @@ def run(coro):
 
 def test_partial_final_flow_with_forced_language():
     async def go():
-        d = FakeDecoder(" Hello there friend", " my friend.", " friend. Bye.")
+        # Nothing has settled on the first decode, so the model writes the
+        # header itself; it is forced from then on.
+        d = FakeDecoder("language English<asr_text>Hello there friend", " my friend.",
+                        " friend. Bye.")
         h = Harness(d)
         await h.text(type="start", utterance=7, language="en", rollback_words=1,
                      context="vLLM, Hyprland")
@@ -93,7 +96,7 @@ def test_partial_final_flow_with_forced_language():
         await h.audio(0.3)
         await h.text(type="end", utterance=7)
         assert [c["prefix"] for c in d.calls] == [
-            EN, EN + "Hello there", EN + "Hello there my"]
+            "", EN + "Hello there", EN + "Hello there my"]
         assert d.calls[0]["context"] == "vLLM, Hyprland"
         p1, p2 = h.of("partial")
         assert p1 == {"type": "partial", "utterance": 7, "seq": 1,
@@ -182,7 +185,9 @@ def test_settled_prefix_never_changes_within_an_utterance():
     def reply(call):
         # Arbitrary continuation: may repeat, shrink or rewrite open words.
         k = rng.randint(0, 4)
-        return "".join(" " + rng.choice(words) for _ in range(k))
+        text = "".join(" " + rng.choice(words) for _ in range(k))
+        # Unforced (nothing settled yet), the model writes the header itself.
+        return text if call["prefix"] else "language English<asr_text>" + text
 
     async def go():
         d = FakeDecoder(*[reply] * 200)
@@ -205,9 +210,9 @@ def test_settled_prefix_never_changes_within_an_utterance():
             stables.append(stable)
         (final,) = h.of("final")
         assert final["text"].encode().startswith(stables[-1])
-        # Every decode forced the settled text as its prefix.
-        for c in d.calls:
-            assert c["prefix"].startswith(EN)
+        # Once text settled, every decode forced it as its prefix.
+        forced = [c["prefix"] for c in d.calls if c["prefix"]]
+        assert forced and all(p.startswith(EN) for p in forced)
     run(go())
 
 
@@ -252,13 +257,14 @@ def test_superseding_start_drops_old_utterance():
         assert all(m["utterance"] == 2 for m in h.sent)
         assert [m["type"] for m in h.sent] == ["partial", "final"]
         # The new utterance starts from scratch.
-        assert d.calls[1]["prefix"] == EN
+        assert d.calls[1]["prefix"] == ""
     run(go())
 
 
 def test_end_while_decode_in_flight():
     async def go():
-        d = FakeDecoder(" one two three four", " four five", block=True)
+        d = FakeDecoder("language English<asr_text>one two three four", " four five",
+                        block=True)
         h = Harness(d)
         await h.text(type="start", utterance=5, language="en", rollback_words=1)
         await h.audio(0.3)
@@ -521,7 +527,7 @@ def test_freeze_window_metadata_and_optional_token_spans():
         class TokenDecoder(FakeDecoder):
             def transcript_tokens(self, text, frozen_bytes):
                 return [{"id": 42, "start_byte": 0, "end_byte": 5, "state": "frozen"}]
-        h = Harness(TokenDecoder("hello one two three"))
+        h = Harness(TokenDecoder("language English<asr_text>hello one two three"))
         await h.text(type="start", utterance=1, language="en")
         await h.audio(8.5)
         partial, = h.of("partial")
@@ -534,4 +540,25 @@ def test_freeze_window_metadata_and_optional_token_spans():
         assert state["token_basis"] == "retokenized_transcript"
         assert state["tokens"][0]["id"] == 42
         await h.session.close()
+    run(go())
+
+
+def test_pinned_language_is_not_forced_onto_silence():
+    """A header forced onto audio with no speech makes Qwen3-ASR copy the
+    context into the transcript, where it would settle for good."""
+    async def go():
+        d = FakeDecoder(
+            "language None<asr_text>",
+            "language German<asr_text>Hallo da",
+            "language English<asr_text>Hello there friend",
+            " my friend.",
+        )
+        h = Harness(d)
+        await h.text(type="start", utterance=1, language="en", rollback_words=1,
+                     context="Heiervang, Hyprland")
+        for _ in range(4):
+            await h.audio(0.3)
+        assert [c["prefix"] for c in d.calls] == ["", "", "", EN + "Hello there"]
+        texts = [p["text"] for p in h.of("partial")]
+        assert texts == ["Hello there friend", "Hello there my friend."]
     run(go())

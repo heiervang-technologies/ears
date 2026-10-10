@@ -125,6 +125,12 @@ pub struct VadSettings {
     /// 50 = halve current volume; 100 = mute
     #[serde(default = "default_duck_percent")]
     pub duck_percent: u8,
+    /// Ghost completion in VAD mode (default: false): show the transcript
+    /// as inline ghost text while you speak and commit it when the utterance
+    /// ends. Applies to the TUI's VAD and to `ears vad`; `ears ghost` always
+    /// uses it. Colours come from `[ghost]`.
+    #[serde(default)]
+    pub ghost: bool,
 }
 
 impl Default for VadSettings {
@@ -136,6 +142,7 @@ impl Default for VadSettings {
             pre_speech_buffer_ms: default_pre_speech_buffer_ms(),
             duck_enabled: default_duck_enabled(),
             duck_percent: default_duck_percent(),
+            ghost: false,
         }
     }
 }
@@ -937,6 +944,7 @@ another_unknown = 42
         assert_eq!(vad.min_speech_duration_ms, 300);
         assert_eq!(vad.max_silence_duration_ms, 1200);
         assert_eq!(vad.pre_speech_buffer_ms, 500);
+        assert!(!vad.ghost);
     }
 
     #[test]

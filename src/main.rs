@@ -62,7 +62,10 @@ async fn main() -> Result<()> {
             run_ghost_preview(&config, recorder_pid, recorder_start).await?;
         }
         Some(Commands::Vad) => {
-            handle_vad(&config, false).await?;
+            if config.vad.ghost {
+                ears::ghost_style::apply(&config.ghost);
+            }
+            handle_vad(&config, config.vad.ghost).await?;
         }
         Some(Commands::Ghost) => {
             ears::ghost_style::apply(&config.ghost);

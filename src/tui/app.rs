@@ -197,6 +197,8 @@ pub struct App {
     pub duck_enabled: bool,
     /// Volume ducking percent (0-100; 50 = halve current volume)
     pub duck_percent: u8,
+    /// Ghost completion in VAD mode (`[vad] ghost`)
+    pub vad_ghost: bool,
     /// Volume ducker — drives wpctl in response to VAD events
     pub ducker: VolumeDucker,
     /// Bash mode: constrain ASR output to a shell grammar (constrained decoding)
@@ -337,6 +339,7 @@ impl App {
             save_to_clipboard: config.save_to_clipboard,
             duck_enabled,
             duck_percent,
+            vad_ghost: config.vad.ghost,
             ducker,
             bash_mode,
             guided_grammar,
@@ -660,6 +663,11 @@ impl App {
                     || self.current_panel == Panel::Configuration) =>
             {
                 self.toggle_save_to_clipboard();
+            }
+
+            // Shift+G to toggle ghost text in VAD mode (works from any panel)
+            (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
+                self.toggle_vad_ghost();
             }
 
             // Shift+D to toggle volume ducking (works from any panel)
@@ -1134,6 +1142,7 @@ impl App {
         self.auto_enter = config.auto_enter;
         self.duck_enabled = config.vad.duck_enabled;
         self.duck_percent = config.vad.duck_percent;
+        self.vad_ghost = config.vad.ghost;
         self.ducker
             .set_settings(self.duck_enabled, self.duck_percent);
         self.profile = profile_name;
@@ -1199,6 +1208,21 @@ impl App {
     pub fn cycle_typing_mode(&mut self) {
         self.typing_mode = self.typing_mode.next();
         self.add_log(&format!("Typing mode: {}", self.typing_mode.display_name()));
+        self.save_config();
+    }
+
+    /// Toggle ghost completion for VAD mode; a running pipeline switches
+    /// over at once.
+    pub fn toggle_vad_ghost(&mut self) {
+        self.vad_ghost = !self.vad_ghost;
+        self.add_log(&format!(
+            "VAD ghost text {}",
+            if self.vad_ghost {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
         self.save_config();
     }
 
@@ -1393,6 +1417,7 @@ impl App {
         config.save_to_clipboard = self.save_to_clipboard;
         config.vad.duck_enabled = self.duck_enabled;
         config.vad.duck_percent = self.duck_percent;
+        config.vad.ghost = self.vad_ghost;
         config.bash_mode = self.bash_mode;
         config.guided_grammar = self.guided_grammar.clone();
         if let Err(e) = config.save() {
@@ -1891,6 +1916,17 @@ mod tests {
     }
 
     // --- Space key ---
+
+    #[test]
+    fn test_shift_g_toggles_vad_ghost() {
+        let mut app = App::new().unwrap();
+        let before = app.vad_ghost;
+
+        app.handle_key(shift_key(KeyCode::Char('G'))).unwrap();
+        assert_eq!(app.vad_ghost, !before);
+        app.handle_key(shift_key(KeyCode::Char('G'))).unwrap();
+        assert_eq!(app.vad_ghost, before);
+    }
 
     #[test]
     fn test_space_toggles_vad() {

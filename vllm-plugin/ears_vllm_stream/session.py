@@ -302,7 +302,9 @@ class StreamSession:
         if not windows:
             text: str | None = utt.stable
         else:
-            prefix = f"{utt.header}{utt.stable}" if utt.header else ""
+            # Forced only once text has settled: a header forced onto audio
+            # with no speech yet makes the model copy the context verbatim.
+            prefix = f"{utt.header}{utt.stable}" if utt.header and utt.stable else ""
             try:
                 continuation = await self._decode(
                     windows, prefix, max_tokens_for(n), context=utt.context
@@ -383,24 +385,31 @@ class StreamSession:
         first fraction of a second turns the utterance into a translation
         (English espeak came out as Arabic, ears#153).
         """
-        if utt.header is not None:
+        forced = utt.header is not None and bool(utt.stable)
+        settles = forced
+        if forced:
             hypothesis = utt.stable + continuation
         else:
             lang, tag, rest = continuation.partition(ASR_TAG)
             if tag:
                 header = f"{lang.strip()}{ASR_TAG}"
-                if header_language(header) in (None, "None"):
+                silent = header_language(header) in (None, "None")
+                if utt.header is None and silent:
                     utt.candidate = None
-                elif n >= MIN_PIN_SAMPLES and utt.candidate == header:
+                elif utt.header is None and n >= MIN_PIN_SAMPLES and utt.candidate == header:
                     utt.header = header
                     utt.candidate = None
-                else:
+                elif utt.header is None:
                     utt.candidate = header
-                hypothesis = rest
+                # Unforced: settle only text in the pinned language.
+                settles = header == utt.header
+                # Silence, or a live misdetection of the pinned language.
+                hidden = silent or (utt.header is not None and not settles and not final)
+                hypothesis = "" if hidden else rest
             else:
                 hypothesis = continuation
         hypothesis = hypothesis.lstrip()
-        if not final and utt.header is not None:
+        if not final and settles:
             settled = settled_prefix(hypothesis, utt.rollback_words)
             if len(settled) > len(utt.stable) and settled.startswith(utt.stable):
                 utt.stable = settled
