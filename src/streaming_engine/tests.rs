@@ -645,3 +645,136 @@ fn test_streaming_stats_default() {
     assert_eq!(stats.avg_latency_ms, 0);
     assert_eq!(stats.chars_typed, 0);
 }
+
+#[test]
+fn kept_segment_audio_is_a_16k_mono_wav_of_the_samples() {
+    let dir = tempfile::tempdir().unwrap();
+    let samples = vec![0.25f32; 1600];
+    let path = keep_segment_audio(dir.path(), &samples).expect("clip kept");
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(u16::from_le_bytes([bytes[22], bytes[23]]), 1); // mono
+    assert_eq!(
+        u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+        16000
+    );
+    assert_eq!(bytes.len(), 44 + samples.len() * 2);
+    assert!(std::path::Path::new(&path).starts_with(dir.path()));
+}
+
+#[test]
+fn kept_segment_audio_is_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let unrelated = dir.path().join("notes.wav");
+    std::fs::write(&unrelated, b"x").unwrap();
+    let mut paths = Vec::new();
+    for _ in 0..KEEP_AUDIO_MAX + 3 {
+        paths.push(keep_segment_audio(dir.path(), &[0.0; 160]).unwrap());
+        // Distinct mtimes so "oldest" is well defined.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let kept = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("utterance_")
+        })
+        .count();
+    assert_eq!(kept, KEEP_AUDIO_MAX);
+    assert!(!std::path::Path::new(&paths[0]).exists(), "oldest pruned");
+    assert!(std::path::Path::new(paths.last().unwrap()).exists());
+    assert!(unrelated.exists(), "only our clips are pruned");
+}
+
+#[test]
+fn segment_completed_serializes_audio_path_only_when_kept() {
+    let plain = serde_json::to_value(StreamingEvent::SegmentCompleted {
+        text: "hi".into(),
+        duration_ms: 5,
+        audio_path: None,
+    })
+    .unwrap();
+    assert_eq!(
+        plain,
+        serde_json::json!({"SegmentCompleted": {"text": "hi", "duration_ms": 5}})
+    );
+    let kept = serde_json::to_value(StreamingEvent::SegmentCompleted {
+        text: "hi".into(),
+        duration_ms: 5,
+        audio_path: Some("/x/utterance_1.wav".into()),
+    })
+    .unwrap();
+    assert_eq!(kept["SegmentCompleted"]["audio_path"], "/x/utterance_1.wav");
+}
+
+#[tokio::test]
+async fn test_keep_audio_reports_the_utterance_wav_on_segment_completed() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("hello jasonelle"))
+        .mount(&whisper)
+        .await;
+    let work = tempfile::tempdir().unwrap();
+    let keep = tempfile::tempdir().unwrap();
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), work.path().to_path_buf());
+    engine.set_keep_audio_dir(Some(keep.path().to_path_buf()));
+
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    assert_eq!(segs.len(), 1);
+    let samples = segs[0].samples.len();
+    assert!(samples > 0);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+
+    let mut audio = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let StreamingEvent::SegmentCompleted {
+            text, audio_path, ..
+        } = ev
+        {
+            assert_eq!(text, "hello jasonelle");
+            audio = audio_path;
+        }
+    }
+    let audio = audio.expect("SegmentCompleted carries audio_path");
+    assert!(std::path::Path::new(&audio).starts_with(keep.path()));
+    // The kept clip is exactly the segment ASR heard: 44-byte header + s16.
+    assert_eq!(
+        std::fs::metadata(&audio).unwrap().len() as usize,
+        44 + samples * 2
+    );
+    // The ASR temp file is still cleaned up.
+    assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn test_without_keep_audio_no_audio_path_and_no_clip() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("hello"))
+        .mount(&whisper)
+        .await;
+    let work = tempfile::tempdir().unwrap();
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), work.path().to_path_buf());
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    let mut seen = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let StreamingEvent::SegmentCompleted { audio_path, .. } = ev {
+            assert!(audio_path.is_none());
+            seen = true;
+        }
+    }
+    assert!(seen);
+    assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 0);
+}

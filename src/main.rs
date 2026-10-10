@@ -79,8 +79,13 @@ async fn main() -> Result<()> {
         }) => {
             ghost_style_command(config, color, underline, no_underline, frozen)?;
         }
-        Some(Commands::WsListen { host, port, socket }) => {
-            handle_ws_listen(&config, &host, port, socket).await?;
+        Some(Commands::WsListen {
+            host,
+            port,
+            socket,
+            keep_audio,
+        }) => {
+            handle_ws_listen(&config, &host, port, socket, keep_audio).await?;
         }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
@@ -531,7 +536,11 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                     event_ducker.on_speech_ended();
                     capture_dead_tx.notify_one();
                 }
-                ears::streaming_engine::StreamingEvent::SegmentCompleted { text, duration_ms } => {
+                ears::streaming_engine::StreamingEvent::SegmentCompleted {
+                    text,
+                    duration_ms,
+                    ..
+                } => {
                     tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
                     if save_to_clipboard && !text.is_empty() {
                         TextInput::copy_to_clipboard(&text);
@@ -620,6 +629,7 @@ async fn handle_ws_listen(
     host: &str,
     port: u16,
     socket: Option<String>,
+    keep_audio: Option<std::path::PathBuf>,
 ) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
@@ -679,6 +689,7 @@ async fn handle_ws_listen(
     let (event_tx, mut event_rx) =
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
     engine.set_event_sender(event_tx.clone());
+    engine.set_keep_audio_dir(keep_audio);
 
     // Disable typing for ws-listen — only emit IPC events, never type into windows
     {
@@ -748,6 +759,7 @@ async fn handle_ws_listen(
                     ears::streaming_engine::StreamingEvent::SegmentCompleted {
                         text,
                         duration_ms,
+                        ..
                     } => {
                         tracing::info!("Segment: \"{}\" ({}ms)", text, duration_ms);
                         if ws_save_to_clipboard && !text.is_empty() {

@@ -1551,7 +1551,9 @@ impl App {
                 self.committed_text = committed;
                 self.uncommitted_text = uncommitted;
             }
-            StreamingEvent::SegmentCompleted { text, duration_ms } => {
+            StreamingEvent::SegmentCompleted {
+                text, duration_ms, ..
+            } => {
                 self.add_log(&format!("Segment: \"{}\" ({}ms)", text, duration_ms));
                 self.total_transcriptions += 1;
                 self.successful_transcriptions += 1;
@@ -1987,6 +1989,7 @@ mod tests {
         app.handle_streaming_event(StreamingEvent::SegmentCompleted {
             text: "hello world".to_string(),
             duration_ms: 500,
+            audio_path: None,
         });
 
         assert_eq!(app.total_transcriptions, 1);
