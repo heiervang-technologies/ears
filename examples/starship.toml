@@ -1,0 +1,20 @@
+# ears segments for starship (https://starship.rs).
+# Add them to your format, e.g.
+#   format = "${custom.ears_rec}${custom.ears_vad}${custom.ears_busy}$all"
+# Each one shows only in its state: `ears prompt` prints nothing otherwise,
+# and the ( ) conditional group then renders nothing at all.
+
+[custom.ears_rec]
+command = "ears prompt --state recording"
+when = true
+format = "([ $output ](bg:#ff5f5f fg:black))"
+
+[custom.ears_vad]
+command = "ears prompt --state vad"
+when = true
+format = "([ $output ](bg:#22d3ee fg:black))"
+
+[custom.ears_busy]
+command = "ears prompt --state transcribing"
+when = true
+format = "([ $output ](bg:#ffd166 fg:black))"
