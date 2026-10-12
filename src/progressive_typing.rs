@@ -199,6 +199,12 @@ impl ProgressiveTypingEngine {
     }
 
     /// Reset the typing state (start fresh)
+    /// Record that the text on screen is now `text` (after something else
+    /// deleted the end of what was typed).
+    pub fn set_typed_text(&mut self, text: &str) {
+        self.typed_text = text.to_string();
+    }
+
     pub fn reset(&mut self) {
         self.typed_text.clear();
     }

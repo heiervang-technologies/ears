@@ -26,6 +26,10 @@ const GHOST_MAX_CONTINUOUS_SAMPLES: usize = 16_000 * 90;
 /// A lost stream connection is tried again after this, at the earliest.
 const STREAM_RETRY: Duration = Duration::from_secs(5);
 
+/// How long to wait for the stream's `final` before transcribing the
+/// segment in full instead.
+const STREAM_FINAL_TIMEOUT: Duration = Duration::from_millis(1500);
+
 /// A finished partial transcription.
 pub(super) struct Partial {
     pub(super) utterance: u64,
@@ -193,15 +197,12 @@ impl GhostState {
     }
 
     /// The current utterance's segment is complete: send the rest of it and
-    /// `end`. Its `final` is not used; the committed text comes from the
-    /// final transcription as always.
-    pub(super) fn stream_end(&mut self, samples: &[f32]) {
-        let Some(streamed) = self.streamed.take() else {
-            return;
-        };
-        let Some(session) = self.session() else {
-            return;
-        };
+    /// `end`. Returns the stream utterance id when the server got the whole
+    /// segment, so its `final` can stand in for a full transcription
+    /// (`final_correction = false`); None when part of it was cut off.
+    pub(super) fn stream_end(&mut self, samples: &[f32]) -> Option<u64> {
+        let streamed = self.streamed.take()?;
+        let session = self.session()?;
         if streamed.utterance == self.utterance {
             let end = samples
                 .len()
@@ -214,8 +215,10 @@ impl GhostState {
                 session.push(streamed.id, &pcm);
             }
             session.end(streamed.id);
+            (end == samples.len()).then_some(streamed.id)
         } else {
             session.cancel(streamed.id);
+            None
         }
     }
 
@@ -458,6 +461,49 @@ impl StreamingEngine {
         true
     }
 
+    /// The stream's `final` for utterance `id`, when it can be committed
+    /// as is. None (transcribe in full instead) on timeout, error, a lost
+    /// stream, or a short result: short results go through the full
+    /// transcription's no-speech check, which catches "Okay." on noise.
+    pub(super) async fn ghost_stream_final(&mut self, id: u64) -> Option<String> {
+        use crate::stream_client::StreamEvent;
+        let ghost = self.ghost.as_mut()?;
+        let StreamLink::Up(session) = &mut ghost.stream else {
+            return None;
+        };
+        let deadline = tokio::time::Instant::now() + STREAM_FINAL_TIMEOUT;
+        loop {
+            match tokio::time::timeout_at(deadline, session.recv()).await {
+                Ok(Some(StreamEvent::Final { utterance, text })) if utterance == id => {
+                    let text = text.trim().to_string();
+                    let words = text.split_whitespace().count();
+                    return (words > crate::whisper::NO_SPEECH_CHECK_MAX_WORDS).then_some(text);
+                }
+                Ok(Some(StreamEvent::Error { utterance, .. })) if utterance == Some(id) => {
+                    return None
+                }
+                Ok(Some(StreamEvent::Closed(reason))) => {
+                    warn!("Ears stream lost ({}); decoding per tick", reason);
+                    ghost.stream = StreamLink::Down {
+                        retry_at: Some(Instant::now() + STREAM_RETRY),
+                    };
+                    return None;
+                }
+                Ok(None) => {
+                    ghost.stream = StreamLink::Down {
+                        retry_at: Some(Instant::now() + STREAM_RETRY),
+                    };
+                    return None;
+                }
+                Ok(Some(_)) => continue, // stale partials or other utterances
+                Err(_) => {
+                    debug!("No stream final for utterance {} in time", id);
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Whether ghost completion is active.
     pub fn ghost_enabled(&self) -> bool {
         self.ghost.is_some()
@@ -631,17 +677,16 @@ impl StreamingEngine {
     }
 
     /// Deliver a final transcript through the ghost addon. Falls back to
-    /// ordinary typing when the addon cannot deliver it.
-    pub(super) fn ghost_commit(&mut self, text: &str) {
+    /// ordinary typing when the addon cannot deliver it. Returns how many
+    /// characters reached the focused app, if any did.
+    pub(super) fn ghost_commit(&mut self, text: &str) -> Option<usize> {
         if self.typing_mode == TypingMode::None {
             // Typing switched off (e.g. `ears typing off`): the transcript is
             // still published on IPC, but nothing reaches the focused app.
             self.ghost_clear();
-            return;
+            return None;
         }
-        let Some(ghost) = self.ghost.as_mut() else {
-            return;
-        };
+        let ghost = self.ghost.as_mut()?;
         let spaced = ghost.spaced(text);
         let delivery = ghost.client.commit(&spaced);
         ghost.showing = false;
@@ -650,6 +695,7 @@ impl StreamingEngine {
                 ghost.warned_unavailable = false;
                 self.stats.chars_typed += spaced.chars().count();
                 ghost.committed_any = true;
+                Some(spaced.chars().count())
             }
             crate::ghost::Delivery::NotDelivered => {
                 info!("Ghost addon did not deliver the text; typing it instead");
@@ -667,6 +713,9 @@ impl StreamingEngine {
                     if let Some(ghost) = self.ghost.as_mut() {
                         ghost.committed_any = true;
                     }
+                    Some(spaced.chars().count())
+                } else {
+                    None
                 }
             }
             crate::ghost::Delivery::Unknown => {
@@ -680,6 +729,7 @@ impl StreamingEngine {
                     ),
                     Instant::now(),
                 );
+                None
             }
         }
     }

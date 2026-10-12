@@ -943,3 +943,140 @@ async fn test_ghost_accept_flashes_then_clears_without_committing() {
     assert_eq!(next_cmd(&lines), "X");
     assert!(lines.try_iter().all(|l| l == "S"), "nothing committed");
 }
+
+/// Ghost engine on a fake stream whose finals are committed as is.
+async fn live_final_engine(
+    dir: &std::path::Path,
+    transcriptions: u64,
+) -> (
+    StreamingEngine,
+    std::sync::mpsc::Receiver<String>,
+    crate::stream_client::fake::FakeServer,
+    wiremock::MockServer,
+) {
+    use crate::stream_client::fake::{FakeServer, Mode};
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("from the full transcription."))
+        .expect(transcriptions)
+        .mount(&whisper)
+        .await;
+    Mock::given(path("/v1/chat/completions"))
+        .respond_with(chat_reply("language English<asr_text>yes"))
+        .mount(&whisper)
+        .await;
+    let server = FakeServer::start(Mode::Normal).await;
+    let (mut engine, lines) = ghost_engine_at(dir, &whisper.uri());
+    engine.set_continuous(Some(spec_at(&server.url)));
+    engine.set_final_correction(false);
+    tick_until(&mut engine, stream_up).await;
+    (engine, lines, server, whisper)
+}
+
+async fn speak_and_finish(
+    engine: &mut StreamingEngine,
+    server: &crate::stream_client::fake::FakeServer,
+    final_text: Option<&str>,
+) {
+    feed(engine, &[0.9, 0.9, 0.9]);
+    ghost_tick(engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let id = server.starts()[0];
+    let segs = feed(engine, &[0.9, 0.0, 0.0, 0.0]);
+    let finish = async {
+        server.wait_for(|l| l == format!("end {id}")).await;
+        if let Some(text) = final_text {
+            server.say(
+                serde_json::json!({"type": "final", "utterance": id, "text": text,
+                    "audio_ms": 1000, "decode_ms": 40}),
+            );
+        }
+    };
+    let (result, ()) = tokio::join!(
+        engine.process_segment(segs.into_iter().next().unwrap()),
+        finish
+    );
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn test_live_final_is_committed_without_a_second_transcription() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 0).await;
+    speak_and_finish(&mut engine, &server, Some("Here is the live final.")).await;
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "C Here is the live final."
+    );
+}
+
+#[tokio::test]
+async fn test_short_live_final_goes_through_the_full_transcription() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
+    speak_and_finish(&mut engine, &server, Some("Okay.")).await;
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "C from the full transcription."
+    );
+}
+
+#[tokio::test]
+async fn test_missing_live_final_falls_back_to_the_full_transcription() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
+    speak_and_finish(&mut engine, &server, None).await;
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "C from the full transcription."
+    );
+}
+
+fn window_a() -> Option<String> {
+    Some("0xa".into())
+}
+
+fn window_b() -> Option<String> {
+    Some("0xb".into())
+}
+
+#[test]
+fn test_scratch_deletes_utterances_newest_first_in_their_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
+    engine.focus_probe = window_a;
+    engine.accumulated_text = "first".into();
+    engine.note_typed(5, 0);
+    engine.accumulated_text = "first second".into();
+    engine.note_typed(7, 5);
+
+    let last = engine.undoable().unwrap();
+    assert_eq!(last.chars, 7, "the newest utterance, with its space");
+    engine.forget_last_typed(&last);
+    assert_eq!(engine.accumulated_text, "first");
+    assert_eq!(engine.undoable().unwrap().chars, 5);
+
+    // Never into another window.
+    engine.focus_probe = window_b;
+    assert!(engine.undoable().is_err());
+    engine.focus_probe = || None;
+    assert!(engine.undoable().is_err(), "unknown focus is not trusted");
+
+    // Typing into another window starts a new history there.
+    engine.focus_probe = window_b;
+    engine.note_typed(3, 5);
+    assert_eq!(engine.undo_marks.len(), 1);
+}
+
+#[test]
+fn test_nothing_to_scratch_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, mut rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
+    engine.focus_probe = window_a;
+    engine.typing_mode = TypingMode::Wtype;
+    engine.undo_last("Scratch that.");
+    assert!(drain(&mut rx).contains(&"SegmentDiscarded { reason: \"nothing to scratch\" }".into()));
+    engine.note_typed(1001, 0);
+    assert_eq!(engine.undoable().unwrap_err(), "too long to scratch");
+}

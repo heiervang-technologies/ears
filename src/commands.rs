@@ -22,6 +22,10 @@ pub struct VoiceCommands {
     /// boxes and agent prompts).
     #[serde(default = "default_new_line")]
     pub new_line: Vec<String>,
+    /// Phrases that delete the last dictated utterance (say it again to
+    /// delete the one before). Only in the window it was typed into.
+    #[serde(default = "default_undo")]
+    pub undo: Vec<String>,
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal")]
     pub literal: Vec<String>,
@@ -44,6 +48,10 @@ fn default_new_line() -> Vec<String> {
     vec!["new line".into()]
 }
 
+fn default_undo() -> Vec<String> {
+    vec!["scratch that".into()]
+}
+
 fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
@@ -58,6 +66,7 @@ impl Default for VoiceCommands {
             enabled: false,
             enter: default_enter(),
             new_line: default_new_line(),
+            undo: default_undo(),
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
@@ -72,6 +81,8 @@ pub enum Command {
     Enter,
     /// Press Shift+Enter.
     NewLine,
+    /// Delete the last dictated utterance.
+    Undo,
     /// Press a key combination from `[commands.keys]`, e.g. "ctrl+b".
     Keys(String),
     /// Type this text instead of interpreting it.
@@ -84,6 +95,7 @@ impl Command {
         match self {
             Command::Enter => "enter",
             Command::NewLine => "new_line",
+            Command::Undo => "undo",
             Command::Keys(_) => "keys",
             Command::Literal(_) => "literal",
         }
@@ -137,6 +149,9 @@ impl VoiceCommands {
         }
         if is(&self.new_line) {
             return Some(Command::NewLine);
+        }
+        if is(&self.undo) {
+            return Some(Command::Undo);
         }
         if let Some((_, combo)) = self
             .keys
@@ -263,6 +278,14 @@ mod tests {
         assert_eq!(keycodes("esc"), Some(vec![1]));
         assert_eq!(keycodes("ctrl+"), None);
         assert_eq!(keycodes("hyper+b"), None);
+    }
+
+    #[test]
+    fn scratch_that_undoes() {
+        let commands = over();
+        assert_eq!(commands.parse("Scratch that."), Some(Command::Undo));
+        assert_eq!(commands.parse("Scratch that line, please."), None);
+        assert!(Command::Undo.presses_key());
     }
 
     #[test]

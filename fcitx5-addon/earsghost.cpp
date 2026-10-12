@@ -22,6 +22,10 @@
 // moves elsewhere, the old context's ghost is cleared and later text goes
 // to the newly focused context, so text never lands in a window the user
 // has left mid-utterance without the next update following them.
+//
+// The socket is re-created if its file disappears (for example when the
+// ears runtime directory is wiped while fcitx5 keeps running), so ghost
+// text recovers without restarting fcitx5.
 
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/log.h>
@@ -128,9 +132,18 @@ class EarsGhost : public fcitx::AddonInstance {
 public:
     explicit EarsGhost(fcitx::Instance *instance) : instance_(instance) {
         listen();
+        watchdog_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kWatchdogUsec, 0,
+            [this](fcitx::EventSourceTime *source, uint64_t) {
+                relistenIfGone();
+                source->setNextInterval(kWatchdogUsec);
+                source->setOneShot();
+                return true;
+            });
     }
 
     ~EarsGhost() override {
+        watchdog_.reset();
         clearGhost();
         clients_.clear();
         listenEvent_.reset();
@@ -159,6 +172,28 @@ private:
             }
         }
     };
+
+    static constexpr uint64_t kWatchdogUsec = 2000000;
+
+    // Listen again when the socket file is gone (or listening never
+    // worked). A file that exists but is not ours belongs to another
+    // instance (`fcitx5 -r`) and is left alone.
+    void relistenIfGone() {
+        struct stat st {};
+        if (listenFd_ >= 0 && ::stat(path_.c_str(), &st) == 0) {
+            return;
+        }
+        if (listenFd_ >= 0 && errno != ENOENT) {
+            return;
+        }
+        GHOST_INFO() << "socket " << path_ << " is gone; listening again";
+        listenEvent_.reset();
+        if (listenFd_ >= 0) {
+            ::close(listenFd_);
+            listenFd_ = -1;
+        }
+        listen();
+    }
 
     void listen() {
         path_ = socketPath();
@@ -447,6 +482,7 @@ private:
     int listenFd_ = -1;
     ino_t socketIno_ = 0;
     std::unique_ptr<fcitx::EventSourceIO> listenEvent_;
+    std::unique_ptr<fcitx::EventSourceTime> watchdog_;
     std::map<int, std::unique_ptr<Client>> clients_;
     fcitx::TrackableObjectReference<fcitx::InputContext> ghostIc_;
     // Client whose P put the ghost up; 0 when none is showing.

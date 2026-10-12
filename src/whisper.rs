@@ -73,7 +73,7 @@ struct ChatMessage {
 
 /// Results with at most this many words are checked for actual speech
 /// (see `WhisperClient::hears_speech`).
-const NO_SPEECH_CHECK_MAX_WORDS: usize = 3;
+pub(crate) const NO_SPEECH_CHECK_MAX_WORDS: usize = 3;
 
 /// Client for interacting with whisper.cpp server
 #[derive(Clone)]

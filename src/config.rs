@@ -252,7 +252,11 @@ pub struct Config {
     pub live_min_step_ms: Option<u64>,
     /// Re-transcribe the whole recording for the committed text. When false
     /// and continuous live decoding is on, the committed text is the live
-    /// hypothesis finished off in one more tick, which is faster. Default: true.
+    /// hypothesis finished off in one more tick, which is faster: in
+    /// push-to-talk one more decode forcing the settled text, in VAD ghost
+    /// mode the ears stream's `final` (results of three words or fewer
+    /// still get the full transcription and its no-speech check). Default:
+    /// true.
     #[serde(default = "default_final_correction")]
     pub final_correction: bool,
     /// How ghost text looks, written into supported apps (`[ghost]`).

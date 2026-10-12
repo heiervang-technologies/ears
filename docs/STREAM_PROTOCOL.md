@@ -146,7 +146,10 @@ decoder, then repeated previews:
    finishes with one HTTP continuous decode forcing that settled text.
 3. VAD ghost (`ears ghost`): one utterance per VAD segment; `start` at speech
    onset (with the pre-speech buffer), samples as they arrive, `end` when the
-   segment completes, `cancel` when the candidate is rejected.
+   segment completes, `cancel` when the candidate is rejected. With
+   `final_correction = false` the `final` is committed as is when the whole
+   segment was sent and it has more than three words; otherwise, or if no
+   `final` arrives within 1.5 s, the segment is transcribed in full.
 4. Connection lost mid-utterance: fall back to per-tick HTTP for that
    utterance; never replay audio into a second final (no duplicate commits).
 
