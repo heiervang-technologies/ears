@@ -96,6 +96,19 @@ files AST-equal out of 5 (chain run):
 | Kokoro af_heart → ASR | 50/78 (64%) | 11/64 (17%) | 0/5 / 0/5 | 0/5 / 3/5 |
 | espeak-ng → ASR | 38/78 (49%) | 10/64 (16%) | 0/5 / 0/5 | 0/5 / 3/5 |
 | text, **oracle** translator | 77/78 (99%) | 62/64 (97%) | 5/5 / 5/5 (ruff 5/5, exact 2/5) | 5/5 |
+| af_heart → ASR, oracle | 68/78 (87%) | 53/64 (83%) | 1/5 / 2/5 | 4/5 / 5/5 |
+| espeak → ASR, oracle | 50/78 (64%) | 39/64 (61%) | 0/5 / 0/5 | 4/5 / 5/5 |
+
+The oracle rows with audio are the ceiling the ASR leaves for a translator
+that knows the answer but needs the right words. It looks up the heard
+text after normalizing case, punctuation and `_`, so "Deaf main" misses.
+A translator that tolerates mishearings could beat this. With a good
+voice, roughly one utterance in eight is lost to the ASR alone. A single
+miss in a 12 to 20 step task sinks the final file, which is why only 1
+or 2 of 5 files come out right. Of the utterances af_heart heard word for
+word, the oracle passed 118/121 (the baseline translator: 61/122). Run
+with `--asr-cache /tmp/...`, which reads the cached clips and writes
+nothing on KC3. Results are in `results/oracle.md`.
 
 Per task, text strict: argparse CLI 7/14, add methods 10/12, refactor
 18/20, dataclass 12/16, in-place fixes 10/16. Navigation and normal-mode
@@ -248,9 +261,5 @@ translator, so any backend has to live with how the plugin handles them.
 
 ## Not done
 
-- The oracle translator on audio (the ASR-limited ceiling) wasn't run.
-  KC3 dropped below the 30 GB free floor during the session (another
-  process was filling it), and the bench stops writing there by design.
-  The command is above.
 - No real human voice and no partials (`Partial` events and ghost text
   are not exercised; only final segments are).

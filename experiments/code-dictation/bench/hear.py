@@ -2,7 +2,7 @@
 (dictate.py): the buffer's names as context, retried without context when
 the model hears nothing. Usage: hear.py WAV < scope.
 Prints {"text", "ms", "cached"}. Transcripts are cached per (clip, context)
-in $EARS_BENCH_CACHE/asr.jsonl, with the latency measured when first heard;
+in $EARS_BENCH_CACHE/asr.jsonl (run.py --asr-cache moves it), with the latency measured when first heard;
 EARS_BENCH_FRESH=1 ignores the cache."""
 import hashlib
 import json

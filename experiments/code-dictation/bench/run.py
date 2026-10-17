@@ -42,6 +42,8 @@ TTS_URL = "http://localhost:30383/v1/audio/speech"
 # so one Kokoro voice, throttled, and one local espeak-ng voice.
 VOICES = ["af_heart", "espeak:en-us+m3"]
 TTS_PAUSE_S = 1.0
+READONLY = False
+ASR_CACHE = None  # --asr-cache: read cached clips, write nothing on KC3
 CURSOR = "▮"
 # How the TTS should say what is written: it reads "def" as letters.
 SAY = {"def": "deff", "del": "dell", "argparse": "arg parse", "ArgumentParser": "argument parser",
@@ -149,11 +151,13 @@ def golden_run(task, tmp):
 
 # --- audio ---------------------------------------------------------------------
 
-def kc3_ready():
+def kc3_ready(readonly=False):
     uuid = subprocess.run(["findmnt", "--mountpoint", KC3, "-n", "-o", "UUID"],
                           capture_output=True, text=True).stdout.strip()
     if uuid != KC3_UUID:
         raise SystemExit("KC3 is not mounted at " + KC3 + "; not writing the audio cache")
+    if readonly:
+        return
     free = shutil.disk_usage(KC3).free / 1e9
     if free < 30:
         raise SystemExit(f"KC3 has {free:.0f} GB free (< 30 GB); stopping")
@@ -186,6 +190,8 @@ def synthesize(text, voice):
     path = os.path.join(CACHE, "audio", voice, key + ".wav")
     if os.path.exists(path):
         return path
+    if READONLY:
+        raise SystemExit(f"--asr-cache: no cached clip for {voice}: {text!r}")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if voice.startswith("espeak:"):
         subprocess.run(["espeak-ng", "-v", voice.split(":", 1)[1], "-s", "150", "-w", path + ".raw.wav",
@@ -232,7 +238,7 @@ def run_job(task, steps, resync, translator, tmp, timeout_ms=8000, golden=False)
            "commands": ears_commands(), "timeout_ms": timeout_ms, "out": out, "golden": golden}
     path = os.path.join(tmp, "job.json")
     json.dump(job, open(path, "w"))
-    env = {**os.environ, "EARS_CODE_HEADLESS": "1", "EARS_BENCH_JOB": path, "EARS_BENCH_CACHE": CACHE,
+    env = {**os.environ, "EARS_CODE_HEADLESS": "1", "EARS_BENCH_JOB": path, "EARS_BENCH_CACHE": ASR_CACHE or CACHE,
            "EARS_BENCH_TASK": task["name"], "XDG_RUNTIME_DIR": tmp}  # nothing here can reach the live ears sockets
     for var in ("NVIM", "NVIM_LISTEN_ADDRESS"):  # never the user's Neovim sockets
         env.pop(var, None)
@@ -483,14 +489,19 @@ def main():
     ap.add_argument("--tasks", default="", help="comma-separated substrings of task names")
     ap.add_argument("--translator", default=os.environ.get("EARS_CODE_TRANSLATOR"),
                     help="shell command serving dictate.py's --serve JSON lines (default: dictate.py)")
+    ap.add_argument("--asr-cache", help="keep transcripts here and only read cached audio from KC3")
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--out", default=os.path.join(BENCH, "results"))
     args = ap.parse_args()
 
     tasks = load_tasks([t for t in args.tasks.split(",") if t])
     inputs = [] if args.audio_only else ["text"]
+    global READONLY, ASR_CACHE
+    if args.asr_cache:
+        READONLY, ASR_CACHE = True, args.asr_cache
+        os.makedirs(ASR_CACHE, exist_ok=True)
     if args.audio or args.audio_only:
-        kc3_ready()
+        kc3_ready(READONLY)
         inputs += args.voices.split(",")
     results = []
     with tempfile.TemporaryDirectory(prefix="ears-bench-") as tmp:
