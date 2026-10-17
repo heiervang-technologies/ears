@@ -5,6 +5,12 @@
 /// NOTE: These tests are designed to be NON-DISRUPTIVE - they do not
 /// actually type on the user's screen or modify their clipboard.
 use std::env;
+use std::sync::Mutex;
+
+/// PATH is process-wide and tests run in parallel: without this lock, one
+/// test restoring the real PATH let another type "Second" and "Third" into
+/// the focused window with the real wtype.
+static PATH_LOCK: Mutex<()> = Mutex::new(());
 use std::path::PathBuf;
 
 /// Get a mock PATH that includes our mock binaries
@@ -19,6 +25,7 @@ fn get_mock_path() -> String {
 
 #[test]
 fn test_type_text_waits_for_completion() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // This test verifies that type_text properly waits for completion
     // Using mock ydotool to avoid actual typing on screen
 
@@ -47,6 +54,7 @@ fn test_type_text_waits_for_completion() {
 
 #[test]
 fn test_error_detection() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // This test verifies that errors are properly detected
     // Using mock to avoid actual screen interaction
 
@@ -71,6 +79,7 @@ fn test_error_detection() {
 
 #[test]
 fn test_concurrent_typing_serialization() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // This test verifies that concurrent calls are serialized
     // Using mock to avoid actual typing
 
