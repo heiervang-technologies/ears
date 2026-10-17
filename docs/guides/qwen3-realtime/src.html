@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en" data-accent-2="neural">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Making Qwen3-ASR realtime: continuous live decoding</title>
+<style>/*@@REVEAL_CSS@@*/</style>
+<style>/*@@HAIOS_CSS@@*/</style>
+<style>
+/* Deck layer on top of haios.css: tokens only. */
+html, body, .reveal-viewport { padding: 0; background: var(--bg); }
+.reveal .slides > section { height: 720px; box-sizing: border-box; padding-top: 34px; }
+.reveal { font-family: var(--font-mono); color: var(--ink); font-size: 21px; font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+.reveal * { font-variant-ligatures: none; }
+.reveal .slides { text-align: left; }
+.reveal .slides section { padding: 0 8px; }
+.reveal h1 { font-size: 46px; }
+.reveal h1 small { font-size: 15px; }
+.reveal h2 { margin: 0 0 6px; font-size: 14px; }
+.reveal h3 { font-size: 30px; margin: 0 0 18px; }
+.reveal p, .reveal li { color: var(--ink-2); font-size: 20px; line-height: 1.5; }
+.reveal ul { margin: 6px 0 0 22px; padding: 0; }
+.reveal li { margin: 4px 0; }
+.reveal code { font-size: 16px; }
+.reveal pre { margin: 0; }
+.reveal pre code { display: block; padding: 12px 14px; font-size: 15px; line-height: 1.45; white-space: pre; max-height: none; }
+.reveal .card p, .reveal .card li { font-size: 17px; }
+.reveal .card h3 { font-size: 17px; margin-bottom: 6px; }
+.reveal .caption, .reveal small { font-size: 13px; }
+.reveal .progress { color: var(--cyan); }
+.reveal .controls { color: var(--cyan); }
+.reveal .slide-number { background: transparent; color: var(--faint); font-family: var(--font-mono); font-size: 13px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
+.cols.w60 { grid-template-columns: 3fr 2fr; }
+.cols > * { min-width: 0; }
+.stack > * + * { margin-top: 12px; }
+.src { position: absolute; left: 8px; bottom: 10px; right: 120px; font-size: 12px; color: var(--faint); letter-spacing: var(--track-caption); }
+.k { color: var(--cyan); font-weight: 700; }
+.ai { color: var(--accent-2); }
+.mute { color: var(--muted); }
+.stage { background: var(--glass); border: var(--border-card) solid var(--cyan-soft); border-radius: var(--radius-card); padding: 10px 12px; }
+.stage svg { display: block; width: 100%; height: auto; }
+.stage text { font-family: var(--font-mono); }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--ink-2); margin-top: 8px; }
+.legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+
+/* tick animation (forced prefix) */
+.tick-head { display: flex; justify-content: space-between; font-size: 14px; color: var(--muted); letter-spacing: var(--track-caption); text-transform: uppercase; }
+.tick-line { font-size: 27px; line-height: 1.6; min-height: 140px; margin-top: 8px; color: var(--ink); }
+.tick-line .hdr { color: var(--faint); }
+.tick-line .frozen { color: var(--cyan); }
+.tick-line .open { color: var(--ink); border-bottom: 2px dashed var(--muted); }
+.tick-line .new { color: var(--accent-2); }
+.tick-line .gone { color: var(--bad); text-decoration: line-through; }
+.tick-line .caret { display: inline-block; width: 10px; height: 20px; background: var(--accent-2); vertical-align: -3px; animation: blink 0.8s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.phase { font-size: 17px; color: var(--ink-2); min-height: 48px; margin-top: 6px; }
+
+/* token strip */
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tok { border: var(--border-thin) solid var(--cyan-line); background: var(--cyan-tint); color: var(--cyan-ink); border-radius: var(--radius-small); padding: 3px 7px; font-size: 14px; white-space: pre; }
+.tok.audio { border-color: var(--cyan); color: var(--cyan); font-weight: 700; }
+.tok.cached { border-color: var(--cyan); background: var(--cyan); color: var(--bg); }
+.tok.prefix { border-color: var(--cyan); color: var(--cyan); background: transparent; }
+.tok.gen { border-color: var(--accent-2); color: var(--accent-2); background: transparent; border-style: dashed; }
+.tok.hdr { border-color: var(--muted); color: var(--muted); background: transparent; }
+.tok-in { opacity: 0; transform: translateY(6px); }
+section.present .tok-in { animation: tokin 0.35s ease-out forwards; }
+@keyframes tokin { to { opacity: 1; transform: none; } }
+
+/* bars */
+.bars { display: grid; grid-template-columns: 120px 1fr; gap: 8px 14px; align-items: center; font-size: 14px; }
+.bars .lbl { color: var(--muted); text-align: right; letter-spacing: var(--track-caption); }
+.bars .pair { display: grid; gap: 2px; }
+.bar { height: 22px; border-radius: 0 4px 4px 0; width: 0; transition: width 1.1s cubic-bezier(.2,.7,.2,1); position: relative; cursor: default; }
+.bar span { position: absolute; left: calc(100% + 8px); top: 1px; white-space: nowrap; color: var(--ink-2); font-size: 14px; }
+.bar.rep { background: #d4760a; }
+.bar.con { background: #139fb5; }
+#tip { position: fixed; pointer-events: none; z-index: 99; background: var(--glass); border: var(--border-thin) solid var(--cyan-line); border-radius: var(--radius-small); padding: 6px 9px; font: 13px/1.4 var(--font-mono); color: var(--ink); display: none; }
+.reveal table { font-size: 14px; }
+.reveal td, .reveal th { padding: 4px 8px; }
+.hero-mascot { width: 230px; height: 230px; flex: none; }
+.hero-mascot svg { width: 100%; height: 100%; }
+.reveal p.big, .big { font-size: 40px; color: var(--cyan); font-weight: 700; line-height: 1.1; }
+.reveal .fragment.dim-in { opacity: 0.25; visibility: visible; }
+.reveal .fragment.dim-in.visible { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="tip"></div>
+<div class="reveal"><div class="slides">
+
+<!-- 1 ─ Title -->
+<section data-anim="none">
+  <div class="hero">
+    <div class="hero-mascot">@@MASCOT@@</div>
+    <div>
+      <h1>Making Qwen3-ASR realtime <small>CONTINUOUS LIVE DECODING · EARS #144 · 2026-09-28</small></h1>
+      <p style="max-width:760px;margin-top:18px">Qwen3-ASR-1.7B is an offline model: it transcribes a finished clip. This is how ears gets live, flicker-free text out of it on a <b>stock vLLM server</b>, with ~75 ms per update no matter how long you talk.</p>
+      <p style="margin-top:18px"><span class="pill">8 s ENCODER WINDOWS</span> <span class="pill">FORCED PREFIX</span> <span class="pill">ROLLBACK 3 WORDS</span></p>
+    </div>
+  </div>
+  <div class="src">ears src/continuous.rs · eb999d5 (PR #145) · vllm-plugin 6c73db3 · press S for speaker view, arrows to step</div>
+</section>
+
+<!-- 2 ─ The problem -->
+<section data-anim="repeat">
+  <h2>The problem</h2>
+  <h3>The live preview re-transcribed the whole clip every tick</h3>
+  <div class="cols w60">
+    <div class="stage"><svg id="repeat-svg" viewBox="0 0 760 330"></svg></div>
+    <div class="stack">
+      <p>Ghost text needs an update every <span class="k">300 ms</span>. With an offline model the obvious way is <code>live_decoding = "repeat"</code>: send everything recorded so far, again, on every tick.</p>
+      <p>Every tick re-encodes and re-decodes audio that has not changed. Cost grows with the clip:</p>
+      <div class="card warn"><h3>Measured, 33 s clip</h3><p>p50 <b>458 ms</b> per tick, last tick <b>760 ms</b>, <b>50.1 s</b> of GPU time over 110 ticks. The 300 ms tick could not keep up.</p></div>
+    </div>
+  </div>
+  <div class="src">Animation: playback compressed 3x. Bar width = audio sent per request. Numbers: session 2026-09-28, live qwen3-asr pod.</div>
+</section>
+
+<!-- 3 ─ Rejected attempt -->
+<section data-anim="chunks">
+  <h2>Attempt one, rejected</h2>
+  <h3>vLLM's built-in realtime mode: blind 5 s chunks</h3>
+  <div class="stage"><svg id="chunks-svg" viewBox="0 0 1180 250"></svg></div>
+  <div class="cols" style="margin-top:14px">
+    <p><code>Qwen3ASRRealtimeGeneration</code> over <code>WS /v1/realtime</code> cuts the audio into fixed 5 s pieces and transcribes each one alone. No overlap, no revision. Words get split at the seams and each piece ends with a sentence stop.</p>
+    <div class="card soft"><h3>Verdict</h3><p>"I'm trying out the chunking now, and it's definitely, um, worse than just not using streaming." <span class="mute">Markus, 14:38</span></p></div>
+  </div>
+  <div class="src">Chunk text is an illustration of the failure mode on the test-clip sentence, not a captured output. Client attempt: ears cbfbd1f, branch feat/realtime-ghost.</div>
+</section>
+
+<!-- 4 ─ Two observations -->
+<section data-anim="none">
+  <h2>The hack</h2>
+  <h3>Two facts about Qwen3-ASR made a cheap incremental decoder possible</h3>
+  <div class="cols">
+    <div class="card fragment dim-in"><h3>1 · The encoder sees in 8 s windows</h3><p>The audio encoder attends within fixed windows of <code>n_window_infer</code> = 800 mel frames at a 10 ms hop = <b>8 s</b>. Windows never see each other.</p><p style="margin-top:8px">So a finished window encodes to the same features forever. <b>Send it as its own item, byte-identical every tick, and vLLM's caches serve it.</b></p></div>
+    <div class="card neural fragment dim-in"><h3>2 · The decoder is a chat LLM</h3><p>The transcript is the assistant turn: <code>language English&lt;asr_text&gt;</code> then the text. An LLM can be handed the start of its own answer.</p><p style="margin-top:8px">So <b>force the text that has already settled as the assistant prefix</b>; the model only decodes the new words.</p></div>
+  </div>
+  <p class="fragment" style="margin-top:22px">Result: each tick re-encodes at most one 8 s window and decodes a handful of tokens. Tick cost stops growing with clip length.</p>
+</section>
+
+<!-- 5 ─ Windows animation -->
+<section data-anim="windows">
+  <h2>Fact one in motion</h2>
+  <h3>Closed windows are encoded once; only the open window is redone</h3>
+  <div class="stage"><svg id="windows-svg" viewBox="0 0 1180 330"></svg></div>
+  <div class="legend">
+    <span><i style="background:var(--cyan)"></i>closed 8 s window: same base64 WAV every tick, cache hit</span>
+    <span><i style="border:2px solid var(--cyan);box-sizing:border-box"></i>open window: re-encoded each tick</span>
+    <span><i style="border:2px dashed var(--muted);box-sizing:border-box"></i>tail under 100 ms: left out</span>
+  </div>
+  <div class="src">pcm.chunks(ENCODER_WINDOW = 8 * 16 000) · closed windows kept in self.closed · MIN_ITEM = SAMPLE_RATE / 10. Playback compressed 2x.</div>
+</section>
+
+<!-- 6 ─ One audio block -->
+<section data-anim="none">
+  <h2>Fact one, the fine print</h2>
+  <h3>Many audio items, but one audio block</h3>
+  <p>The prompt ears renders with its own chat template (33 s clip = 4 closed windows + a 1 s tail):</p>
+  <div class="tokens" style="margin-top:12px">
+    <span class="tok hdr tok-in" style="animation-delay:.1s">&lt;|im_start|&gt;system\n</span>
+    <span class="tok hdr tok-in" style="animation-delay:.25s">{prompt context}</span>
+    <span class="tok tok-in" style="animation-delay:.4s">&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\n</span>
+    <span class="tok audio tok-in" style="animation-delay:.6s">&lt;|audio_start|&gt;</span>
+    <span class="tok cached tok-in" style="animation-delay:.8s">pad · win 1 · 104 tok</span>
+    <span class="tok cached tok-in" style="animation-delay:.95s">pad · win 2 · 104 tok</span>
+    <span class="tok cached tok-in" style="animation-delay:1.1s">pad · win 3 · 104 tok</span>
+    <span class="tok cached tok-in" style="animation-delay:1.25s">pad · win 4 · 104 tok</span>
+    <span class="tok audio tok-in" style="animation-delay:1.4s">pad · tail 1 s</span>
+    <span class="tok audio tok-in" style="animation-delay:1.6s">&lt;|audio_end|&gt;</span>
+    <span class="tok tok-in" style="animation-delay:1.8s">&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n</span>
+    <span class="tok hdr tok-in" style="animation-delay:2.0s">language English&lt;asr_text&gt;</span>
+    <span class="tok prefix tok-in" style="animation-delay:2.2s">Okay, so here is the plan for today. First, I want to …</span>
+    <span class="tok gen tok-in" style="animation-delay:2.6s">model continues here →</span>
+  </div>
+  <div class="cols" style="margin-top:20px">
+    <div class="card"><h3>Why a custom template</h3><p>The stock Qwen3-ASR template drops assistant turns and wraps every audio item in its own <code>audio_start/end</code>. Ours counts the items, emits one block of <code>&lt;|audio_pad|&gt;</code> placeholders, and appends the assistant prefix. With one item it renders exactly like stock.</p></div>
+    <div class="card ok"><h3>Checked, not assumed</h3><p>Teacher-forcing the same 109-token transcript, 8 s items in one block vs a single item: <b>mean KL 0.0005</b>, max 0.023, argmax 109/109. Separate markers per item: mean KL 0.0064, max 0.48. So: one block.</p></div>
+  </div>
+  <div class="src">CHAT_TEMPLATE in src/continuous.rs · 13 audio tokens per second (104 per window) per vllm-plugin/README · KL run 2026-09-28 14:46.</div>
+</section>
+
+<!-- 7 ─ Forced prefix animation -->
+<section data-anim="ticks">
+  <h2>Fact two in motion</h2>
+  <h3>Settled text goes back in; only the last 3 words stay open</h3>
+  <div class="stage" style="padding:14px 18px">
+    <div class="tick-head"><span id="tk-n">tick 0</span><span id="tk-a">audio 0.0 s</span><span id="tk-d">decoded 0 words</span></div>
+    <div class="tick-line" id="tk-line"></div>
+    <div class="phase" id="tk-phase"></div>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--muted)"></i>language header (pinned)</span>
+    <span><i style="background:var(--cyan)"></i>settled: forced as prefix, never re-decoded</span>
+    <span><i style="background:var(--accent-2)"></i>decoded this tick</span>
+    <span><i style="border-bottom:2px dashed var(--muted);height:8px;border-radius:0"></i>open: last 3 words, may be revised</span>
+  </div>
+  <div class="cols" style="margin-top:16px">
+    <div class="card soft"><h3>Why leave words open</h3><p>The newest audio often ends mid-word. At tick 4 the model hears "for to…"; one tick later it is "for today." Only the open words can change, so the fix costs nothing.</p></div>
+    <div class="card soft"><h3>Why it is cheap</h3><p>Speech is about 3 tokens a second. Each tick decodes only the new speech plus the reopened words, whether the clip is 3 s or 60 s long.</p></div>
+  </div>
+  <div class="src">Text: the 2026-09-28 test clip. Tick contents illustrative; settling is computed live in this page with the same rule as settled_prefix(hypothesis, 3).</div>
+</section>
+
+<!-- 8 ─ The rules -->
+<section data-anim="none">
+  <h2>Fact two, the rules</h2>
+  <h3>How text settles, and what is refused</h3>
+  <div class="cols">
+    <div class="stack">
+      <div class="card fragment dim-in"><h3>Settle = hypothesis minus last K words</h3><p><code>stable = settled_prefix(hypothesis, 3)</code>, cut at a word boundary so the bytes are exactly what the model wrote. K is <code>live_rollback_words</code>.</p></div>
+      <div class="card fragment dim-in"><h3>Settled text only grows</h3><p>A new stable is accepted only if it is longer and starts with the old one. A shorter continuation can never retract the forced prefix.</p></div>
+      <div class="card fragment dim-in"><h3>The final tick re-decodes the open words</h3><p>On stop (<code>last</code>), nothing is held back. An empty continuation there is an error: it would silently drop the open words.</p></div>
+    </div>
+    <div class="stack">
+      <div class="card warn fragment dim-in"><h3>Runaway guard</h3><p><code>max_tokens = 64 + 5 × seconds</code>. A reply that ends with <code>finish_reason: "length"</code> is a loop, not a transcript, and is rejected.</p></div>
+      <div class="card warn fragment dim-in"><h3>Language pinning</h3><p>A detected <code>language X</code> is pinned only after <b>2 s</b> of audio and <b>two decodes in a row</b> agreeing; <code>language None</code> never counts. Forcing a wrong one turns the rest into a translation (English espeak once came out as Arabic, #153).</p></div>
+      <div class="card soft fragment dim-in"><h3>Graceful fallback</h3><p>Not Qwen3-ASR, no <code>/v1/models</code>, or the server refuses a request template: <code>ContinuousError::Unsupported</code>, and ears goes back to repeat.</p></div>
+    </div>
+  </div>
+  <div class="src">src/continuous.rs: step_inner, learn_language, settled_prefix, classify_error.</div>
+</section>
+
+<!-- 9 ─ The request -->
+<section data-anim="none">
+  <h2>On the wire</h2>
+  <h3>One tick is one plain chat-completions call</h3>
+  <div class="cols w60">
+<pre><code>POST /v1/chat/completions
+{
+  "model": "Qwen/Qwen3-ASR-1.7B",
+  "messages": [
+    {"role": "system", "content": "&lt;prompt context&gt;"},
+    {"role": "user", "content": [
+      {"type": "input_audio", "input_audio": {"data": "&lt;win 1 b64&gt;", "format": "wav"}},
+      {"type": "input_audio", "input_audio": {"data": "&lt;win 2 b64&gt;", "format": "wav"}},
+      {"type": "input_audio", "input_audio": {"data": "&lt;open b64&gt;",  "format": "wav"}}
+    ]},
+    {"role": "assistant",
+     "content": "language English&lt;asr_text&gt;Okay, so here is the plan"}
+  ],
+  "add_generation_prompt": false,
+  "continue_final_message": true,
+  "chat_template": "&lt;CHAT_TEMPLATE&gt;",
+  "temperature": 0.0,
+  "max_tokens": 64 + 5 * seconds
+}</code></pre>
+    <div class="stack">
+      <div class="card fragment"><h3>continue_final_message</h3><p>The assistant message is not a closed turn: generation continues from its last byte.</p></div>
+      <div class="card fragment"><h3>chat_template per request</h3><p>The only server change: <code>vllm serve … --trust-request-chat-template</code>.</p></div>
+      <div class="card fragment"><h3>temperature 0</h3><p>Greedy, so the same audio gives the same words tick after tick.</p></div>
+      <div class="card neural fragment"><h3>Reply</h3><p>Only the continuation, e.g. <code>" for today. First,"</code>. ears joins it to the stable text.</p></div>
+    </div>
+  </div>
+  <div class="src">Body built in ContinuousDecoder::step_inner. System turn only when prompt context is set. Ticks every 300 ms (ghost_preview INTERVAL).</div>
+</section>
+
+<!-- 10 ─ Results -->
+<section data-anim="bars">
+  <h2>Result</h2>
+  <h3>Flat ~75 ms ticks, and the final text matched a full transcription</h3>
+  <div class="cols w60">
+    <div class="stage" style="padding:16px 18px">
+      <div class="legend" style="margin:0 0 12px"><span><i style="background:#d4760a"></i>repeat (before)</span><span><i style="background:#139fb5"></i>continuous</span></div>
+      <div class="bars" id="bars-ms"></div>
+      <div class="caption" style="margin:10px 0 14px">milliseconds per tick · scale 0 to 1000 ms</div>
+      <div class="bars" id="bars-s"></div>
+      <div class="caption" style="margin-top:10px">total GPU time over all 110 ticks · scale 0 to 60 s</div>
+    </div>
+    <div class="stack">
+      <table>
+        <tr><th></th><th>repeat</th><th>continuous</th></tr>
+        <tr><td>tick p50</td><td>458 ms</td><td>74 ms</td></tr>
+        <tr><td>tick p95</td><td>745 ms</td><td>198 ms</td></tr>
+        <tr><td>last tick</td><td>760 ms</td><td>223 ms</td></tr>
+        <tr><td>total, 110 ticks</td><td>50.1 s</td><td>11.0 s</td></tr>
+        <tr><td>final text</td><td>ending garbled</td><td>identical to reference</td></tr>
+      </table>
+      <div class="card soft"><h3>Real speech too</h3><p>Benchmark on recorded speech: continuous held 60–100 ms per step; repeat ~500 ms on long clips with spikes to 1.2 s, and fell behind a 0.3 s step.</p></div>
+    </div>
+  </div>
+  <div class="src">33 s clip, live qwen3-asr, 2026-09-28. Real-speech benchmark by the forked bench agent, same day (report was on /tmp, since lost).</div>
+</section>
+
+<!-- 11 ─ Rollover -->
+<section data-anim="rollover">
+  <h2>Long dictation</h2>
+  <h3>The context holds ~90 s of audio, so long recordings roll over</h3>
+  <div class="stage"><svg id="roll-svg" viewBox="0 0 1180 300"></svg></div>
+  <div class="cols" style="margin-top:12px">
+    <p>The server runs <code>--max-model-len 2048</code>. A segment ends at the <b>first pause after 60 s</b>, or at <b>80 s</b> regardless. A pause is the last 300 ms under RMS 500 (about −36 dBFS). A fresh segment starts there; finished text stays in front, verbatim.</p>
+    <div class="card ok"><h3>Measured, 147 s live recording</h3><p>Rolled over twice, 364 ghost updates to the end, <b>331/331 words</b>, 2.1% WER vs ground truth.</p></div>
+  </div>
+  <div class="src">Rollover::DEFAULT {soft: 60 s, hard: 80 s}, is_pause, join_segments · commit 671f0a3 (#152). Pause positions in the animation are illustrative.</div>
+</section>
+
+<!-- 12 ─ Stream plugin -->
+<section data-anim="stream">
+  <h2>Going server side</h2>
+  <h3>The same decoder as a vLLM plugin: send only new audio</h3>
+  <div class="stage"><svg id="stream-svg" viewBox="0 0 1180 300"></svg></div>
+  <div class="cols" style="margin-top:12px">
+    <p>Plugin <code>ears_stream</code> serves <code>WS /v1/ears/stream</code> on the vLLM port. The client pushes new audio every <b>50 ms</b>. The server starts a decode once <b>150 ms</b> of new audio has arrived (<code>min_step_ms</code>), one decode at a time, same prompt, same windows, same settling.</p>
+    <div class="card ok"><h3>Measured, 33 s clip streamed in real time</h3><p>133 partials, decode p50 <b>54 ms</b> / p95 70 ms, final <b>54 ms after the audio ended</b>, identical to full transcription. Three streams at once: ~60 ms each.</p></div>
+  </div>
+  <div class="src">vllm-plugin/ears_vllm_stream: session._schedule, engine.VllmDecoder (TokensPrompt + multi_modal_data, 13 tok/s audio). Timing in the animation slowed 6x. Numbers: cloud PR #542 comment.</div>
+</section>
+
+<!-- 13 ─ Turn it on -->
+<section data-anim="none">
+  <h2>Turn it on</h2>
+  <h3>Two flags on the server, one line in ears</h3>
+  <div class="cols">
+    <div class="stack">
+      <p class="mute">vLLM pod (stock <code>vllm/vllm-openai</code>)</p>
+<pre><code>pip install ... "ears-vllm-stream @ \
+  &lt;ears archive&gt;#subdirectory=vllm-plugin"
+vllm serve Qwen/Qwen3-ASR-1.7B \
+  --max-model-len 2048 \
+  --trust-request-chat-template
+# env
+VLLM_PLUGINS=ears_stream</code></pre>
+      <p class="caption">Without the plugin, per-tick HTTP still works. Without the template flag, ears falls back to repeat.</p>
+    </div>
+    <div class="stack">
+      <p class="mute">ears profile <code>config.qwen3-asr.toml</code></p>
+<pre><code>live_decoding = "continuous"  # default "repeat"
+live_rollback_words = 3       # words kept open
+live_min_step_ms = 150        # stream; max 5000
+final_correction = false      # stop = one tick</code></pre>
+      <div class="card soft"><h3>Variant on the deployed build</h3><p><code>live/centurion</code> (65fa948) forces the language header only once some text has settled. Forced from the first decode, the model, faced with silence, copied the <code>prompt</code> names list, which then settled into the transcript.</p></div>
+    </div>
+  </div>
+  <div class="src">config.rs LiveDecoding · vllm-plugin/README · cloud k8s/ai/qwen3-asr (PRs #542–#544).</div>
+</section>
+
+<!-- 14 ─ Summary -->
+<section data-anim="none">
+  <h2>In one breath</h2>
+  <h3>Cache the past audio, force the past text, decode only the new</h3>
+  <div class="row" style="margin-top:10px">
+    <div class="card"><h3>Audio</h3><p>8 s windows = the encoder's own windows. Closed windows are byte-identical, so vLLM serves them from cache.</p></div>
+    <div class="card neural"><h3>Text</h3><p>Settled transcript forced as the assistant prefix; the model continues from it.</p></div>
+    <div class="card"><h3>Stability</h3><p>Last 3 words stay open; settled text only grows; final tick re-decodes the tail.</p></div>
+  </div>
+  <p style="margin-top:22px">No model changes, no fine-tuning, stock vLLM: a chat template, two request flags and one server flag.</p>
+  <p class="big" style="margin-top:20px">458 → 74 ms per tick</p>
+  <div class="src">heiervang-technologies/ears · src/continuous.rs · docs/TOKEN_FREEZE.md · vllm-plugin/</div>
+</section>
+
+</div></div>
+
+<script>/*@@REVEAL_JS@@*/</script>
+<script>
+(() => {
+const NS = 'http://www.w3.org/2000/svg';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { cyan: css('--cyan'), ink: css('--ink'), ink2: css('--ink-2'), muted: css('--muted'), faint: css('--faint'),
+            ai: css('--accent-2'), bad: css('--bad'), ok: css('--ok'), tint: css('--cyan-tint'), line: css('--cyan-line'),
+            bg: css('--bg'), rep: '#d4760a', con: '#139fb5' };
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+// Deterministic speech-like envelope (illustration of a waveform).
+function envelope(n, seed) {
+  let s = seed, out = [];
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < n; i++) {
+    const syll = Math.abs(Math.sin(i * 0.55 + rnd() * 0.6));
+    const phrase = (Math.sin(i * 0.045) > -0.75) ? 1 : 0.08;
+    out.push(Math.max(0.05, syll * phrase * (0.45 + rnd() * 0.55)));
+  }
+  return out;
+}
+function loop(fn) {
+  let id, t0 = null, stopped = false; const OFF = +(new URLSearchParams(location.search).get('t') || 0);
+  const step = ts => { if (stopped) return; if (t0 === null) t0 = ts; fn(OFF + (ts - t0) / 1000); id = requestAnimationFrame(step); };
+  id = requestAnimationFrame(step);
+  return () => { stopped = true; cancelAnimationFrame(id); };
+}
+
+const anims = {};
+
+/* ── Slide 2: repeat ───────────────────────────────────────────── */
+anims.repeat = () => {
+  const svg = document.getElementById('repeat-svg'); svg.innerHTML = '';
+  const X0 = 70, W = 660, CLIP = 33, SPEED = 3, TICK = 0.3;
+  const env = envelope(220, 7);
+  el('text', {x: X0, y: 22, fill: C.muted, 'font-size': 13}, svg, 'MICROPHONE');
+  const wave = el('g', {}, svg);
+  env.forEach((a, i) => el('rect', {x: X0 + i * W / env.length, y: 55 - a * 26, width: 2, height: a * 52, fill: C.cyan, opacity: 0, 'data-t': i / env.length * CLIP}, wave));
+  el('text', {x: X0, y: 112, fill: C.muted, 'font-size': 13}, svg, 'SENT ON EACH TICK (whole clip)');
+  const rows = el('g', {}, svg);
+  for (let s = 0; s <= 30; s += 10) {
+    const x = X0 + s / CLIP * W;
+    el('line', {x1: x, x2: x, y1: 296, y2: 302, stroke: C.faint}, svg);
+    el('text', {x, y: 318, fill: C.faint, 'font-size': 12, 'text-anchor': 'middle'}, svg, s + ' s');
+  }
+  const status = el('text', {x: X0 + W, y: 22, fill: C.ink2, 'font-size': 13, 'text-anchor': 'end'}, svg, '');
+  const rowH = 12, maxRows = 14;
+  let lastTick = -1;
+  return loop(t => {
+    const audio = (t * SPEED) % (CLIP + 4.5);
+    const a = Math.min(audio, CLIP);
+    wave.childNodes.forEach(r => r.setAttribute('opacity', +r.dataset.t <= a ? 0.9 : 0.12));
+    const tick = Math.floor(a / TICK);
+    if (audio < 0.05 && lastTick > 5) { rows.innerHTML = ''; lastTick = -1; }
+    if (tick !== lastTick && a < CLIP) {
+      lastTick = tick;
+      const n = rows.childNodes.length;
+      if (n >= maxRows) rows.removeChild(rows.firstChild);
+      Array.from(rows.childNodes).forEach((r, i) => { r.setAttribute('y', 126 + i * rowH); r.setAttribute('opacity', 0.25 + 0.5 * i / maxRows); });
+      el('rect', {x: X0, y: 126 + rows.childNodes.length * rowH, width: Math.max(2, a / CLIP * W), height: rowH - 3, rx: 2, fill: C.rep, opacity: 1}, rows);
+    }
+    status.textContent = `tick ${tick}  ·  request carries ${a.toFixed(1)} s of audio`;
+  });
+};
+
+/* ── Slide 3: 5 s blind chunks ─────────────────────────────────── */
+anims.chunks = () => {
+  const svg = document.getElementById('chunks-svg'); svg.innerHTML = '';
+  // Words with approximate times (s) for the test-clip sentence.
+  const words = 'Okay, so here is the plan for today. First, I want to check the ghost completion in the browser.'.split(' ');
+  const X0 = 20, CW = 10.4, SEAM = 5;
+  const xs = []; { let x = X0; words.forEach(w => { xs.push(x); x += (w.length + 1) * CW; }); }
+  const wi = words.indexOf('want');
+  const seamX = xs[wi] + 2 * CW;                 // seam lands inside "want"
+  const PPS = (seamX - X0) / SEAM, DUR = (xs[xs.length - 1] + 9 * CW - X0) / PPS;
+  const times = xs.map(x => (x - X0) / PPS);
+  el('text', {x: X0, y: 20, fill: C.muted, 'font-size': 13}, svg, 'AUDIO (WHAT WAS SAID)');
+  el('text', {x: X0, y: 140, fill: C.muted, 'font-size': 13}, svg, 'EACH 5 S CHUNK TRANSCRIBED ALONE');
+  const said = el('g', {}, svg), heard = el('g', {}, svg), seams = el('g', {}, svg);
+  words.forEach((w, i) => el('text', {x: xs[i], y: 60, fill: C.ink, 'font-size': 17, opacity: 0}, said, w));
+  // Chunk outputs: illustration of seam damage ("want" split, false stop, new capital).
+  const outs = [];
+  const put = (w, x, bad, chunk) => { const n = el('text', {x, y: 185, fill: bad ? C.bad : C.ink2, 'font-size': 17, opacity: 0}, heard, w); n.dataset.c = chunk; outs.push(n); };
+  words.slice(0, wi).forEach((w, i) => put(w, xs[i], 0, 1));
+  put('wa.', xs[wi], 1, 1);
+  put('Ant', xs[wi] + 4.5 * CW, 1, 2);
+  words.slice(wi + 1).forEach((w, i) => put(w, xs[wi + 1 + i] + 4 * CW, 0, 2));
+  const seam = el('line', {x1: seamX, x2: seamX, y1: 30, y2: 205, stroke: C.bad, 'stroke-width': 2, 'stroke-dasharray': '5 4', opacity: 0}, seams);
+  const seamLbl = el('text', {x: seamX + 6, y: 236, fill: C.bad, 'font-size': 13, opacity: 0}, seams, '5 s seam: word split, false stop, new capital');
+  const play = el('line', {x1: X0, x2: X0, y1: 30, y2: 80, stroke: C.cyan, 'stroke-width': 2}, svg);
+  return loop(t => {
+    const a = t % (DUR + 3);
+    play.setAttribute('x1', X0 + Math.min(a, DUR) * PPS); play.setAttribute('x2', X0 + Math.min(a, DUR) * PPS);
+    said.childNodes.forEach((n, i) => n.setAttribute('opacity', times[i] <= a ? 1 : 0.12));
+    const c1 = a >= SEAM + 0.15, c2 = a >= 2 * SEAM + 0.15 || a >= DUR;
+    outs.forEach(n => n.setAttribute('opacity', (n.dataset.c === '1' ? c1 : c2) ? 1 : 0));
+    seam.setAttribute('opacity', a >= SEAM ? 1 : 0); seamLbl.setAttribute('opacity', c1 ? 1 : 0);
+  });
+};
+
+/* ── Slide 5: encoder windows ──────────────────────────────────── */
+anims.windows = () => {
+  const svg = document.getElementById('windows-svg'); svg.innerHTML = '';
+  const X0 = 20, W = 1140, DUR = 20, PPS = W / DUR, WIN = 8, SPEED = 2, TICK = 0.3;
+  const env = envelope(300, 3);
+  const wave = el('g', {}, svg);
+  env.forEach((a, i) => el('rect', {x: X0 + i * W / env.length, y: 60 - a * 28, width: 2.4, height: a * 56, fill: C.cyan, opacity: 0.12, 'data-t': i / env.length * DUR}, wave));
+  el('text', {x: X0, y: 20, fill: C.muted, 'font-size': 13}, svg, 'RECORDING');
+  el('text', {x: X0, y: 146, fill: C.muted, 'font-size': 13}, svg, 'WHAT THIS TICK SENDS: ONE ITEM PER 8 S WINDOW');
+  const boxes = [0, 1, 2].map(k => {
+    const g = el('g', {}, svg);
+    const r = el('rect', {x: X0 + k * WIN * PPS + 2, y: 158, width: 0, height: 62, rx: 8, fill: 'none', stroke: C.cyan, 'stroke-width': 2}, g);
+    const l1 = el('text', {x: X0 + k * WIN * PPS + 16, y: 184, fill: C.cyan, 'font-size': 15, 'font-weight': 700}, g, '');
+    const l2 = el('text', {x: X0 + k * WIN * PPS + 16, y: 206, fill: C.ink2, 'font-size': 13}, g, '');
+    return {r, l1, l2, k};
+  });
+  for (let s = 0; s <= DUR; s += 4) {
+    const x = X0 + s * PPS;
+    el('line', {x1: x, x2: x, y1: 96, y2: 102, stroke: C.faint}, svg);
+    el('text', {x, y: 116, fill: C.faint, 'font-size': 12, 'text-anchor': s ? 'middle' : 'start'}, svg, s + ' s');
+  }
+  [8, 16].forEach(s => el('line', {x1: X0 + s * PPS, x2: X0 + s * PPS, y1: 26, y2: 226, stroke: C.line, 'stroke-dasharray': '4 4'}, svg));
+  const work = el('text', {x: X0, y: 262, fill: C.ink, 'font-size': 16}, svg, '');
+  const work2 = el('text', {x: X0, y: 290, fill: C.muted, 'font-size': 14}, svg, '');
+  const flash = el('rect', {x: 0, y: 158, width: 0, height: 62, rx: 8, fill: C.cyan, opacity: 0}, svg);
+  let lastTick = -1, flashT = -9;
+  return loop(t => {
+    const raw = (t * SPEED) % (DUR + 4);
+    const a = Math.min(raw, DUR);
+    if (raw > DUR + 3.6) lastTick = -1;
+    wave.childNodes.forEach(r => r.setAttribute('opacity', +r.dataset.t <= a ? 0.9 : 0.12));
+    const tick = Math.floor(a / TICK);
+    if (tick !== lastTick) { lastTick = tick; flashT = t; }
+    let closed = 0, openLen = 0;
+    boxes.forEach(b => {
+      const start = b.k * WIN, len = Math.max(0, Math.min(WIN, a - start));
+      const isClosed = len >= WIN, isOpen = len > 0 && !isClosed;
+      b.r.setAttribute('width', Math.max(0, len * PPS - 4));
+      if (isClosed) { closed++; b.r.setAttribute('fill', C.cyan); b.r.setAttribute('stroke-dasharray', ''); b.l1.setAttribute('fill', C.bg); b.l2.setAttribute('fill', C.bg);
+        b.l1.textContent = `item ${b.k + 1} · closed`; b.l2.textContent = 'same base64 WAV · cache hit'; }
+      else if (isOpen) { openLen = len; const tiny = len < 0.1;
+        b.r.setAttribute('fill', 'none'); b.r.setAttribute('stroke', tiny ? C.muted : C.cyan); b.r.setAttribute('stroke-dasharray', tiny ? '5 4' : '');
+        b.l1.setAttribute('fill', C.cyan); b.l2.setAttribute('fill', C.ink2);
+        b.l1.textContent = len * PPS > 150 ? `item ${b.k + 1} · open` : ''; b.l2.textContent = len * PPS > 150 ? `${len.toFixed(1)} s · re-encoded` : '';
+        if (!tiny) { flash.setAttribute('x', X0 + start * PPS + 2); flash.setAttribute('width', Math.max(0, len * PPS - 4)); }
+      } else { b.r.setAttribute('width', 0); b.l1.textContent = ''; b.l2.textContent = ''; }
+    });
+    const f = Math.max(0, 1 - (t - flashT) / 0.12);
+    flash.setAttribute('opacity', openLen >= 0.1 ? 0.35 * f : 0);
+    const enc = openLen >= 0.1 ? openLen : 0;
+    work.textContent = `tick ${tick} · audio ${a.toFixed(1)} s · re-encoded this tick: ${enc.toFixed(1)} s` + (closed ? ` · from cache: ${closed * WIN} s` : '');
+    work2.textContent = openLen > 0 && openLen < 0.1 ? 'open tail shorter than 100 ms: left out of this request' : 'repeat would re-encode all ' + a.toFixed(1) + ' s';
+  });
+};
+
+/* ── Slide 7: forced prefix ticks ──────────────────────────────── */
+function wordStarts(text) { const s = []; for (let i = 0; i < text.length; i++) if (!/\s/.test(text[i]) && (i === 0 || /\s/.test(text[i - 1]))) s.push(i); return s; }
+function settledPrefix(text, k) { // mirror of settled_prefix in src/continuous.rs
+  if (k === 0) return text.trimEnd();
+  const st = wordStarts(text);
+  if (st.length <= k) return '';
+  return text.slice(0, st[st.length - k]).trimEnd();
+}
+anims.ticks = () => {
+  const HYP = [
+    [0.6, 'Okay,'],
+    [0.9, 'Okay, so here'],
+    [1.5, 'Okay, so here is the plan'],
+    [2.1, 'Okay, so here is the plan for to'],
+    [2.7, 'Okay, so here is the plan for today. First,'],
+    [3.3, 'Okay, so here is the plan for today. First, I want to'],
+    [3.9, 'Okay, so here is the plan for today. First, I want to check the ghost'],
+    [4.5, 'Okay, so here is the plan for today. First, I want to check the ghost completion in the'],
+    [5.1, 'Okay, so here is the plan for today. First, I want to check the ghost completion in the browser.', true],
+  ];
+  const line = document.getElementById('tk-line'), phase = document.getElementById('tk-phase');
+  const tn = document.getElementById('tk-n'), ta = document.getElementById('tk-a'), td = document.getElementById('tk-d');
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const HDR = '<span class="hdr">language English&lt;asr_text&gt;</span>';
+  // Precompute frames: [stableBefore, hyp, stableAfter, prevOpen]
+  let stable = '', prevHyp = '';
+  const frames = HYP.map(([sec, hyp, last], i) => {
+    const before = stable;
+    const cont = hyp.slice(before.length);
+    let after = before;
+    if (!last) { const s = settledPrefix(hyp, 3); if (s.length > before.length && s.startsWith(before)) after = s; }
+    const f = {i: i + 1, sec, hyp, before, cont, after, last, prevHyp};
+    stable = after; prevHyp = hyp; return f;
+  });
+  const STEP = 3.2; // seconds per tick in the animation
+  let shown = '';
+  return loop(t => {
+    const total = frames.length * STEP + 2.5;
+    const tt = t % total, idx = Math.floor(tt / STEP);
+    if (idx >= frames.length) { // hold the final
+      const f = frames[frames.length - 1];
+      const html = HDR + `<span class="frozen">${esc(f.hyp)}</span>`;
+      if (shown !== html) { line.innerHTML = html; shown = html; phase.innerHTML = 'Stop pressed: the final tick decoded the open words too. Everything is committed.'; }
+      return;
+    }
+    const f = frames[idx], p = (tt - idx * STEP) / STEP;
+    tn.textContent = `tick ${f.i}${f.last ? ' · final' : ''}`; ta.textContent = `audio ${f.sec.toFixed(1)} s`;
+    const nWords = f.cont.trim() ? f.cont.trim().split(/\s+/).length : 0;
+    td.textContent = `decoded ${nWords} word${nWords === 1 ? '' : 's'}`;
+    let html, msg;
+    // What was open last tick and got replaced (for the "to" -> "today." revision).
+    const prevOpen = f.prevHyp.slice(f.before.length);
+    if (p < 0.28) { // request: forced prefix + previously open words shown struck if they will change
+      const pw = prevOpen.trim().split(/\s+/).filter(Boolean), cw = f.cont.trim().split(/\s+/);
+      const revised = pw.length > 0 && pw.some((w, k) => w !== cw[k]);
+      html = HDR + `<span class="frozen">${esc(f.before)}</span>` + (pw.length ? ' ' + pw.map((w, k) => `<span class="${w !== cw[k] ? 'gone' : 'open'}">${esc(w)}</span>`).join(' ') : '') + '<span class="caret"></span>';
+      msg = f.before ? `Request: the settled text is forced as the start of the answer. The open words from last tick are <b>not</b> sent; the model writes them again${revised ? ', and this time differently' : ''}.` : 'Request: nothing has settled yet, so the model writes from the start (header pinned from config).';
+    } else if (p < 0.62) { // decoding: continuation types in
+      const q = Math.min(1, (p - 0.28) / 0.3), n = Math.round(f.cont.length * q);
+      html = HDR + `<span class="frozen">${esc(f.before)}</span><span class="new">${esc(f.cont.slice(0, n))}</span><span class="caret"></span>`;
+      msg = `Decoding: only the continuation is generated${f.before ? ` after ${wordStarts(f.before).length} forced words` : ''}.`;
+    } else { // settle
+      const openPart = f.last ? '' : f.hyp.slice(f.after.length);
+      const newlySettled = f.after.slice(f.before.length);
+      if (f.last) {
+        html = HDR + `<span class="frozen">${esc(f.before)}</span><span class="new">${esc(f.cont)}</span>`;
+        msg = 'Final tick: nothing is held back.';
+      } else {
+        html = HDR + `<span class="frozen">${esc(f.before)}</span><span class="frozen">${esc(newlySettled)}</span>` + (openPart.trim() ? ` <span class="open">${esc(openPart.trim())}</span>` : '');
+        msg = newlySettled.trim() ? `Settle: everything except the last 3 words becomes the forced prefix for the next tick (+${wordStarts(newlySettled).length} word${wordStarts(newlySettled).length === 1 ? '' : 's'}).` : 'Settle: 3 words or fewer, so nothing settles yet; all of it stays open.';
+      }
+    }
+    if (html !== shown) { line.innerHTML = html; shown = html; }
+    phase.innerHTML = msg;
+  });
+};
+
+/* ── Slide 10: bars ────────────────────────────────────────────── */
+anims.bars = () => {
+  const tip = document.getElementById('tip');
+  const build = (id, rows, max, unit) => {
+    const host = document.getElementById(id); host.innerHTML = '';
+    rows.forEach(([label, r, c]) => {
+      const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label; host.appendChild(l);
+      const pair = document.createElement('div'); pair.className = 'pair';
+      [['rep', r, 'repeat'], ['con', c, 'continuous']].forEach(([cls, v, name]) => {
+        const b = document.createElement('div'); b.className = 'bar ' + cls; b.dataset.w = (v / max * 100) + '%';
+        b.innerHTML = `<span>${v} ${unit}</span>`;
+        b.addEventListener('mousemove', e => { tip.style.display = 'block'; tip.style.left = e.clientX + 14 + 'px'; tip.style.top = e.clientY + 10 + 'px'; tip.innerHTML = `<b>${name}</b><br>${label}: ${v} ${unit}`; });
+        b.addEventListener('mouseleave', () => tip.style.display = 'none');
+        pair.appendChild(b);
+      });
+      host.appendChild(pair);
+    });
+  };
+  build('bars-ms', [['tick p50', 458, 74], ['tick p95', 745, 198], ['last tick', 760, 223]], 1000, 'ms');
+  build('bars-s', [['total', '50.1', '11.0']], 60, 's');
+  const id = setTimeout(() => document.querySelectorAll('#bars-ms .bar, #bars-s .bar').forEach(b => b.style.width = b.dataset.w), 150);
+  return () => { clearTimeout(id); tip.style.display = 'none'; };
+};
+
+/* ── Slide 11: rollover ────────────────────────────────────────── */
+anims.rollover = () => {
+  const svg = document.getElementById('roll-svg'); svg.innerHTML = '';
+  const X0 = 20, W = 1140, DUR = 150, PPS = W / DUR, SPEED = 12, SOFT = 60, HARD = 80;
+  // Illustrative pauses (s). Segment 1 ends at the first pause after 60 s; segment 2 finds none before 80 s.
+  const pauses = [14, 31, 52, 63.5, 150];
+  const segs = []; { let s = 0; while (s < DUR) { const p = pauses.find(x => x - s >= SOFT); const e = Math.min(p !== undefined && p - s <= HARD ? p : s + HARD, DUR); segs.push([s, e, p !== undefined && p - s <= HARD && e === p ? 'pause' : (e === DUR ? 'end' : 'hard')]); s = e; } }
+  el('text', {x: X0, y: 20, fill: C.muted, 'font-size': 13}, svg, 'RECORDING  (▼ = pause: last 300 ms below RMS 500)');
+  el('rect', {x: X0, y: 34, width: W, height: 26, rx: 6, fill: 'none', stroke: C.line}, svg);
+  const fill = el('rect', {x: X0, y: 34, width: 0, height: 26, rx: 6, fill: C.cyan, opacity: 0.25}, svg);
+  pauses.filter(p => p < DUR).forEach(p => el('text', {x: X0 + p * PPS, y: 76, fill: C.muted, 'font-size': 12, 'text-anchor': 'middle'}, svg, '▼'));
+  for (let s = 0; s <= DUR; s += 30) el('text', {x: X0 + s * PPS, y: 96, fill: C.faint, 'font-size': 12, 'text-anchor': s ? (s === DUR ? 'end' : 'middle') : 'start'}, svg, s + ' s');
+  el('text', {x: X0, y: 128, fill: C.muted, 'font-size': 13}, svg, 'SEGMENTS SENT TO THE MODEL (each must fit max-model-len 2048, about 90 s)');
+  const segG = el('g', {}, svg);
+  const segEls = segs.map(([s, e, why], i) => {
+    const r = el('rect', {x: X0 + s * PPS + 2, y: 140, width: 0, height: 40, rx: 8, fill: 'none', stroke: C.cyan, 'stroke-width': 2}, segG);
+    const t = el('text', {x: X0 + s * PPS + 14, y: 166, fill: C.cyan, 'font-size': 14, 'font-weight': 700}, segG, '');
+    const n = el('text', {x: X0 + e * PPS, y: 200, fill: C.ink2, 'font-size': 12, 'text-anchor': 'end'}, segG, '');
+    return {r, t, n, s, e, why, i};
+  });
+  el('text', {x: X0, y: 236, fill: C.muted, 'font-size': 13}, svg, 'CURRENT SEGMENT LENGTH');
+  const gx = X0, gw = W * 0.6;
+  el('rect', {x: gx, y: 248, width: gw, height: 16, rx: 4, fill: 'none', stroke: C.line}, svg);
+  const gfill = el('rect', {x: gx, y: 248, width: 0, height: 16, rx: 4, fill: C.cyan}, svg);
+  [[SOFT, 'soft 60 s: cut at next pause'], [HARD, 'hard 80 s'], [90, '≈90 s context']].forEach(([v, l], k) => {
+    const x = gx + v / 90 * gw;
+    el('line', {x1: x, x2: x, y1: 242, y2: 270, stroke: k === 2 ? C.bad : C.ink2, 'stroke-width': 2}, svg);
+    el('text', {x: x + (k === 2 ? 6 : -4), y: 290, fill: k === 2 ? C.bad : C.ink2, 'font-size': 12, 'text-anchor': k === 2 ? 'start' : 'end'}, svg, l);
+  });
+  const glbl = el('text', {x: gx + gw + 120, y: 261, fill: C.ink, 'font-size': 15}, svg, '');
+  return loop(t => {
+    const a = Math.min((t * SPEED) % (DUR + 30), DUR);
+    fill.setAttribute('width', a * PPS);
+    let cur = segEls[0];
+    segEls.forEach(g => {
+      const len = Math.max(0, Math.min(g.e, a) - g.s);
+      g.r.setAttribute('width', Math.max(0, len * PPS - 4));
+      const done = a >= g.e;
+      g.r.setAttribute('fill', done ? C.cyan : 'none');
+      g.t.setAttribute('fill', done ? C.bg : C.cyan);
+      g.t.textContent = len * PPS > 140 ? `segment ${g.i + 1}${done ? ' · finished' : ' · live'}` : '';
+      g.n.textContent = done && g.why !== 'end' ? (g.why === 'pause' ? `cut at pause, ${(g.e - g.s).toFixed(1)} s` : `hard cut, ${(g.e - g.s).toFixed(0)} s`) : '';
+      if (a >= g.s && (a < g.e || g.i === segEls.length - 1)) cur = g;
+    });
+    const L = Math.min(a, cur.e) - cur.s;
+    gfill.setAttribute('width', Math.max(0, L / 90 * gw));
+    glbl.textContent = `segment ${cur.i + 1}: ${L.toFixed(1)} s`;
+  });
+};
+
+/* ── Slide 12: stream plugin ───────────────────────────────────── */
+anims.stream = () => {
+  const svg = document.getElementById('stream-svg'); svg.innerHTML = '';
+  const SLOW = 6, CHUNK = 0.05, MIN_STEP = 0.15, DEC = 0.054; // seconds (real)
+  const XC = 150, XS = 1030, Y0 = 40;
+  el('text', {x: XC, y: 24, fill: C.cyan, 'font-size': 15, 'font-weight': 700, 'text-anchor': 'middle'}, svg, 'ears client');
+  el('text', {x: XS, y: 24, fill: C.cyan, 'font-size': 15, 'font-weight': 700, 'text-anchor': 'middle'}, svg, 'vLLM + ears_stream');
+  el('rect', {x: XC - 90, y: Y0, width: 180, height: 220, rx: 12, fill: 'none', stroke: C.cyan, 'stroke-width': 2}, svg);
+  el('rect', {x: XS - 120, y: Y0, width: 240, height: 220, rx: 12, fill: 'none', stroke: C.cyan, 'stroke-width': 2}, svg);
+  el('text', {x: (XC + XS) / 2, y: 70, fill: C.muted, 'font-size': 13, 'text-anchor': 'middle'}, svg, 'new audio only, every 50 ms  →');
+  el('text', {x: (XC + XS) / 2, y: 238, fill: C.muted, 'font-size': 13, 'text-anchor': 'middle'}, svg, '←  partial: text + frozen_bytes');
+  el('text', {x: XS - 104, y: 82, fill: C.ink2, 'font-size': 13}, svg, 'new since last decode');
+  el('rect', {x: XS - 104, y: 92, width: 208, height: 14, rx: 4, fill: 'none', stroke: C.line}, svg);
+  const meter = el('rect', {x: XS - 104, y: 92, width: 0, height: 14, rx: 4, fill: C.cyan}, svg);
+  el('line', {x1: XS - 104 + 208 * 0.75, x2: XS - 104 + 208 * 0.75, y1: 88, y2: 110, stroke: C.ink2, 'stroke-width': 2}, svg);
+  el('text', {x: XS - 104 + 208 * 0.75, y: 124, fill: C.ink2, 'font-size': 11, 'text-anchor': 'middle'}, svg, 'min_step 150 ms');
+  const decBox = el('rect', {x: XS - 104, y: 140, width: 208, height: 40, rx: 8, fill: 'none', stroke: C.ai, 'stroke-width': 2}, svg);
+  const decTxt = el('text', {x: XS, y: 165, fill: C.ai, 'font-size': 14, 'text-anchor': 'middle'}, svg, 'idle');
+  const sent = el('text', {x: XC, y: 120, fill: C.ink2, 'font-size': 13, 'text-anchor': 'middle'}, svg, '');
+  const partialTxt = el('text', {x: XC, y: 160, fill: C.ai, 'font-size': 13, 'text-anchor': 'middle'}, svg, '');
+  const clockTxt = el('text', {x: XC, y: 200, fill: C.faint, 'font-size': 12, 'text-anchor': 'middle'}, svg, '');
+  const flying = el('g', {}, svg);
+  // Precompute a schedule (real seconds) following session._schedule: one decode at a time.
+  const T = 1.2, events = [];
+  let decodeEnd = -1, lastAt = 0, decN = 0;
+  const arrivals = []; for (let k = 1; k * CHUNK <= T + 1e-9; k++) arrivals.push(+(k * CHUNK).toFixed(3));
+  const decodes = [];
+  const sched = now => { if (now < decodeEnd) return; const n = arrivals.filter(x => x <= now + 1e-9).length * CHUNK; if (n - lastAt >= MIN_STEP - 1e-9) { lastAt = n; decodes.push([now, now + DEC, n]); decodeEnd = now + DEC; } };
+  let times = [...arrivals];
+  for (let i = 0; i < 400; i++) { const now = Math.min(...times.filter(x => x >= 0)); if (!isFinite(now) || now > T) break; times = times.filter(x => x !== now); sched(now); if (decodeEnd > now && !times.includes(decodeEnd)) times.push(decodeEnd); }
+  const fly = 0.4 / SLOW; // flight time in real-seconds equivalent (visual)
+  return loop(t => {
+    const r = (t / SLOW) % (T + 0.15);
+    flying.innerHTML = '';
+    arrivals.forEach(x => { const sendT = x - fly; if (r >= sendT && r < x) { const q = (r - sendT) / fly; el('rect', {x: XC + 90 + q * (XS - 120 - XC - 90) - 7, y: 80, width: 14, height: 10, rx: 2, fill: C.cyan}, flying); } });
+    decodes.forEach(([s, e]) => { if (r >= e && r < e + fly) { const q = (r - e) / fly; el('rect', {x: XS - 120 - q * (XS - 120 - XC - 90) - 7, y: 210, width: 14, height: 10, rx: 2, fill: C.ai}, flying); } });
+    const arrived = arrivals.filter(x => x <= r).length * CHUNK;
+    const last = decodes.filter(d => d[0] <= r).pop();
+    const base = last ? last[2] : 0;
+    meter.setAttribute('width', Math.min(208, Math.max(0, (arrived - base) / 0.2) * 208));
+    const running = decodes.find(([s, e]) => r >= s && r < e);
+    decTxt.textContent = running ? `decoding ${(running[2] * 1000).toFixed(0)} ms of audio` : 'idle';
+    decBox.setAttribute('fill', running ? C.tint : 'none');
+    const got = decodes.filter(([s, e]) => r >= e + fly).length;
+    sent.textContent = `audio sent: ${(arrived * 1000).toFixed(0)} ms`;
+    partialTxt.textContent = got ? `partials received: ${got}` : '';
+    clockTxt.textContent = `t = ${(r * 1000).toFixed(0)} ms (shown 6x slower)`;
+  });
+};
+
+/* ── driver ────────────────────────────────────────────────────── */
+let stopCur = null;
+function run(slide) {
+  if (stopCur) { stopCur(); stopCur = null; }
+  const name = slide && slide.dataset.anim;
+  if (name && anims[name]) stopCur = anims[name]();
+}
+Reveal.initialize({ width: 1280, height: 720, margin: 0.05, hash: true, slideNumber: 'c/t', transition: 'fade', backgroundTransition: 'none', center: false });
+Reveal.on('ready', e => run(e.currentSlide));
+Reveal.on('slidechanged', e => run(e.currentSlide));
+})();
+</script>
+</body>
+</html>
