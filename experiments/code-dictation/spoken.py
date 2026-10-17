@@ -15,7 +15,12 @@ NUMBERS.update({"hundred": "100", "thousand": "1000"})
 
 # Multi-word phrases first; longest match wins.
 SYMBOLS = {
-    "open paren": "(", "close paren": ")", "paren": "(", "open bracket": "[",
+    "open paren": "(", "close paren": ")", "paren": "(",
+    # how the ASR model writes them back
+    "open parentheses": "(", "open parenthesis": "(", "parentheses": "(", "parenthesis": "(",
+    "close parentheses": ")", "close parenthesis": ")", "closing paren": ")",
+    "closing parentheses": ")", "closing parenthesis": ")", "closing bracket": "]",
+    "closing brace": "}", "quotes": '"', "double quote": '"', "open bracket": "[",
     "close bracket": "]", "open brace": "{", "close brace": "}",
     "equals equals": "==", "double equals": "==", "not equals": "!=",
     "is not": "is not", "greater than": ">", "less than": "<",
@@ -120,10 +125,14 @@ OPENERS = {"brackets": ("[", "]"), "square": ("[", "]"), "braces": ("{", "}"),
            "curly": ("{", "}"), "parens": ("(", ")")}
 EMPTY = {"list": "[]", "dict": "{}", "string": '""', "tuple": "()", "set": "set()"}
 STRING_ENDS = {("end", "string"), ("end", "quote"), ("close", "quote")}
+# Said inside a "string ...", these end it and still act: "close" also
+# closes the bracket around it, "comma" starts the next argument, and a
+# spoken closing bracket closes it.
+STRING_STOPS = {("word", "close"), ("sym", ","), ("sym", ")"), ("sym", "]"), ("sym", "}")}
 RESERVED = {"of", "index", "call", "sub", "at", "close", "string", "empty"} | set(OPENERS)
 
 
-def string_literal(tokens, i, f=False):
+def string_literal(tokens, i, f=False, quoted=False):
     """Words after "string" (or a quote) up to the closing quote, "end
     string", or the end of the line -> a string literal. In an f-string,
     "brace NAME" is {name}. Returns (literal, next index)."""
@@ -136,6 +145,8 @@ def string_literal(tokens, i, f=False):
         if kind == "word" and j + 1 < len(tokens) and (val, tokens[j + 1][1]) in STRING_ENDS:
             j += 2
             break
+        if not quoted and (kind, val) in STRING_STOPS:
+            break  # left for the caller
         if f and (kind, val) == ("word", "brace") and j + 1 < len(tokens):
             parts.append("{" + str(tokens[j + 1][1]) + "}")
             j += 2
@@ -173,7 +184,7 @@ def python_expr(tokens, condition=False):
             i = j
             continue
         if (kind, val) == ("sym", '"') or (kind, val) == ("word", "string"):
-            literal, i = string_literal(tokens, i + 1)
+            literal, i = string_literal(tokens, i + 1, quoted=kind == "sym")
             emit(literal)
             continue
         if (kind, val) == ("word", "f") and nxt == ("word", "string"):
@@ -336,6 +347,11 @@ LAYOUT = {"new_line": ["new line", "newline", "next line", "you lie"],  # heard 
           "dedent": ["dedent", "the indent", "de indent", "deindent", "outdent", "unindent"]}
 
 
+# Formatting, in any mode: ruff for Python, otherwise the buffer's formatter.
+FORMAT = "<Cmd>lua _G.ears_format()<CR>"
+FORMAT_PHRASES = {"ruff": FORMAT, "rough": FORMAT, "format code": FORMAT,
+                  "format": FORMAT, "format file": FORMAT}
+
 # Normal-mode commands: phrase -> keys. A count ("down five", "triple dee
 # dee", "paste three times") goes before the keys, except for ":" commands,
 # which run that many times. Overridable under [normal] in code.toml.
@@ -357,6 +373,7 @@ NORMAL = {
     "single quotes": "cs\"'", "double quotes": "cs'\"",
     "change string": 'ci"', "change inside quotes": 'ci"', "change args": "ci(",
     "change inside parens": "ci(", "change inside brackets": "ci[", "delete args": "di(",
+    **FORMAT_PHRASES,
     "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
 }
 # Spoken letter names; an utterance made only of letters is typed as keys:
@@ -369,6 +386,7 @@ LETTERS = {"dee": "d", "why": "y", "gee": "g", "see": "c", "pee": "p", "you": "u
 INSERT = {
     "clear line": "<Esc>cc", "clear": "<Esc>cc", "backspace": "<BS>",
     "delete word": "<C-w>", "delete back": "<C-w>", "escape": "<Esc>", "normal mode": "<Esc>",
+    **FORMAT_PHRASES,
 }
 REPEATS = {"double": 2, "triple": 3, "quadruple": 4, "twice": 2, "thrice": 3}
 

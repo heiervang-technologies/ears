@@ -11,6 +11,7 @@ dedent = ["dedent", "the indent", "outdent", "unindent"]
 "clear line" = "<Esc>cc"
 backspace = "<BS>"
 "delete word" = "<C-w>"
+"format code" = "<Cmd>lua _G.ears_format()<CR>"  # also "ruff"; any mode
 
 # Normal and visual mode: the only things that do anything there. A count
 # goes in front ("down five" -> 5j, "triple dee dee" -> 3dd). Spelled
