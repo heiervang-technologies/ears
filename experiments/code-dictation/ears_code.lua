@@ -430,19 +430,36 @@ end
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
 -- Terminals and pickers keep ordinary ears typing.
 local SKIP_BUFTYPES = { terminal = true, prompt = true }
--- Whether the window holding this Neovim has focus right now; after this,
--- FocusGained/FocusLost keep it current. Under tmux, assume yes.
-local function has_focus()
-  if os.getenv("TMUX") then return true end
-  local ok, active = pcall(vim.json.decode, vim.fn.system({ "hyprctl", "activewindow", "-j" }))
-  if not ok or type(active) ~= "table" or not active.pid then return true end
-  local pid = vim.fn.getpid()
+-- Whether `pid` or one of its ancestors is `target`.
+local function descends(pid, target)
   while pid and pid > 1 do
-    if pid == active.pid then return true end
+    if pid == target then return true end
     local stat = io.open("/proc/" .. pid .. "/stat")
-    if not stat then break end
+    if not stat then return false end
     pid = tonumber(stat:read("*a"):match("^%d+ %b() %S+ (%d+)"))
     stat:close()
+  end
+  return false
+end
+
+-- Whether the window holding this Neovim has focus right now; after this,
+-- FocusGained/FocusLost keep it current. Under tmux, the pane must be the
+-- active one and a terminal showing its session must be the focused window:
+-- a Neovim in a background pane must not hold the claim (ears would stop
+-- typing everywhere else).
+local function has_focus()
+  local ok, active = pcall(vim.json.decode, vim.fn.system({ "hyprctl", "activewindow", "-j" }))
+  local known = ok and type(active) == "table" and active.pid
+  if not os.getenv("TMUX") then
+    return not known or descends(vim.fn.getpid(), active.pid)
+  end
+  local pane = os.getenv("TMUX_PANE") or ""
+  local flags = vim.fn.system({ "tmux", "display", "-p", "-t", pane, "#{pane_active}#{window_active}" })
+  if vim.trim(flags) ~= "11" then return false end
+  if not known then return true end
+  local session = vim.trim(vim.fn.system({ "tmux", "display", "-p", "-t", pane, "#{session_name}" }))
+  for _, client in ipairs(vim.fn.systemlist({ "tmux", "list-clients", "-t", session, "-F", "#{client_pid}" })) do
+    if descends(tonumber(client), active.pid) then return true end
   end
   return false
 end
