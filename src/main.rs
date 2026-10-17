@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         recording,
         transcribing,
         vad,
+        standby,
     }) = &cli.command
     {
         if let Some(current) = Config::state_dir_path()
@@ -42,6 +43,7 @@ async fn main() -> Result<()> {
                     ears::prompt::PromptState::Recording => recording,
                     ears::prompt::PromptState::Transcribing => transcribing,
                     ears::prompt::PromptState::Vad => vad,
+                    ears::prompt::PromptState::Standby => standby,
                 };
                 println!("{text}");
             }

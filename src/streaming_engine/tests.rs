@@ -1151,3 +1151,95 @@ fn test_cut_helpers() {
     assert_eq!(cut_sentence("Wait… what", 0), "Wait…".len());
     assert_eq!(cut_sentence("Earlier. new words", 8), 8);
 }
+
+async fn run_one(
+    engine: &mut StreamingEngine,
+    rx: &mut mpsc::UnboundedReceiver<StreamingEvent>,
+) -> Vec<String> {
+    let segs = feed(engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
+    let mut events = drain(rx);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    events.extend(drain(rx));
+    events
+}
+
+#[tokio::test]
+async fn test_wake_phrase_enters_standby_and_marks_it() {
+    let (mut engine, mut rx, _server, dir) = command_engine("Ears VAD.").await;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        ..Default::default()
+    });
+    let marker = dir.path().join("vad.standby");
+    std::fs::write(&marker, b"").unwrap();
+    engine.set_standby_marker(marker.clone());
+    assert!(!marker.exists(), "a stale marker is removed");
+
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby());
+    assert!(marker.exists());
+    assert!(engine.accumulated_text.is_empty());
+    assert!(
+        events.contains(&"VoiceCommand { name: \"standby\", text: \"Ears VAD.\" }".into()),
+        "{events:?}"
+    );
+
+    // Said again in standby, it resumes, and that switch is published.
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(!engine.is_standby());
+    assert!(!marker.exists());
+    assert!(
+        events.contains(&"VoiceCommand { name: \"resume\", text: \"Ears VAD.\" }".into()),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("Speech")),
+        "standby speech is not announced: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_standby_types_and_publishes_nothing() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Over.").await;
+    engine.standby = true;
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby());
+    assert!(engine.accumulated_text.is_empty());
+    assert!(
+        events.is_empty(),
+        "no cues, commands or text in standby: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_audio_wake_detector_skips_transcription_in_standby() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    struct Model(crate::wake::AudioVerdict);
+    impl crate::wake::WakeDetector for Model {
+        fn check_audio(&mut self, _: &[f32]) -> crate::wake::AudioVerdict {
+            self.0
+        }
+    }
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Hello."))
+        .expect(0)
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.typing_mode = TypingMode::None;
+    engine.standby = true;
+    engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::NotWake)));
+    assert!(run_one(&mut engine, &mut rx).await.is_empty());
+    engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::Wake)));
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(!engine.is_standby());
+    assert!(
+        events.contains(&"VoiceCommand { name: \"resume\", text: \"\" }".into()),
+        "{events:?}"
+    );
+}

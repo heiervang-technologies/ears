@@ -41,6 +41,7 @@ pub mod stream_client;
 pub mod streaming;
 pub mod streaming_engine;
 pub mod vad;
+pub mod wake;
 
 // Iteration 9: Text filters
 pub mod text_filters;

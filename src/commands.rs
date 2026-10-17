@@ -33,6 +33,10 @@ pub struct VoiceCommands {
     /// Phrases that delete the last dictated sentence.
     #[serde(default = "default_backtrack")]
     pub backtrack: Vec<String>,
+    /// Phrases that switch VAD between typing and standby, where it only
+    /// listens for these phrases (see `crate::wake`).
+    #[serde(default = "default_standby")]
+    pub standby: Vec<String>,
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal")]
     pub literal: Vec<String>,
@@ -70,6 +74,10 @@ fn default_backtrack() -> Vec<String> {
 /// Most words "back N" deletes.
 pub const BACK_MAX_WORDS: usize = 10;
 
+fn default_standby() -> Vec<String> {
+    vec!["ears vad".into(), "ears v a d".into()]
+}
+
 fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
@@ -87,6 +95,7 @@ impl Default for VoiceCommands {
             undo: default_undo(),
             back: default_back(),
             backtrack: default_backtrack(),
+            standby: default_standby(),
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
