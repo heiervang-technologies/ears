@@ -8,7 +8,8 @@ import difflib
 import re
 
 NUMBERS = {w: str(i) for i, w in enumerate(
-    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen".split())}
 NUMBERS.update({w: str(10 * (i + 2)) for i, w in enumerate(
     "twenty thirty forty fifty sixty seventy eighty ninety".split())})
 NUMBERS.update({"hundred": "100", "thousand": "1000"})
@@ -31,6 +32,16 @@ SYMBOLS = {
     "quote": '"', "dollar": "$", "dash": "-", "tilde": "~", "semicolon": ";",
     "percent": "%", "at sign": "@", "hash": "#", "underscore": "_",
 }
+# Python operators, for lex only.
+PY_SYMBOLS = {**SYMBOLS, "star star": "**", "double star": "**", "slash slash": "//",
+              "less than or equal": "<=", "less than or equal to": "<=",
+              "greater than or equal": ">=", "greater than or equal to": ">=",
+              "times equals": "*=", "slash equals": "/=", "pipe equals": "|=",
+              "ampersand": "&", "caret": "^", "shift left": "<<", "shift right": ">>",
+              "bang": "!", "question mark": "?", "arrow": "->",
+              "slash slash equals": "//=", "percent equals": "%=", "star star equals": "**=",
+              "ampersand equals": "&=", "caret equals": "^=", "shift left equals": "<<=",
+              "shift right equals": ">>=", "at sign equals": "@="}
 CASES = {"snake", "camel", "pascal", "constant", "smash", "kebab", "spell", "dunder"}
 MISHEARD = {"closed": "close", "non": "none", "def.": "def"}
 
@@ -61,13 +72,21 @@ def join_numbers(words):
 def words_of(asr_text):
     """Lowercase, drop ASR punctuation, spell numbers as digits."""
     text = asr_text.lower().replace("-", " dash ")
+    text = re.sub(r"(?<=\d)\.(?=\d)", " point ", text)
     text = re.sub(r"[.,!?\"]", " ", text)
     out = []
     for w in text.split():
         w = MISHEARD.get(w, w) if out or w != "f" else "def"
         if w:
             out.append(NUMBERS.get(w, w))
-    return join_numbers(out)
+    out = join_numbers(out)
+    for k in range(len(out) - 2, 0, -1):  # 60 point 0 -> 60.0
+        if out[k] == "point" and out[k - 1].isdigit() and out[k + 1].isdigit():
+            j = k + 1
+            while j < len(out) and out[j].isdigit():
+                j += 1
+            out[k - 1:j] = [out[k - 1] + "." + "".join(out[k + 1:j])]
+    return out
 
 
 def structural(word):
@@ -76,7 +95,49 @@ def structural(word):
     `print`, swallowing the call."""
     return (word in RESERVED or word in PY_KEYWORDS or word in PY_CALLABLES
             or word in PY_LITERALS or word in CASES or word in OPENERS
-            or word in {"f", "brace", "end", "quote", "with"})
+            or word in {"f", "brace", "end", "quote", "with", "taking", "returns"})
+
+
+def name_parts(name):
+    """How many words a name is said as: parse_args and ParseArgs are two."""
+    return len(re.findall(r"[A-Z]+[0-9]*(?![a-z])|[A-Z]?[a-z]+[0-9]*|[0-9]+", name)) or 1
+
+
+def shape(name):
+    """The casing word that fits how a name is written."""
+    core = name.strip("_")
+    if name.startswith("__") and name.endswith("__") and len(name) > 4:
+        return "dunder"
+    if core.isupper():
+        return "constant"
+    if core[:1].isupper():
+        return "pascal"
+    return "camel" if any(c.isupper() for c in core) else "snake"
+
+
+def cased(style, words, scope):
+    """A casing word and the words after it -> the name in scope they say
+    ("pascal sax exception" is SAXException), else None."""
+    exact = case(style, words)
+    if exact in scope:
+        return exact
+    joined = "".join(words)
+    fits = [n for n in scope if shape(n) == style and re.sub(r"[^a-z0-9]", "", n.lower()) == joined]
+    return min(fits, key=lambda n: (len(n) - len(n.lstrip("_")), n)) if fits else None
+
+
+def name_span(words, scope, stops):
+    """How many leading words are the name in a def or class head: a casing
+    word runs as far as a name in scope ("camel parse with context"), else
+    the name ends at a stop word."""
+    lead = 0
+    while lead < len(words) and words[lead] == "underscore":
+        lead += 1
+    if lead < len(words) - 1 and words[lead] in CASES:
+        for k in range(len(words) - lead - 1, 0, -1):
+            if cased(words[lead], words[lead + 1:lead + 1 + k], scope):
+                return lead + 1 + k
+    return split_at(words, *stops)
 
 
 def lex(words, scope):
@@ -85,37 +146,111 @@ def lex(words, scope):
     compact = {re.sub(r"[^a-z0-9]", "", s.lower()): s for s in scope
                if not structural(s.lower())}
     # Only names made of several words can be said as several words: "pass
-    # args" may be parse_args, but "i was" is not `was`.
-    multi = {k: v for k, v in compact.items() if "_" in v or re.search(r"[a-z][A-Z]", v)}
+    # args" may be parse_args, but "i was" is not `was`. A fuzzy match needs
+    # as many words as the name has: "dot charmap encode" is not
+    # charmap_encode, swallowing the dot.
+    multi = {k: v for k, v in compact.items() if name_parts(v) > 1}
+    by_parts = {}
+    for k, v in multi.items():
+        by_parts.setdefault(name_parts(v), []).append(k)
+    single = [k for k, v in compact.items() if name_parts(v) == 1]
+    in_scope = set(scope)
+    raw = False  # after a casing word ("dunder init"), words stay words
     while i < len(words):
-        for n in (3, 2, 1):  # longest symbol / scope match first
+        if raw and not structural(words[i]) and words[i] not in PY_SYMBOLS and not words[i].isdigit():
+            tokens.append(("word", words[i]))
+            i += 1
+            continue
+        raw = False
+        for n in (6, 5, 4, 3, 2, 1):  # longest symbol / scope match first
+            if len(words) - i < n:
+                continue
             phrase = " ".join(words[i:i + n])
-            if len(words) - i >= n and phrase in SYMBOLS:
-                tokens.append(("sym", SYMBOLS[phrase]))
+            if phrase in PY_SYMBOLS:
+                tokens.append(("sym", PY_SYMBOLS[phrase]))
                 break
             joined = "".join(words[i:i + n])
-            if len(words) - i >= n and n > 1 and not any(map(structural, words[i:i + n])) and (
+            if n > 1 and not any(map(structural, words[i:i + n])) and (
                     m := [joined] if joined in multi
-                    else difflib.get_close_matches(joined, multi, 1, 0.8)):
+                    else [] if any(w in PY_SYMBOLS for w in words[i:i + n])
+                    else difflib.get_close_matches(joined, by_parts.get(n, []), 1, 0.8)):
                 tokens.append(("name", multi[m[0]]))  # "pass args" -> parse_args
                 break
         else:
             n = 1
             w = words[i]
             if w in CASES and i + 1 < len(words):
-                tokens.append(("case", w))
-            elif w.isdigit():
+                # "snake is file" is is_file when that is in scope: the
+                # casing word lets a name hold words that mean code
+                run = next((k for k in range(min(8, len(words) - i - 1), 0, -1)
+                            if cased(w, words[i + 1:i + 1 + k], in_scope)), 0)
+                if run:
+                    tokens.append(("name", cased(w, words[i + 1:i + 1 + run], in_scope)))
+                    n += run
+                else:
+                    tokens.append(("case", w))
+                    raw = True
+            elif w.isdigit() or re.fullmatch(r"\d+\.\d+", w):
                 tokens.append(("num", w))
             elif structural(w):
                 tokens.append(("word", w))
             elif w in compact:
                 tokens.append(("name", compact[w]))
-            elif len(w) >= 4 and (m := difflib.get_close_matches(w, compact, 1, 0.75)):
+            elif len(w) >= 4 and (m := difflib.get_close_matches(w, single, 1, 0.75)):
                 tokens.append(("name", compact[m[0]]))  # "args" -> argv when in scope
             else:
                 tokens.append(("word", w))
         i += n
-    return tokens
+    # "underscore inner" is _inner, "underscore underscore x" is __x
+    out, lead = [], 0
+    for t in tokens:
+        if t == ("sym", "_"):
+            lead += 1
+            continue
+        if lead and (t[0] == "name" or t[0] == "word" and not structural(t[1])):
+            v = str(t[1])
+            out.append(("name", "_" * lead + (v if v.endswith("__") else v.lstrip("_"))))
+        else:
+            out += [("sym", "_")] * lead + [t]
+        lead = 0
+    return out + [("sym", "_")] * lead
+
+
+def ident(words, scope, pascal=False):
+    """Words that can only be one name (a def, a class, an imported name) ->
+    that name: a casing word, a name in scope, or snake_case (PascalCase for
+    a class)."""
+    lead = 0
+    while lead < len(words) - 1 and words[lead] == "underscore":
+        lead += 1  # "underscore ast" -> _ast
+    if lead:
+        name = ident(words[lead:], scope, pascal)
+        return name if name.endswith("__") else "_" * lead + name.lstrip("_")
+    if not words:
+        return ""
+    if words[0] in CASES and len(words) > 1:
+        return cased(words[0], words[1:], set(scope)) or case(words[0], words[1:])
+    joined = "".join(words)
+    known = [n for n in scope if re.sub(r"[^a-z0-9]", "", n.lower()) == joined]
+    if pascal:
+        known = [n for n in known if n.lstrip("_")[:1].isupper()]
+    if known:
+        return known[-1]
+    if len(words) > 1:
+        sized = {re.sub(r"[^a-z0-9]", "", n.lower()): n for n in scope
+                 if name_parts(n) == len(words) and (not pascal or n.lstrip("_")[:1].isupper())}
+        m = difflib.get_close_matches(joined, sized, 1, 0.8)
+        if m:
+            return sized[m[0]]
+    return case("pascal" if pascal else "snake", words)
+
+
+def split_at(words, *stops):
+    """Index of the first stop word (or two-word stop), else len(words)."""
+    for k in range(len(words)):
+        if words[k] in stops or " ".join(words[k:k + 2]) in stops:
+            return k
+    return len(words)
 
 
 def case(style, parts):
@@ -203,14 +338,18 @@ def python_expr(tokens, condition=False):
         nxt = tokens[i + 1] if i + 1 < len(tokens) else (None, None)
         if kind == "case":
             j = i + 1
-            while j < len(tokens) and tokens[j][0] == "word":
-                j += 1
+            while j < len(tokens) and tokens[j][0] == "word" and (j == i + 1 or not structural(tokens[j][1])):
+                j += 1  # "dunder new of cls": the name ends at "of"
             emit(case(val, [t[1] for t in tokens[i + 1:j]]))
             i = j
             continue
         if (kind, val) == ("sym", '"') or (kind, val) == ("word", "string"):
             literal, i = string_literal(tokens, i + 1, quoted=kind == "sym")
             value(literal)
+            continue
+        if (kind, val) == ("word", "bytes") and nxt == ("word", "string"):
+            literal, i = string_literal(tokens, i + 2)
+            value("b" + literal)
             continue
         if (kind, val) == ("word", "f") and nxt == ("word", "string"):
             literal, i = string_literal(tokens, i + 2, f=True)
@@ -234,10 +373,15 @@ def python_expr(tokens, condition=False):
             emit(val)
         elif kind == "word" and val in PY_CALLABLES:
             emit(val)
-            if nxt == ("word", "of"):
+            said_of = nxt == ("word", "of")
+            if said_of:
                 i += 1  # "sum of x" already says the call
-            if i + 1 < len(tokens) and tokens[i + 1] != ("sym", "("):
-                open_("(", ")")  # "range ten" -> range(10)
+            after = tokens[i + 1] if i + 1 < len(tokens) else (None, None)
+            starts_value = after[0] in ("name", "num", "case") or after in (("sym", '"'), ("sym", "-")) or (
+                after[0] == "word" and after[1] not in PY_KEYWORDS - {"not", "lambda", "None", "True", "False"}
+                and after[1] not in RESERVED - {"string", "empty"} | set(OPENERS))
+            if (said_of or starts_value) and after != ("sym", "("):
+                open_("(", ")")  # "range ten" -> range(10); "type comma" is the name
         elif kind == "word":
             j = i
             while j < len(tokens) and tokens[j][0] == "word" and tokens[j][1] not in (
@@ -247,7 +391,7 @@ def python_expr(tokens, condition=False):
             i = max(j, i + 1)
             continue
         elif kind == "sym":
-            if val == "=" and condition:
+            if val == "=" and condition and not opened:
                 val = "=="
             if val in ("(", "[", "{"):
                 open_(val, {"(": ")", "[": "]", "{": "}"}[val], space="force" if val == "{" else False)
@@ -278,21 +422,75 @@ def python_line(asr_text, scope=()):
     toks = lex(rest, scope)
     while toks and toks[-1] == ("sym", ":"):
         toks.pop()  # the colon goes without saying
+    if head == "async" and rest:
+        return "async " + python_line(" ".join(rest), scope)
+    if head == "at" and rest:  # a decorator: "at property", "at sign app dot route of ..."
+        return "@" + python_expr(lex(rest[1:] if rest[0] == "sign" else rest, scope))
     if head == "def":
-        names = [t for t in toks]
-        split = next((k for k, t in enumerate(names) if t in (("word", "taking"), ("word", "with"), ("sym", "("))), len(names))
-        name = python_expr(names[:split])
-        args = [t for t in names[split + 1:] if t not in (("sym", ")"), ("sym", ":"))]
-        params = ", ".join(python_expr([t]) for t in args if t != ("sym", ","))
-        return f"def {name}({params}):"
+        # "def f taking self comma x equals none comma star args returns int"
+        k = name_span(rest, set(scope), ("taking", "with", "returns", "arrow", "open paren", "open parentheses",
+                                         "open parenthesis", "paren", "parentheses", "parenthesis"))
+        name = ident(rest[:k], scope)
+        toks = lex(rest[k:], scope)
+        while toks and toks[-1] == ("sym", ":"):
+            toks.pop()
+        end = next((k for k, t in enumerate(toks) if t in (("word", "returns"), ("sym", "->"))), len(toks))
+        args = toks[1:end] if toks and toks[0] in (("word", "taking"), ("word", "with"), ("sym", "(")) else []
+        if args and args[-1] == ("sym", ")"):
+            args = args[:-1]  # said "open paren ... close paren"
+        returns = f" -> {python_expr(toks[end + 1:])}" if end < len(toks) else ""
+        return f"def {name}({python_expr(args)}){returns}:"
     if head == "class":
-        name = case("pascal", [t[1] for t in toks if t[0] != "sym"])
-        return f"class {name if len(toks) > 1 else toks[0][1] if toks[0][0] == 'name' else name}:"
+        # "class request handler of base handler": the name is PascalCase
+        k = name_span(rest, set(scope), ("of", "open paren", "open parentheses", "open parenthesis", "paren",
+                                         "parentheses", "parenthesis"))
+        name = ident(rest[:k], scope, pascal=True)
+        bases = [t for t in lex(rest[k:], scope)[1:] if t != ("sym", ":")]
+        if bases and bases[-1] == ("sym", ")"):
+            bases = bases[:-1]
+        return f"class {name}({python_expr(bases)}):" if bases else f"class {name}:"
+    if head in ("import", "from") and (head == "import" or "import" in rest):
+        # every word here is part of a name: "from typing import any comma type alias"
+        def dotted(ws):
+            parts, k = [], 0
+            while k < len(ws) and ws[k] == "dot":
+                parts.append(".")  # relative: "from dot console import ..."
+                k += 1
+            names = []
+            for w in ws[k:]:
+                if w == "dot" or not names:
+                    names.append([])
+                if w != "dot":
+                    names[-1].append(w)
+            return "".join(parts) + ".".join(ident(n, scope) for n in names if n)
+
+        def aliases(ws):
+            out, groups, cur = [], [], []
+            for w in ws:
+                if w == "comma":
+                    groups.append(cur)
+                    cur = []
+                else:
+                    cur.append(w)
+            groups.append(cur)
+            for g in groups:
+                if g == ["star"]:
+                    out.append("*")
+                    continue
+                a = split_at(g, "as")
+                alias = f" as {ident(g[a + 1:], scope)}" if a < len(g) else ""
+                out.append(dotted(g[:a]) + alias)
+            return ", ".join(o for o in out if o)
+
+        if head == "import":
+            return f"import {aliases(rest)}"
+        k = rest.index("import")
+        return f"from {dotted(rest[:k])} import {aliases(rest[k + 1:])}"
     if head in ("else", "try", "finally"):
         return f"{head}:"
     if head in PY_BLOCKS:
         return f"{head} {python_expr(toks, condition=head in ('if', 'elif', 'while'))}:"
-    if head in ("return", "import", "from", "raise", "assert", "yield", "del"):
+    if head in ("return", "import", "from", "raise", "assert", "yield", "del", "global", "nonlocal"):
         return f"{head} {python_expr(toks, condition=head == 'assert')}".strip()
     return python_expr(lex(words, scope))
 
