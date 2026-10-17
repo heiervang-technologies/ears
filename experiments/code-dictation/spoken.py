@@ -70,10 +70,23 @@ def words_of(asr_text):
     return join_numbers(out)
 
 
+def structural(word):
+    """Words that shape the code ("of", "string", "if", "print") are never
+    taken for, or merged into, a name in scope: "print of" must not become
+    `print`, swallowing the call."""
+    return (word in RESERVED or word in PY_KEYWORDS or word in PY_CALLABLES
+            or word in PY_LITERALS or word in CASES or word in OPENERS
+            or word in {"f", "brace", "end", "quote", "with"})
+
+
 def lex(words, scope):
     """Words -> tokens: ("sym", s) | ("word", w) | ("num", n) | ("name", n)."""
     tokens, i = [], 0
-    compact = {re.sub(r"[^a-z0-9]", "", s.lower()): s for s in scope}
+    compact = {re.sub(r"[^a-z0-9]", "", s.lower()): s for s in scope
+               if not structural(s.lower())}
+    # Only names made of several words can be said as several words: "pass
+    # args" may be parse_args, but "i was" is not `was`.
+    multi = {k: v for k, v in compact.items() if "_" in v or re.search(r"[a-z][A-Z]", v)}
     while i < len(words):
         for n in (3, 2, 1):  # longest symbol / scope match first
             phrase = " ".join(words[i:i + n])
@@ -81,10 +94,10 @@ def lex(words, scope):
                 tokens.append(("sym", SYMBOLS[phrase]))
                 break
             joined = "".join(words[i:i + n])
-            if len(words) - i >= n and n > 1 and (
-                    m := [joined] if joined in compact
-                    else difflib.get_close_matches(joined, compact, 1, 0.8)):
-                tokens.append(("name", compact[m[0]]))  # "pass args" -> parse_args
+            if len(words) - i >= n and n > 1 and not any(map(structural, words[i:i + n])) and (
+                    m := [joined] if joined in multi
+                    else difflib.get_close_matches(joined, multi, 1, 0.8)):
+                tokens.append(("name", multi[m[0]]))  # "pass args" -> parse_args
                 break
         else:
             n = 1
@@ -93,6 +106,8 @@ def lex(words, scope):
                 tokens.append(("case", w))
             elif w.isdigit():
                 tokens.append(("num", w))
+            elif structural(w):
+                tokens.append(("word", w))
             elif w in compact:
                 tokens.append(("name", compact[w]))
             elif len(w) >= 4 and (m := difflib.get_close_matches(w, compact, 1, 0.75)):
@@ -173,6 +188,16 @@ def python_expr(tokens, condition=False):
         emit(o, space=space)
         opened.append(c)
 
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+
+    def value(piece, space=True):
+        """Emit a value. Right after a name it is that name's argument:
+        `say "hi"` or `foo x` is no Python 3, so it means say("hi"), foo(x)."""
+        if out and ident.search(out[-1]) and out[-1] not in PY_KEYWORDS:
+            open_("(", ")")
+            space = False
+        emit(piece, space)
+
     while i < len(tokens):
         kind, val = tokens[i]
         nxt = tokens[i + 1] if i + 1 < len(tokens) else (None, None)
@@ -185,11 +210,11 @@ def python_expr(tokens, condition=False):
             continue
         if (kind, val) == ("sym", '"') or (kind, val) == ("word", "string"):
             literal, i = string_literal(tokens, i + 1, quoted=kind == "sym")
-            emit(literal)
+            value(literal)
             continue
         if (kind, val) == ("word", "f") and nxt == ("word", "string"):
             literal, i = string_literal(tokens, i + 2, f=True)
-            emit(literal)
+            value(literal)
             continue
         if (kind, val) == ("word", "empty") and nxt[1] in EMPTY:
             emit(EMPTY[nxt[1]])
@@ -218,7 +243,7 @@ def python_expr(tokens, condition=False):
             while j < len(tokens) and tokens[j][0] == "word" and tokens[j][1] not in (
                     PY_KEYWORDS | PY_CALLABLES | set(PY_LITERALS) | RESERVED):
                 j += 1
-            emit("_".join(t[1] for t in tokens[i:max(j, i + 1)]))
+            value("_".join(t[1] for t in tokens[i:max(j, i + 1)]))
             i = max(j, i + 1)
             continue
         elif kind == "sym":
@@ -234,7 +259,7 @@ def python_expr(tokens, condition=False):
             else:
                 emit(val)
         else:
-            emit(val)
+            value(val)  # names in scope and numbers
         i += 1
     while opened:  # unbalanced brackets close themselves at the end
         emit(opened.pop())
