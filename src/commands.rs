@@ -10,41 +10,44 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// `[commands]` config section.
+///
+/// Phrase lists add to the built-in phrases instead of replacing them:
+/// `sleep = ["fuck off clanker"]` keeps "ears off" working too.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VoiceCommands {
     /// Recognize commands at all (default: false).
     #[serde(default)]
     pub enabled: bool,
     /// Phrases that press Enter.
-    #[serde(default = "default_enter")]
+    #[serde(default = "default_enter", deserialize_with = "more_enter")]
     pub enter: Vec<String>,
     /// Phrases that press Shift+Enter (a new line without sending, in chat
     /// boxes and agent prompts).
-    #[serde(default = "default_new_line")]
+    #[serde(default = "default_new_line", deserialize_with = "more_new_line")]
     pub new_line: Vec<String>,
     /// Phrases that delete the last dictated utterance (say it again to
     /// delete the one before). Only in the window it was typed into.
-    #[serde(default = "default_undo")]
+    #[serde(default = "default_undo", deserialize_with = "more_undo")]
     pub undo: Vec<String>,
     /// Words that, followed by a number from 1 to 10 ("back 3", "back
     /// three"), delete that many of the last dictated words.
-    #[serde(default = "default_back")]
+    #[serde(default = "default_back", deserialize_with = "more_back")]
     pub back: Vec<String>,
     /// Phrases that delete the last dictated sentence.
-    #[serde(default = "default_backtrack")]
+    #[serde(default = "default_backtrack", deserialize_with = "more_backtrack")]
     pub backtrack: Vec<String>,
     /// Phrases that switch VAD between typing and standby, where it only
     /// listens for these phrases (see `crate::wake`).
-    #[serde(default = "default_standby")]
+    #[serde(default = "default_standby", deserialize_with = "more_standby")]
     pub standby: Vec<String>,
     /// Phrases that resume typing from standby ("ears on").
-    #[serde(default = "default_wake")]
+    #[serde(default = "default_wake", deserialize_with = "more_wake")]
     pub wake: Vec<String>,
     /// Phrases that put VAD in standby ("ears off").
-    #[serde(default = "default_sleep")]
+    #[serde(default = "default_sleep", deserialize_with = "more_sleep")]
     pub sleep: Vec<String>,
     /// Words that, said first, type the rest of the utterance as text.
-    #[serde(default = "default_literal")]
+    #[serde(default = "default_literal", deserialize_with = "more_literal")]
     pub literal: Vec<String>,
     /// Phrases that press a key combination, e.g. `background = "ctrl+b"`.
     /// See [`keycodes`] for the key names.
@@ -55,6 +58,37 @@ pub struct VoiceCommands {
     /// 0: press at once.
     #[serde(default = "default_accept_ms")]
     pub accept_ms: u64,
+}
+
+/// The built-in phrases followed by the configured ones not already there.
+fn with_defaults(mut phrases: Vec<String>, configured: Vec<String>) -> Vec<String> {
+    for phrase in configured {
+        if !phrases.iter().any(|p| normalize(p) == normalize(&phrase)) {
+            phrases.push(phrase);
+        }
+    }
+    phrases
+}
+
+/// `more_X`: deserialize a phrase list for field X on top of `default_X`.
+macro_rules! accumulate {
+    ($($more:ident => $default:ident),* $(,)?) => {$(
+        fn $more<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<String>, D::Error> {
+            Ok(with_defaults($default(), Vec::<String>::deserialize(de)?))
+        }
+    )*};
+}
+
+accumulate! {
+    more_enter => default_enter,
+    more_new_line => default_new_line,
+    more_undo => default_undo,
+    more_back => default_back,
+    more_backtrack => default_backtrack,
+    more_standby => default_standby,
+    more_wake => default_wake,
+    more_sleep => default_sleep,
+    more_literal => default_literal,
 }
 
 fn default_enter() -> Vec<String> {
@@ -321,6 +355,23 @@ pub fn keycodes(combo: &str) -> Option<Vec<u16>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_phrases_add_to_the_built_in_ones() {
+        let commands: VoiceCommands = toml::from_str(
+            r#"
+            enabled = true
+            sleep = ["fuck off clanker", "Ears off."]
+            enter = ["over"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(commands.sleep, ["ears off", "fuck off clanker"]);
+        assert_eq!(commands.enter, ["enter", "over"]);
+        assert_eq!(commands.wake, default_wake());
+        assert_eq!(commands.parse("Enter."), Some(Command::Enter));
+        assert_eq!(commands.parse("Over."), Some(Command::Enter));
+    }
 
     fn over() -> VoiceCommands {
         VoiceCommands {
