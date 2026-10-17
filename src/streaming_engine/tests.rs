@@ -1043,6 +1043,7 @@ fn window_b() -> Option<String> {
 
 #[test]
 fn test_scratch_deletes_utterances_newest_first_in_their_window() {
+    use crate::commands::Command;
     let dir = tempfile::tempdir().unwrap();
     let (mut engine, _rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
     engine.focus_probe = window_a;
@@ -1051,17 +1052,24 @@ fn test_scratch_deletes_utterances_newest_first_in_their_window() {
     engine.accumulated_text = "first second".into();
     engine.note_typed(7, 5);
 
-    let last = engine.undoable().unwrap();
-    assert_eq!(last.chars, 7, "the newest utterance, with its space");
-    engine.forget_last_typed(&last);
+    let cut = engine.delete_cut(&Command::Undo).unwrap();
+    assert_eq!(
+        &engine.accumulated_text[cut..],
+        " second",
+        "the newest utterance, with its space"
+    );
+    engine.forget_typed_after(cut);
     assert_eq!(engine.accumulated_text, "first");
-    assert_eq!(engine.undoable().unwrap().chars, 5);
+    assert_eq!(engine.delete_cut(&Command::Undo), Ok(0));
 
     // Never into another window.
     engine.focus_probe = window_b;
-    assert!(engine.undoable().is_err());
+    assert!(engine.delete_cut(&Command::Undo).is_err());
     engine.focus_probe = || None;
-    assert!(engine.undoable().is_err(), "unknown focus is not trusted");
+    assert!(
+        engine.delete_cut(&Command::Undo).is_err(),
+        "unknown focus is not trusted"
+    );
 
     // Typing into another window starts a new history there.
     engine.focus_probe = window_b;
@@ -1071,12 +1079,75 @@ fn test_scratch_deletes_utterances_newest_first_in_their_window() {
 
 #[test]
 fn test_nothing_to_scratch_is_reported() {
+    use crate::commands::Command;
     let dir = tempfile::tempdir().unwrap();
     let (mut engine, mut rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
     engine.focus_probe = window_a;
     engine.typing_mode = TypingMode::Wtype;
-    engine.undo_last("Scratch that.");
-    assert!(drain(&mut rx).contains(&"SegmentDiscarded { reason: \"nothing to scratch\" }".into()));
+    engine.delete_typed(&Command::Undo, "Scratch that.");
+    assert!(drain(&mut rx).contains(&"SegmentDiscarded { reason: \"nothing to delete\" }".into()));
+    engine.accumulated_text = "x".repeat(1001);
     engine.note_typed(1001, 0);
-    assert_eq!(engine.undoable().unwrap_err(), "too long to scratch");
+    assert_eq!(engine.delete_cut(&Command::Undo), Err("too long to delete"));
+}
+
+#[test]
+fn test_back_deletes_words_across_utterances_but_not_before_them() {
+    use crate::commands::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
+    engine.focus_probe = window_a;
+    // "Earlier" was typed before the remembered utterances (e.g. before an Enter).
+    engine.accumulated_text = "Earlier one two".into();
+    engine.note_typed(8, 7);
+    engine.accumulated_text = "Earlier one two three four".into();
+    engine.note_typed(11, 15);
+
+    let cut = engine.delete_cut(&Command::Back(3)).unwrap();
+    assert_eq!(&engine.accumulated_text[cut..], " two three four");
+    engine.forget_typed_after(cut);
+    assert_eq!(engine.accumulated_text, "Earlier one");
+    assert_eq!(
+        engine.undo_marks.len(),
+        1,
+        "the emptied utterance is forgotten"
+    );
+    assert_eq!(engine.undo_marks[0].chars, 4, "the cut one keeps its rest");
+
+    // More words than were dictated stops at the first remembered utterance.
+    let cut = engine.delete_cut(&Command::Back(10)).unwrap();
+    assert_eq!(&engine.accumulated_text[..cut], "Earlier");
+    engine.forget_typed_after(cut);
+    assert!(engine.undo_marks.is_empty());
+    assert_eq!(
+        engine.delete_cut(&Command::Back(1)),
+        Err("nothing to delete")
+    );
+}
+
+#[test]
+fn test_backtrack_deletes_the_last_sentence() {
+    use crate::commands::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
+    engine.focus_probe = window_a;
+    engine.accumulated_text = "Hello there. How are you?".into();
+    engine.note_typed(25, 0);
+    let cut = engine.delete_cut(&Command::Backtrack).unwrap();
+    assert_eq!(&engine.accumulated_text[cut..], " How are you?");
+    engine.forget_typed_after(cut);
+    let cut = engine.delete_cut(&Command::Backtrack).unwrap();
+    assert_eq!(cut, 0, "no sentence before it: everything dictated goes");
+}
+
+#[test]
+fn test_cut_helpers() {
+    assert_eq!(cut_words("a bb ccc", 0, 1), 4);
+    assert_eq!(cut_words("a bb ccc ", 0, 2), 1);
+    assert_eq!(cut_words("a bb ccc", 0, 9), 0);
+    assert_eq!(cut_words("keep a bb", 4, 5), 4);
+    assert_eq!(cut_sentence("One. Two! Three", 0), 9);
+    assert_eq!(cut_sentence("One. Two!  ", 0), 4);
+    assert_eq!(cut_sentence("Wait… what", 0), "Wait…".len());
+    assert_eq!(cut_sentence("Earlier. new words", 8), 8);
 }

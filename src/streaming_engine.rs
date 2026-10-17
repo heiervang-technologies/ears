@@ -658,8 +658,11 @@ impl StreamingEngine {
         // The ghost shows the command word; it must not be committed. It
         // turns the accept colour, then goes before the key is pressed.
         self.ghost_accept(heard).await;
-        if *command == Command::Undo {
-            self.undo_last(heard);
+        if matches!(
+            command,
+            Command::Undo | Command::Back(_) | Command::Backtrack
+        ) {
+            self.delete_typed(command, heard);
             return;
         }
         let start = Instant::now();
@@ -670,7 +673,7 @@ impl StreamingEngine {
                 Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
                 None => return,
             },
-            Command::Literal(_) | Command::Undo => return,
+            Command::Literal(_) | Command::Undo | Command::Back(_) | Command::Backtrack => return,
         }
         .map(|()| 0)
         .map_err(|e| {
@@ -723,52 +726,90 @@ impl StreamingEngine {
         }
     }
 
-    /// The utterance "scratch that" may delete now, if any. Only in the
-    /// window it was typed into, and only when that window is known.
-    fn undoable(&self) -> Result<UndoMark, &'static str> {
-        let mark = self.undo_marks.last().ok_or("nothing to scratch")?;
+    /// Where the text ears may delete now begins in `accumulated_text`:
+    /// the oldest remembered utterance. Only in the window it was typed
+    /// into, and only when that window is known.
+    fn deletable_start(&self) -> Result<usize, &'static str> {
+        let (Some(first), Some(last)) = (self.undo_marks.first(), self.undo_marks.last()) else {
+            return Err("nothing to delete");
+        };
         let window = (self.focus_probe)();
-        if window.is_none() || window != mark.window {
-            return Err("scratch only works in the window it was typed into");
+        if window.is_none() || window != last.window {
+            return Err("deleting only works in the window it was typed into");
         }
-        if mark.chars > UNDO_MAX_CHARS {
-            return Err("too long to scratch");
+        if !self
+            .accumulated_text
+            .is_char_boundary(first.accumulated_len)
+        {
+            return Err("nothing to delete");
         }
-        Ok(mark.clone())
+        Ok(first.accumulated_len)
     }
 
-    /// Delete the last dictated utterance with Backspace.
-    fn undo_last(&mut self, heard: &str) {
-        let mark = match self.undoable() {
-            Ok(mark) => mark,
+    /// Where `accumulated_text` is cut to carry out a delete command.
+    fn delete_cut(&self, command: &crate::commands::Command) -> Result<usize, &'static str> {
+        use crate::commands::Command;
+        let floor = self.deletable_start()?;
+        let text = &self.accumulated_text;
+        let cut = match command {
+            Command::Undo => self.undo_marks.last().map_or(floor, |m| m.accumulated_len),
+            Command::Back(n) => cut_words(text, floor, *n),
+            Command::Backtrack => cut_sentence(text, floor),
+            _ => return Err("not a delete command"),
+        };
+        let chars = text[cut..].chars().count();
+        if chars == 0 {
+            return Err("nothing to delete");
+        }
+        if chars > UNDO_MAX_CHARS {
+            return Err("too long to delete");
+        }
+        Ok(cut)
+    }
+
+    /// "Scratch that", "back N" and "backtrack": delete dictated text with
+    /// Backspace.
+    fn delete_typed(&mut self, command: &crate::commands::Command, heard: &str) {
+        let cut = match self.delete_cut(command) {
+            Ok(cut) => cut,
             Err(reason) => {
                 self.discard(reason);
                 return;
             }
         };
         let start = Instant::now();
-        let chars = mark.chars;
+        let chars = self.accumulated_text[cut..].chars().count();
         let outcome = run_blocking(move || TextInput::send_backspaces(chars))
             .map(|()| 0)
             .map_err(|e| {
                 crate::progressive_typing::ProgressiveTypingError::TextInputError(e.to_string())
             });
         if self.handle_typing_outcome(outcome, start) {
-            self.forget_last_typed(&mark);
-            info!("Voice command: undo, {} characters ({:?})", chars, heard);
+            self.forget_typed_after(cut);
+            info!(
+                "Voice command: {}, {} characters ({:?})",
+                command.label(),
+                chars,
+                heard
+            );
             crate::desktop::AudioFeedback::beep_done().ok();
             self.send_event(StreamingEvent::VoiceCommand {
-                name: "undo".to_string(),
+                name: command.label(),
                 text: heard.to_string(),
             });
         }
     }
 
-    /// The last utterance is gone from the screen: drop it from the text
-    /// ears believes it typed.
-    fn forget_last_typed(&mut self, mark: &UndoMark) {
-        self.undo_marks.pop();
-        self.accumulated_text.truncate(mark.accumulated_len);
+    /// Text from byte `cut` on is gone from the screen: drop it from the
+    /// text ears believes it typed, and from the remembered utterances.
+    fn forget_typed_after(&mut self, cut: usize) {
+        self.accumulated_text.truncate(cut);
+        self.undo_marks.retain(|m| m.accumulated_len < cut);
+        if let Some(last) = self.undo_marks.last_mut() {
+            last.chars = self.accumulated_text[last.accumulated_len..]
+                .chars()
+                .count();
+        }
         self.progressive_typing
             .set_typed_text(&self.accumulated_text);
         if self.undo_marks.is_empty() && self.accumulated_text.is_empty() {
@@ -969,6 +1010,33 @@ fn prune_kept_audio(dir: &std::path::Path, keep: usize) {
 }
 
 use crate::pcm::{to_i16 as f32_to_i16, write_wav};
+
+/// Where to cut `text` to delete its last `n` words and the space before
+/// each, never before byte `floor`.
+fn cut_words(text: &str, floor: usize, n: usize) -> usize {
+    let region = &text[floor..];
+    let mut cut = region.trim_end().len();
+    for _ in 0..n {
+        let without_word = region[..cut].trim_end_matches(|c: char| !c.is_whitespace());
+        cut = without_word.trim_end().len();
+        if cut == 0 {
+            break;
+        }
+    }
+    floor + cut
+}
+
+/// Where to cut `text` to delete its last sentence: just after the
+/// sentence end before it, or everything from byte `floor` if there is none.
+fn cut_sentence(text: &str, floor: usize) -> usize {
+    let is_end = |c: char| matches!(c, '.' | '!' | '?' | '…');
+    let region = &text[floor..];
+    let body = region.trim_end().trim_end_matches(is_end);
+    match body.rfind(is_end) {
+        Some(i) => floor + i + body[i..].chars().next().map_or(1, char::len_utf8),
+        None => floor,
+    }
+}
 
 impl StreamingEngine {
     /// Send an event to listeners

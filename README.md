@@ -466,6 +466,8 @@ enabled = true
 enter = ["enter", "over"] # "Enter." or "Over." on its own presses Enter (default: ["enter"])
 new_line = ["new line"]   # Shift+Enter: a new line without sending
 undo = ["scratch that"]   # delete the last dictated utterance
+back = ["back"]           # "Back 3." / "Back three." deletes the last 3 words (1-10)
+backtrack = ["backtrack", "back track"]  # delete the last dictated sentence
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
 
