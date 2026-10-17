@@ -269,6 +269,162 @@ function _G.ears_find(pattern, how, count)
   end
 end
 
+local function keys_now(keys)
+  -- "i": ahead of anything already queued, so they run right after this.
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "ni", false)
+end
+
+-- The next match of `pattern` from the cursor: start and end, as {row, col}
+-- with 0-based columns, or nil. Moves the cursor to the start.
+local function match_at(pattern, nowrap)
+  local s = vim.fn.searchpos(pattern, nowrap and "W" or "sw")
+  if s[1] == 0 then return nil end
+  local e = vim.fn.searchpos(pattern, "cenW")
+  return { s[1], s[2] - 1 }, { e[1], e[2] - 1 }
+end
+
+-- Select a match, or from one match to the end of a later one, then apply a
+-- verb to it: "v" leaves it selected, "d" / "y" / "c" act on it.
+function _G.ears_act(verb, from, to)
+  local s, e = match_at(from)
+  if not s then return vim.notify("ears: not found: " .. from, vim.log.levels.WARN) end
+  if to then
+    vim.api.nvim_win_set_cursor(0, e)
+    local _, e2 = match_at(to, true)
+    if not e2 then
+      vim.api.nvim_win_set_cursor(0, s)
+      return vim.notify("ears: not found: " .. to, vim.log.levels.WARN)
+    end
+    e = e2
+  end
+  vim.api.nvim_win_set_cursor(0, s)
+  _G.ears_select_end = e
+  keys_now("v<Cmd>lua vim.api.nvim_win_set_cursor(0, _G.ears_select_end)<CR>" .. (verb ~= "v" and verb or ""))
+end
+
+-- The function or class around the cursor, by indentation (Python) or by its
+-- braces (bash), with a verb as in ears_act.
+function _G.ears_block(verb, kind)
+  local starts = {
+    python = { ["function"] = [[^\s*\(async\s\+\)\?def\>]], class = [[^\s*class\>]] },
+    sh = { ["function"] = [[^\s*\(function\s\+\w\+\|\w\+\s*()\)]] },
+  }
+  local ft = vim.bo.filetype == "bash" and "sh" or vim.bo.filetype
+  local pattern = (starts[ft] or {})[kind]
+  local top = pattern and vim.fn.search(pattern, "bcnW") or 0
+  if top == 0 then return vim.notify("ears: no " .. kind .. " here", vim.log.levels.WARN) end
+  local last = top
+  if ft == "python" then
+    local indent = vim.fn.indent(top)
+    for row = top + 1, vim.fn.line("$") do
+      local line = vim.fn.getline(row)
+      if line:match("%S") then
+        if vim.fn.indent(row) <= indent then break end
+        last = row
+      end
+    end
+  else
+    vim.api.nvim_win_set_cursor(0, { top, 0 })
+    if vim.fn.search("{", "cW", top) > 0 then
+      vim.cmd("normal! %")
+      last = vim.fn.line(".")
+    end
+  end
+  vim.api.nvim_win_set_cursor(0, { top, 0 })
+  keys_now("V" .. last .. "G" .. (verb ~= "v" and verb or ""))
+end
+
+-- Move or copy text to just after / before a match of `dest`. The source is
+-- "line" (the current line), "selection" (visual mode), or a pattern (its
+-- next match). Lines land below / above the line holding the destination.
+function _G.ears_move(source, dest, where, copy)
+  copy = copy == 1
+  local buf = vim.api.nvim_get_current_buf()
+  local linewise, text, s, e
+  if source == "selection" then
+    local mode = vim.api.nvim_get_mode().mode
+    local a, b = vim.fn.getpos("v"), vim.fn.getpos(".")
+    if a[2] > b[2] or (a[2] == b[2] and a[3] > b[3]) then a, b = b, a end
+    keys_now("<Esc>")
+    linewise = mode == "V"
+    s, e = { a[2], a[3] - 1 }, { b[2], b[3] - 1 }
+  elseif source == "line" then
+    linewise = true
+    local row = vim.fn.line(".")
+    s, e = { row, 0 }, { row, 0 }
+  else
+    s, e = match_at(source)
+    if not s then return vim.notify("ears: not found: " .. source, vim.log.levels.WARN) end
+  end
+  if linewise then
+    text = vim.api.nvim_buf_get_lines(buf, s[1] - 1, e[1], false)
+  else
+    local last = vim.api.nvim_buf_get_lines(buf, e[1] - 1, e[1], false)[1]
+    local stop = math.min(e[2] + vim.str_utf_end(last, e[2] + 1) + 1, #last)
+    text = vim.api.nvim_buf_get_text(buf, s[1] - 1, s[2], e[1] - 1, stop, {})
+    e = { e[1], stop }
+  end
+  -- Find the destination before removing the source, from the source's end.
+  vim.api.nvim_win_set_cursor(0, { e[1], linewise and 0 or math.max(e[2] - 1, 0) })
+  if linewise then vim.api.nvim_win_set_cursor(0, { e[1], #vim.fn.getline(e[1]) }) end
+  local ds, de = match_at(dest)
+  if not ds then
+    vim.api.nvim_win_set_cursor(0, s)
+    return vim.notify("ears: not found: " .. dest, vim.log.levels.WARN)
+  end
+  if linewise then
+    local at = where == "after" and de[1] or ds[1] - 1
+    if not copy and at >= s[1] - 1 and at < e[1] then
+      return vim.notify("ears: destination is inside what moves", vim.log.levels.WARN)
+    end
+    vim.api.nvim_buf_set_lines(buf, at, at, false, text)
+    if not copy then
+      local shift = at < s[1] and #text or 0
+      vim.api.nvim_buf_set_lines(buf, s[1] - 1 + shift, e[1] + shift, false, {})
+      if at >= e[1] then at = at - #text end
+    end
+    vim.api.nvim_win_set_cursor(0, { at + 1, 0 })
+    vim.cmd("normal! ^")
+  else
+    local row, col
+    if where == "after" then
+      local line = vim.fn.getline(de[1])
+      row, col = de[1], de[2] + vim.str_utf_end(line, de[2] + 1) + 1
+    else
+      row, col = ds[1], ds[2]
+    end
+    -- Extmarks follow the source while the text goes in, wherever it lands.
+    local ns_move = vim.api.nvim_create_namespace("ears_move")
+    local from = vim.api.nvim_buf_set_extmark(buf, ns_move, s[1] - 1, s[2], {
+      end_row = e[1] - 1, end_col = e[2], right_gravity = false, end_right_gravity = true })
+    if not copy and (row > s[1] or (row == s[1] and col > s[2])) and (row < e[1] or (row == e[1] and col < e[2])) then
+      return vim.notify("ears: destination is inside what moves", vim.log.levels.WARN)
+    end
+    -- A word put next to a word gets a space between, not `printtotal`.
+    local line = vim.fn.getline(row)
+    local left, right = line:sub(col, col), line:sub(col + 1, col + 1)
+    text = vim.deepcopy(text)
+    if left:match("[%w_]") and text[1]:match("^[%w_]") then text[1] = " " .. text[1] end
+    if right:match("[%w_]") and text[#text]:match("[%w_]$") then text[#text] = text[#text] .. " " end
+    local here_mark = vim.api.nvim_buf_set_extmark(buf, ns_move, row - 1, col, { right_gravity = false })
+    vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, text)
+    if not copy then
+      local m = vim.api.nvim_buf_get_extmark_by_id(buf, ns_move, from, { details = true })
+      local r, c1, c2 = m[1], m[2], m[3].end_col
+      -- Taking a word out of "a total b" leaves "a b", not "a  b".
+      local src = vim.api.nvim_buf_get_lines(buf, r, r + 1, false)[1]
+      if m[3].end_row == r and src:sub(c1, c1) == " " and src:sub(c2 + 1, c2 + 1) == " " then
+        c2 = c2 + 1
+      end
+      vim.api.nvim_buf_set_text(buf, r, c1, m[3].end_row, c2, {})
+    end
+    local at = vim.api.nvim_buf_get_extmark_by_id(buf, ns_move, here_mark, {})
+    vim.api.nvim_buf_clear_namespace(buf, ns_move, 0, -1)
+    row, col = at[1] + 1, at[2]
+    vim.api.nvim_win_set_cursor(0, { row, col })
+  end
+end
+
 -- VAD path: the ears input claim ---------------------------------------------
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
@@ -360,7 +516,9 @@ end
 -- (or an insert command like "clear line"), anywhere else a Vim command from
 -- the closed list in code.toml, or nothing at all.
 local function voice_mode()
-  return vim.api.nvim_get_mode().mode:match("^[iR]") and "insert" or "normal"
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:match("^[iR]") then return "insert" end
+  return mode:match("^[vV\22]") and "visual" or "normal"
 end
 
 -- "keys:ctrl+u" -> "<C-u>"
