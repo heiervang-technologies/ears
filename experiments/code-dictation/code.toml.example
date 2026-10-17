@@ -1,0 +1,23 @@
+# ~/.config/ears/code.toml: phrases for code dictation in Neovim.
+# Lists replace the defaults; tables add to them.
+
+new_line = ["new line", "newline", "next line"]
+indent = ["indent"]
+dedent = ["dedent", "outdent"]
+
+# Insert mode, said as the whole utterance. A count repeats the keys:
+# "backspace three times", "triple backspace".
+[insert]
+"clear line" = "<Esc>cc"
+backspace = "<BS>"
+"delete word" = "<C-w>"
+
+# Normal and visual mode: the only things that do anything there. A count
+# goes in front ("down five" -> 5j, "triple dee dee" -> 3dd). Spelled
+# letters always work as keys: "dee dee" -> dd, "gee gee" -> gg.
+[normal]
+"delete line" = "dd"
+"copy line" = "yy"
+paste = "p"
+save = ":w<CR>"
+"go to line" = "G"

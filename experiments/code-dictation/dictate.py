@@ -13,7 +13,7 @@ import struct
 import sys
 
 from probe import asr, asr_nbest
-from spoken import bash_line, code_lines, python_line
+from spoken import bash_line, code_lines, insert_keys, normal_keys, python_line
 
 def repaired(path):
     """pw-record fills in the WAV sizes only on exit; rebuild the header so a
@@ -29,9 +29,16 @@ def repaired(path):
     return out, len(pcm) / 32000
 
 
-if sys.argv[1] == "--serve":  # translate JSON lines: {"id", "lang", "text", "scope"}
+if sys.argv[1] == "--serve":  # translate JSON lines: {"id", "lang", "text", "scope", "mode"}
     for request in sys.stdin:
         r = json.loads(request)
+        if r.get("mode") == "normal":
+            print(json.dumps({"id": r["id"], "keys": normal_keys(r["text"])}), flush=True)
+            continue
+        keys = insert_keys(r["text"])
+        if keys:
+            print(json.dumps({"id": r["id"], "keys": keys}), flush=True)
+            continue
         lines = code_lines(r["lang"], r["text"], r.get("scope", []))
         print(json.dumps({"id": r["id"], "lines": lines}), flush=True)
     sys.exit(0)

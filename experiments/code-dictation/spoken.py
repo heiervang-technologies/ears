@@ -9,7 +9,9 @@ import re
 
 NUMBERS = {w: str(i) for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve".split())}
-NUMBERS.update({"twenty": "20", "hundred": "100", "thousand": "1000"})
+NUMBERS.update({w: str(10 * (i + 2)) for i, w in enumerate(
+    "twenty thirty forty fifty sixty seventy eighty ninety".split())})
+NUMBERS.update({"hundred": "100", "thousand": "1000"})
 
 # Multi-word phrases first; longest match wins.
 SYMBOLS = {
@@ -24,8 +26,8 @@ SYMBOLS = {
     "quote": '"', "dollar": "$", "dash": "-", "tilde": "~", "semicolon": ";",
     "percent": "%", "at sign": "@", "hash": "#", "underscore": "_",
 }
-CASES = {"snake", "camel", "pascal", "constant", "smash", "kebab", "spell"}
-MISHEARD = {"closed": "close", "e": "", "z": "", "non": "none", "f": "def", "def.": "def"}
+CASES = {"snake", "camel", "pascal", "constant", "smash", "kebab", "spell", "dunder"}
+MISHEARD = {"closed": "close", "non": "none", "f": "def", "def.": "def"}
 
 PY_KEYWORDS = {"in", "is", "not", "and", "or", "as", "if", "else", "for", "lambda",
                "None", "True", "False", "await", "yield", "from", "import"}
@@ -39,6 +41,18 @@ HEADS = {"they": "def", "deaf": "def", "death": "def", "define": "def",
 PY_BLOCKS = {"if", "elif", "while", "for", "with", "def", "class", "except"}
 
 
+def join_numbers(words):
+    """["40", "2"] -> ["42"]: "forty two" is one number."""
+    out = []
+    for w in words:
+        if out and w.isdigit() and len(w) == 1 and out[-1].isdigit() and len(out[-1]) == 2 \
+                and out[-1].endswith("0") and w != "0":
+            out[-1] = str(int(out[-1]) + int(w))
+        else:
+            out.append(w)
+    return out
+
+
 def words_of(asr_text):
     """Lowercase, drop ASR punctuation, spell numbers as digits."""
     text = asr_text.lower().replace("-", " dash ")
@@ -48,7 +62,7 @@ def words_of(asr_text):
         w = MISHEARD.get(w, w) if out or w != "f" else "def"
         if w:
             out.append(NUMBERS.get(w, w))
-    return out
+    return join_numbers(out)
 
 
 def lex(words, scope):
@@ -93,6 +107,8 @@ def case(style, parts):
         return "_".join(parts).upper()
     if style in ("smash", "spell"):
         return "".join(parts)
+    if style == "dunder":
+        return "__" + "_".join(parts) + "__"  # "dunder init" -> __init__
     if style == "kebab":
         return "-".join(parts)
     return "_".join(parts)
@@ -264,14 +280,111 @@ LAYOUT = {"new_line": ["new line", "newline", "next line"],
           "indent": ["indent"], "dedent": ["dedent", "outdent"]}
 
 
-def layout():
+# Normal-mode commands: phrase -> keys. A count ("down five", "triple dee
+# dee", "paste three times") goes before the keys, except for ":" commands,
+# which run that many times. Overridable under [normal] in code.toml.
+NORMAL = {
+    "delete line": "dd", "yank line": "yy", "copy line": "yy", "change line": "cc",
+    "paste": "p", "paste above": "P", "undo": "u", "redo": "<C-r>",
+    "insert": "i", "append": "A", "open": "o", "open below": "o", "open above": "O",
+    "down": "j", "up": "k", "left": "h", "right": "l", "word": "w", "back word": "b",
+    "end": "$", "start": "^", "top": "gg", "bottom": "G", "line": "G", "go to line": "G",
+    "center": "zz", "join": "J", "indent": ">>", "dedent": "<<", "next": "n",
+    "previous": "N", "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
+}
+# Spoken letter names; an utterance made only of letters is typed as keys:
+# "dee dee" -> dd, "why why" -> yy, "gee gee" -> gg.
+LETTERS = {"dee": "d", "why": "y", "gee": "g", "see": "c", "pee": "p", "you": "u",
+           "ex": "x", "jay": "j", "kay": "k", "oh": "o", "eye": "i", "double you": "w",
+           "bee": "b", "ee": "e", "en": "n", "zee": "z", "zed": "z", "are": "r", "vee": "v"}
+# Insert-mode commands, said as the whole utterance: phrase -> keys. A count
+# repeats them ("backspace three times"). Overridable under [insert].
+INSERT = {
+    "clear line": "<Esc>cc", "clear": "<Esc>cc", "backspace": "<BS>",
+    "delete word": "<C-w>", "delete back": "<C-w>", "escape": "<Esc>", "normal mode": "<Esc>",
+}
+REPEATS = {"double": 2, "triple": 3, "quadruple": 4, "twice": 2, "thrice": 3}
+
+
+def config():
     import os
     import tomllib
     path = os.path.expanduser("~/.config/ears/code.toml")
-    words = dict(LAYOUT)
+    conf = {**LAYOUT, "normal": dict(NORMAL), "insert": dict(INSERT)}
     if os.path.exists(path):
         with open(path, "rb") as f:
-            words.update({k: v for k, v in tomllib.load(f).items() if k in LAYOUT})
+            user = tomllib.load(f)
+        conf.update({k: v for k, v in user.items() if k in LAYOUT})
+        conf["normal"].update(user.get("normal", {}))
+        conf["insert"].update(user.get("insert", {}))
+    return conf
+
+
+def layout():
+    return config()
+
+
+def plain(text):
+    return " ".join(join_numbers([NUMBERS.get(w, w) for w in re.sub(r"[^a-z0-9 ]", " ", text.lower()).split()]))
+
+
+def take_count(words):
+    """Strip a repeat from either end: "triple x", "x twice", "x 3 times",
+    "x times 3", "down 5". Returns (count or None, remaining words)."""
+    count = None
+    if words and words[0] in REPEATS:
+        count, words = REPEATS[words[0]], words[1:]
+    elif words and words[-1] in REPEATS:
+        count, words = REPEATS[words[-1]], words[:-1]
+    elif len(words) > 2 and words[-1] == "times" and words[-2].isdigit():
+        count, words = int(words[-2]), words[:-2]
+    elif len(words) > 2 and words[-2] == "times" and words[-1].isdigit():
+        count, words = int(words[-1]), words[:-2]
+    elif len(words) > 1 and words[-1].isdigit():
+        count, words = int(words[-1]), words[:-1]
+    return count, words
+
+
+def normal_keys(heard):
+    """A normal-mode utterance -> keys, or None when it is not a command
+    (then nothing happens: dictation never lands in normal mode)."""
+    conf = config()
+    count, words = take_count(plain(heard).split())
+    phrase = " ".join(words)
+    table = {plain(k): v for k, v in conf["normal"].items()}
+    keys = table.get(phrase)
+    if keys is None and words:
+        spelled = re.sub(r"\bdouble you\b", "w", phrase).split()
+        letters = [LETTERS.get(w, w if len(w) == 1 and w.isalpha() else None) for w in spelled]
+        if all(letters):
+            keys = "".join(letters)
+        elif len(words) == 1 and re.fullmatch(r"[a-z]{2,3}", words[0]) and len(set(words[0])) == 1:
+            keys = words[0]  # heard "dd" or "yy" as one word
+    if keys is None:
+        return None
+    if count and keys.startswith(":"):
+        return keys * count
+    return (str(count) if count else "") + keys
+
+
+def insert_keys(heard):
+    """A whole insert-mode utterance that is a command -> keys, else None."""
+    count, words = take_count(plain(heard).split())
+    keys = {plain(k): v for k, v in config()["insert"].items()}.get(" ".join(words))
+    return keys * min(count or 1, 50) if keys else None
+
+
+def expand_repeats(text, phrases):
+    """ "double new line" / "new line twice" / "new line 3 times" -> repeated."""
+    words = plain(text)
+    for p in sorted(phrases, key=len, reverse=True):
+        q = re.escape(plain(p))
+        words = re.sub(rf"\b(double|triple|quadruple) ({q})\b",
+                       lambda m: " ".join([m.group(2)] * REPEATS[m.group(1)]), words)
+        words = re.sub(rf"\b({q}) (twice|thrice)\b",
+                       lambda m: " ".join([m.group(1)] * REPEATS[m.group(2)]), words)
+        words = re.sub(rf"\b({q}) (\d+) times\b",
+                       lambda m: " ".join([m.group(1)] * min(int(m.group(2)), 10)), words)
     return words
 
 
@@ -281,6 +394,9 @@ def code_lines(lang, heard, scope=()):
     dedent phrases shift that line by one level each (+1 / -1)."""
     words = layout()
     translate = {"py": python_line, "sh": bash_line}.get(lang, lambda t, s: t.strip())
+    layout_phrases = words["new_line"] + words["indent"] + words["dedent"]
+    if any(r in heard.lower() for r in list(REPEATS) + ["times"]):
+        heard = expand_repeats(heard, layout_phrases)
     breaks = "|".join(re.escape(p) for p in words["new_line"])
     parts = [p.strip(" .,!?") for p in re.split(rf"\b(?:{breaks})\b[.,!?]*", heard, flags=re.I)]
     shifts = [(p, 1) for p in words["indent"]] + [(p, -1) for p in words["dedent"]]
@@ -296,6 +412,6 @@ def code_lines(lang, heard, scope=()):
             text = text[len(hit[0]):].strip()
         if text:
             lines.append({"code": translate(text, scope), "shift": shift})
-        elif shift or (k == len(parts) - 1 and len(parts) > 1):
+        elif shift or k > 0:  # "new line new line" leaves a blank line between
             lines.append({"code": "", "shift": shift})
     return lines
