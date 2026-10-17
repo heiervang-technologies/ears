@@ -221,7 +221,24 @@ end
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
 local CODE_FILETYPES = { python = true, sh = true, bash = true, zsh = true }
-local vad = { events = nil, claim = nil, focused = true, translator = nil, pending = {}, next_id = 0 }
+-- Whether the window holding this Neovim has focus right now; after this,
+-- FocusGained/FocusLost keep it current. Under tmux, assume yes.
+local function has_focus()
+  if os.getenv("TMUX") then return true end
+  local ok, active = pcall(vim.json.decode, vim.fn.system({ "hyprctl", "activewindow", "-j" }))
+  if not ok or type(active) ~= "table" or not active.pid then return true end
+  local pid = vim.fn.getpid()
+  while pid and pid > 1 do
+    if pid == active.pid then return true end
+    local stat = io.open("/proc/" .. pid .. "/stat")
+    if not stat then break end
+    pid = tonumber(stat:read("*a"):match("^%d+ %b() %S+ (%d+)"))
+    stat:close()
+  end
+  return false
+end
+
+local vad = { events = nil, claim = nil, focused = has_focus(), translator = nil, pending = {}, next_id = 0 }
 
 local function scope_names()
   local path = scope_file()
