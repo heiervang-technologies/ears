@@ -483,8 +483,24 @@ ears list, l           List audio devices
 ears select, s         Select device interactively
 ears current, c        Show current device
 ears server [URL]      Show or set whisper server URL
+ears prompt            Prompt marker while recording / VAD (see below)
 ears help              Show help
 ```
+
+### Shell prompt (starship)
+
+`ears prompt` prints a short marker while ears is recording (`● rec`),
+transcribing (`◌ …`) or in VAD mode (`◉ vad`), and nothing while idle. It only
+reads the state directory and checks that the recorder or VAD process is still
+alive, so a crash never leaves a stale marker. It takes about 2 ms, and doesn't
+load config or write to the debug log, so it is safe to run on every prompt.
+
+[`examples/starship.toml`](examples/starship.toml) adds one coloured segment per
+state to a [starship](https://starship.rs) prompt. Put `${custom.ears_rec}`,
+`${custom.ears_vad}` and `${custom.ears_busy}` in your `format`, and copy the
+three `[custom.ears_*]` tables. Change the text with `--recording`,
+`--transcribing` and `--vad`. The marker updates whenever the prompt is
+redrawn, not while you sit at it.
 
 ## How It Works
 

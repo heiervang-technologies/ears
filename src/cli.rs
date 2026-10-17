@@ -119,6 +119,23 @@ pub enum Commands {
         file: Option<String>,
     },
 
+    /// Print a short marker for shell prompts (starship) while recording,
+    /// transcribing or in VAD mode; prints nothing while idle
+    Prompt {
+        /// Only print when in this state (one prompt segment per state)
+        #[arg(long, value_parser = ["recording", "transcribing", "vad"])]
+        state: Option<String>,
+        /// Text while recording
+        #[arg(long, default_value = "● rec")]
+        recording: String,
+        /// Text while transcribing
+        #[arg(long, default_value = "◌ …")]
+        transcribing: String,
+        /// Text while VAD mode is on
+        #[arg(long, default_value = "◉ vad")]
+        vad: String,
+    },
+
     /// Toggle auto-enter on the running ears instance
     #[command(alias = "ae")]
     AutoEnter,

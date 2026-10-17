@@ -25,6 +25,30 @@ async fn main() -> Result<()> {
     // Parse CLI first (need profile for config loading)
     let cli = Cli::parse();
 
+    // Runs on every shell prompt: answer before config loading and logging.
+    if let Some(Commands::Prompt {
+        state,
+        recording,
+        transcribing,
+        vad,
+    }) = &cli.command
+    {
+        if let Some(current) = Config::state_dir_path()
+            .ok()
+            .and_then(|dir| ears::prompt::current(&dir))
+        {
+            if state.as_deref().is_none_or(|s| s == current.name()) {
+                let text = match current {
+                    ears::prompt::PromptState::Recording => recording,
+                    ears::prompt::PromptState::Transcribing => transcribing,
+                    ears::prompt::PromptState::Vad => vad,
+                };
+                println!("{text}");
+            }
+        }
+        return Ok(());
+    }
+
     // Load config with profile
     let config = Config::load_profile_or_defaults(cli.profile.as_deref())?;
 
@@ -112,6 +136,7 @@ async fn main() -> Result<()> {
         Some(Commands::Test { file }) => {
             test_config(&config, file.as_deref()).await?;
         }
+        Some(Commands::Prompt { .. }) => unreachable!("handled before config load"),
         Some(Commands::AutoEnter) => {
             handle_auto_enter().await?;
         }

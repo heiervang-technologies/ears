@@ -288,6 +288,11 @@ impl Config {
         Ok((config_dir, state_dir))
     }
 
+    /// State directory without loading any config (for `ears prompt`).
+    pub fn state_dir_path() -> Result<PathBuf> {
+        Ok(Self::computed_dirs()?.1)
+    }
+
     /// Get config file path for a given profile
     fn config_file_path(config_dir: &Path, profile: Option<&str>) -> PathBuf {
         match profile {

@@ -27,6 +27,7 @@ src/
 ├── state.rs             # Recording state machine
 ├── lock.rs              # File locking (single instance)
 ├── process.rs           # Child process management
+├── prompt.rs            # `ears prompt` marker for shell prompts (starship)
 ├── audio.rs             # Audio device discovery
 ├── recording.rs         # Recording orchestration
 ├── whisper.rs           # Whisper.cpp HTTP client

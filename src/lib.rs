@@ -14,6 +14,7 @@ pub mod config;
 // Iteration 2: State management and process control
 pub mod lock;
 pub mod process;
+pub mod prompt;
 pub mod state;
 
 // Iteration 4: Whisper integration
