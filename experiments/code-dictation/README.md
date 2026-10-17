@@ -52,5 +52,15 @@ python spoken.py py < py-heard.txt
 - About a second later, beam-search hypotheses that translate differently (and
   the plain words, as an escape hatch) open as a completion menu over the line:
   `Ctrl-n`/`Ctrl-p` to pick, `Esc` to keep what was inserted.
-- Put the VAD in standby first ("ears off"), or it types the raw words too.
+- With the ears VAD running (needs the input claim, ears PR #215), no key is
+  needed: while this Neovim has focus on a Python or shell buffer it holds
+  the claim, so ears types nothing and sends the words here. Partials show as
+  ghost text, each utterance is translated and inserted, and ears commands
+  act on the buffer: "enter" or "new line" opens a line, "scratch that"
+  undoes, "back N" drops N words, "backtrack" clears the line. Focus another
+  window and ears types normally there.
+- Inside an utterance, "new line" breaks the line; a leading "indent" or
+  "dedent" shifts it a level. The words are configurable in
+  `~/.config/ears/code.toml` (`new_line`, `indent`, `dedent` lists).
+- Push-to-talk without the VAD: put the VAD in standby first ("ears off").
 - `dictate.py` is the bridge: `python3 dictate.py py file.wav scope.txt`.

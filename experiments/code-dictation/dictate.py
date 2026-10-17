@@ -1,6 +1,8 @@
 """Transcribe a WAV with names in scope as context, then translate to code.
 
 Usage: python dictate.py [--nbest] LANG WAV [SCOPE_FILE]
+       python dictate.py --text LANG TEXT [SCOPE_FILE]
+       python dictate.py --serve   (JSON lines in and out, for the VAD path)
 LANG is py, sh or text. Prints JSON: {"heard": ..., "code": ..., "alternatives":
 [{"code": ..., "heard": ...}]}. With --nbest, alternatives come from the
 model's beam-search hypotheses, best first, plus the words as heard.
@@ -11,7 +13,7 @@ import struct
 import sys
 
 from probe import asr, asr_nbest
-from spoken import bash_line, python_line
+from spoken import bash_line, code_lines, python_line
 
 def repaired(path):
     """pw-record fills in the WAV sizes only on exit; rebuild the header so a
@@ -26,6 +28,18 @@ def repaired(path):
     open(out, "wb").write(header + pcm)
     return out, len(pcm) / 32000
 
+
+if sys.argv[1] == "--serve":  # translate JSON lines: {"id", "lang", "text", "scope"}
+    for request in sys.stdin:
+        r = json.loads(request)
+        lines = code_lines(r["lang"], r["text"], r.get("scope", []))
+        print(json.dumps({"id": r["id"], "lines": lines}), flush=True)
+    sys.exit(0)
+
+if sys.argv[1] == "--text":  # translate only: python dictate.py --text LANG TEXT [SCOPE]
+    scope = open(sys.argv[4]).read().split() if len(sys.argv) > 4 else []
+    print(json.dumps({"lines": code_lines(sys.argv[2], sys.argv[3], scope)}))
+    sys.exit(0)
 
 nbest = "--nbest" in sys.argv
 args = [a for a in sys.argv[1:] if a != "--nbest"]
@@ -58,5 +72,6 @@ if nbest and translate and hypotheses:
     if words not in seen:
         alternatives.append({"code": words, "heard": "as heard"})
 best = alternatives[0] if alternatives else {"code": "", "heard": ""}
-print(json.dumps({**best, "alternatives": alternatives}))
+lines = code_lines(lang, hypotheses[0], scope) if hypotheses else []
+print(json.dumps({**best, "lines": lines, "alternatives": alternatives}))
 os.remove(wav)
