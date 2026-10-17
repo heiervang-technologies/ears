@@ -297,22 +297,6 @@ local function translate(text, mode, on_reply)
   }) .. "\n")
 end
 
-local function voice_command(name)
-  local line = vim.api.nvim_get_current_line()
-  if name == "enter" or name == "new_line" then
-    insert_lines({ { code = "", shift = 0 } })
-  elseif name == "undo" then
-    pcall(vim.cmd, "undo")
-  elseif name == "backtrack" then
-    vim.api.nvim_set_current_line(line:match("^%s*"))
-  elseif name:match("^back:") then
-    for _ = 1, tonumber(name:match("%d+")) do
-      line = line:gsub("%s*%S+%s*$", "")
-    end
-    vim.api.nvim_set_current_line(line)
-  end
-end
-
 local function feed(keys, heard)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
   vim.api.nvim_echo({ { "ears: " .. heard .. " → " .. keys, "EarsHeard" } }, false, {})
@@ -331,6 +315,43 @@ end
 -- the closed list in code.toml, or nothing at all.
 local function voice_mode()
   return vim.api.nvim_get_mode().mode:match("^[iR]") and "insert" or "normal"
+end
+
+-- "keys:ctrl+u" -> "<C-u>"
+local function vim_keys(combo)
+  local mods, key = {}, nil
+  for part in combo:gmatch("[^+]+") do
+    local m = ({ ctrl = "C", alt = "M", shift = "S", super = "D" })[part]
+    if m then table.insert(mods, m) else key = part end
+  end
+  key = ({ enter = "CR", backspace = "BS", delete = "Del", escape = "Esc", esc = "Esc",
+    pageup = "PageUp", pagedown = "PageDown" })[key] or key
+  if #mods == 0 and #key == 1 then return key end
+  return "<" .. table.concat(mods, "-") .. (#mods > 0 and "-" or "") .. key .. ">"
+end
+
+local function voice_command(name, heard)
+  local line = vim.api.nvim_get_current_line()
+  if name:match("^keys:") then
+    -- An ears key command ("erase" = ctrl+u). In insert mode its keys are
+    -- pressed; elsewhere the phrase may be a Vim command of its own.
+    if voice_mode() == "insert" then return feed(vim_keys(name:sub(6)), heard) end
+    return translate(heard, "normal", function(reply)
+      if reply.keys and reply.keys ~= vim.NIL then feed(reply.keys, heard) end
+    end)
+  end
+  if name == "enter" or name == "new_line" then
+    insert_lines({ { code = "", shift = 0 } })
+  elseif name == "undo" then
+    pcall(vim.cmd, "undo")
+  elseif name == "backtrack" then
+    vim.api.nvim_set_current_line(line:match("^%s*"))
+  elseif name:match("^back:") then
+    for _ = 1, tonumber(name:match("%d+")) do
+      line = line:gsub("%s*%S+%s*$", "")
+    end
+    vim.api.nvim_set_current_line(line)
+  end
 end
 
 local function on_event(ev)
@@ -366,7 +387,7 @@ local function on_event(ev)
     end)
   elseif ev.VoiceCommand then
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-    voice_command(ev.VoiceCommand.name)
+    voice_command(ev.VoiceCommand.name, ev.VoiceCommand.text)
   elseif ev.SegmentDiscarded then
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   end
