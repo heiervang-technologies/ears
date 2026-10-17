@@ -33,6 +33,9 @@ PY_CALLABLES = {"range", "len", "print", "str", "int", "float", "list", "dict", 
                 "tuple", "open", "enumerate", "zip", "sorted", "sum", "min", "max",
                 "isinstance", "repr", "type", "any", "all"}
 PY_LITERALS = {"none": "None", "true": "True", "false": "False"}
+# Statement starters that get misheard, or that are easier to say.
+HEADS = {"they": "def", "deaf": "def", "death": "def", "define": "def",
+         "function": "def", "alif": "elif", "elf": "elif", "else if": "elif"}
 PY_BLOCKS = {"if", "elif", "while", "for", "with", "def", "class", "except"}
 
 
@@ -166,7 +169,7 @@ def python_line(asr_text, scope=()):
     words = words_of(asr_text)
     if not words:
         return ""
-    head, rest = words[0], words[1:]
+    head, rest = HEADS.get(words[0], words[0]), words[1:]
     toks = lex(rest, scope)
     while toks and toks[-1] == ("sym", ":"):
         toks.pop()  # the colon goes without saying
