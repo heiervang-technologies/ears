@@ -11,6 +11,7 @@ import json
 import os
 import struct
 import sys
+import tempfile
 
 from probe import asr, asr_nbest
 from spoken import bash_line, code_lines, insert_keys, normal_keys, python_line
@@ -22,7 +23,10 @@ def repaired(path):
     at = raw.find(b"data")
     pcm = raw[at + 8:] if at >= 0 else b""
     pcm = pcm[: len(pcm) // 2 * 2]
-    out = path + ".partial.wav"
+    # One file per run: a partial and the final can read the same recording
+    # at once, and must not delete each other's copy.
+    fd, out = tempfile.mkstemp(suffix=".wav", dir=os.path.dirname(path))
+    os.close(fd)
     header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack(
         "<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16) + b"data" + struct.pack("<I", len(pcm))
     open(out, "wb").write(header + pcm)
