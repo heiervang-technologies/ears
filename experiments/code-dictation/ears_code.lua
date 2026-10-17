@@ -298,7 +298,8 @@ local function translate(text, mode, on_reply)
 end
 
 local function feed(keys, heard)
-  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
+  -- "m": mappings apply, so plugin keys like nvim-surround's ys/ds/cs work.
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "m", false)
   vim.api.nvim_echo({ { "ears: " .. heard .. " → " .. keys, "EarsHeard" } }, false, {})
 end
 
