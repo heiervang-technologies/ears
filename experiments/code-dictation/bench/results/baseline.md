@@ -1,0 +1,281 @@
+# Benchmark: baseline
+
+| input | variant | steps passed (resync) | exact | failed | final exact | final ruff | final AST | parses |
+|---|---|---|---|---|---|---|---|---|
+| text | strict | 57/78 (73%) | 72% | 21 | 0/5 | 0/5 | 0/5 | 1/5 |
+| text | natural | 12/64 (19%) | 19% | 52 | 0/5 | 0/5 | 0/5 | 3/5 |
+| af_heart | strict | 50/78 (64%) | 64% | 28 | 0/5 | 0/5 | 0/5 | 0/5 |
+| af_heart | natural | 11/64 (17%) | 17% | 53 | 0/5 | 0/5 | 0/5 | 3/5 |
+| espeak:en-us+m3 | strict | 38/78 (49%) | 49% | 40 | 0/5 | 0/5 | 0/5 | 0/5 |
+| espeak:en-us+m3 | natural | 10/64 (16%) | 16% | 54 | 0/5 | 0/5 | 0/5 | 3/5 |
+
+## Per task (resync steps passed; final AST-equal in the chain run)
+
+| task | text strict | text natural | af_heart strict | af_heart natural | espeak:en-us+m3 strict | espeak:en-us+m3 natural |
+|---|---|---|---|---|---|---|
+| 1-argparse-cli | 7/14 | 1/14 | 5/14 | 0/14 | 4/14 | 0/14 |
+| 2-add-method | 10/12 | 2/12 | 8/12 | 2/12 | 4/12 | 1/12 |
+| 3-refactor-load | 18/20 | 4/14 | 17/20 | 4/14 | 13/20 | 4/14 |
+| 4-dataclass | 12/16 | 3/16 | 10/16 | 3/16 | 8/16 | 3/16 |
+| 5-retry-fix | 10/16 | 2/8 | 10/16 | 2/8 | 9/16 | 2/8 |
+
+## Latency (median / p90)
+
+- ASR (uncached requests, with context): 110 / 197 ms (n=539)
+- af_heart: word error rate 8%, utterances heard word-perfect 122/142; of those, passed 61/122
+- espeak:en-us+m3: word error rate 32%, utterances heard word-perfect 85/142; of those, passed 48/85
+- translate + apply (event to translator reply, excluding each run's first): 2 / 3 ms (n=816)
+- first utterance of a run (translator start-up): 51 / 69 ms (n=30)
+
+## Failed steps (resync run; cascades counted, not listed)
+
+translator: 111, asr+text-fails-too: 48, command-gap: 35, asr: 29, target-not-found: 19, ears-command: 3, command: 3
+
+- `1-argparse-cli#3` text/strict (translator): said 'def parse args' → line 'def argparse(args)():', mode i, failed text
+- `1-argparse-cli#4` text/strict (translator): said 'parser equals argparse dot pascal argument parser of description equals string count words in a file' → line '    parse_args = argparse.Argument(parse_args(description = "count words in a file"))', mode i, failed text
+- `1-argparse-cli#6` text/strict (translator): said 'parser dot add argument of quote dash dash top quote comma type equals int comma default equals ten' → line '    parser(add_argument("-- top", type(= int(, default = 10))))', mode i, failed text
+- `1-argparse-cli#7` text/strict (translator): said 'return parser dot parse args of' → line '    return parser(parse_args())', mode i, failed text
+- `1-argparse-cli#11` text/strict (translator): said 'print of f string reading brace args dot path' → line '    print(f"reading {args}. path")', mode i, failed text
+- `1-argparse-cli#13` text/strict (translator): said 'dedent if dunder name equals equals string dunder main' → line 'if __name__ == "dunder main":', mode i, failed text
+- `1-argparse-cli#14` text/strict (translator): said 'main of' → line '    __main__()', mode i, failed text
+- `1-argparse-cli#2` text/natural (translator): said 'two blank lines' → line '2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#3` text/natural (translator): said 'define a function called parse args' → line 'def a_function_called(argparse(args))():', mode i, failed text
+- `1-argparse-cli#4` text/natural (translator): said 'parser equals argparse dot ArgumentParser with description count words in a file' → line '    parse_args = argparse.argumentparser_with_description_count_words in a_file', mode i, failed text
+- `1-argparse-cli#5` text/natural (translator): said 'parser dot add argument with the string path' → line '    parser.add_argument_with_the("path")', mode i, failed text
+- `1-argparse-cli#6` text/natural (translator): said 'parser dot add argument dash dash top, type int, default ten' → line '    parser(add_argument -- top type(int(default(10))))', mode i, failed text
+- `1-argparse-cli#7` text/natural (translator): said 'return parser dot parse args' → line '    return parser(parse_args)', mode i, failed text
+- `1-argparse-cli#8` text/natural (translator): said 'two blank lines' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#9` text/natural (translator): said 'def main' → line '    def main():', mode i, failed text
+- `1-argparse-cli#10` text/natural (translator): said 'args equals parse args' → line '    args = parse_args', mode i, failed text
+- `1-argparse-cli#11` text/natural (translator): said 'print f string reading args dot path in curly braces' → line '    print(f"reading args. path in curly braces")', mode i, failed text
+- `1-argparse-cli#12` text/natural (translator): said 'two blank lines' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#13` text/natural (translator): said 'if name equals main' → line '    if name == main:', mode i, failed text
+- `1-argparse-cli#14` text/natural (translator): said 'call main' → line '    call(main)', mode i, failed text
+- `2-add-method#4` text/strict (ears-command): said 'new line' → line '        ', mode i, failed text,row
+- `2-add-method#7` text/strict (translator): said 'raise pascal key error of name' → line '            raise KeyErrorOf(name)', mode i, failed text
+- `2-add-method#1` text/natural (target-not-found): said 'go to the add method' → line 'class Inventory:', mode n, failed row [ears: go to the add method → <Cmd>lua _G.ears_find([==[\c\<the_\?add_\?method\>]==], "", 1)<CR>; ears: not found: \c\<th]
+- `2-add-method#2` text/natural (command-gap): said 'next line' → line '    def add(self, name, count=1):', mode n, failed row [ears: not a command: next line]
+- `2-add-method#3` text/natural (command-gap): said 'open a line below' → line '        self.items[name] = self.items.get(name, 0) + count', mode n, failed text,row,mode [ears: not a command: open a line below]
+- `2-add-method#4` text/natural (translator): said 'blank line' → line '        blank_line', mode i, failed text,row
+- `2-add-method#5` text/natural (translator): said 'def remove self comma name' → line '        def remove(self, name)():', mode i, failed text
+- `2-add-method#7` text/natural (translator): said 'raise key error name' → line '            raise key_error(name)', mode i, failed text
+- `2-add-method#8` text/natural (translator): said 'dedent del self dot items in square brackets name' → line '        del self.items in [[name]]', mode i, failed text
+- `2-add-method#9` text/natural (translator): said 'blank line' → line '        blank_line', mode i, failed text,row
+- `2-add-method#10` text/natural (translator): said 'def total self' → line '        def total(self)():', mode i, failed text
+- `2-add-method#11` text/natural (translator): said 'return the sum of self dot items dot values' → line '        return the sum(self.items.values)', mode i, failed text
+- `3-refactor-load#2` text/strict (translator): said 'load config' → line '    load(config)', mode i, failed text,row
+- `3-refactor-load#17` text/strict (translator): said 'price' → line '        price', mode i, failed text,row
+- `3-refactor-load#3` text/natural (command-gap): said 'rename load to load config' → line 'import json', mode n, failed text,row [ears: not a command: rename load to load config]
+- `3-refactor-load#4` text/natural (command-gap): said 'next line' → line 'def load_config(path):', mode n, failed row [ears: not a command: next line]
+- `3-refactor-load#5` text/natural (command-gap): said 'new line above' → line '    f = open(path)', mode n, failed text,mode [ears: not a command: new line above]
+- `3-refactor-load#8` text/natural (command-gap): said 'next line' → line '    try:', mode n, failed row [ears: not a command: next line]
+- `3-refactor-load#9` text/natural (command-gap): said 'indent two lines' → line '    f = open(path)', mode n, failed text [ears: not a command: indent two lines]
+- `3-refactor-load#11` text/natural (command-gap): said 'new line above' → line '    return data', mode n, failed text,mode [ears: not a command: new line above]
+- `3-refactor-load#12` text/natural (translator): said 'except file not found error' → line '    except file not found_error:', mode i, failed text
+- `3-refactor-load#13` text/natural (translator): said 'return an empty dict' → line '        return an {}', mode i, failed text
+- `3-refactor-load#18` text/natural (target-not-found): said 'change amount to price' → line '        return {}', mode n, failed text,row [ears: change amount to price → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<amount_\?to_\?price\>]==], nil)<CR>; ears: not fo]
+- `3-refactor-load#20` text/natural (target-not-found): said 'delete the print line' → line '        total += row["price"]', mode n, failed text,row [ears: delete the print line → <Cmd>lua _G.ears_act([==[d]==], [==[\c\<the_\?print_\?line\>]==], nil)<CR>; ears: not foun]
+- `4-dataclass#6` text/strict (translator): said 'double new line' → line '', mode i, failed text,row
+- `4-dataclass#13` text/strict (translator): said 'dedent def unpaid total taking orders' → line 'def paid(total)(Order):', mode i, failed text
+- `4-dataclass#14` text/strict (translator): said 'unpaid equals brackets o dot price for o in orders if not o dot paid' → line '    paid = [o.price for o in orders if not o.paid]', mode i, failed text
+- `4-dataclass#15` text/strict (translator): said 'log dot info of f string brace len of unpaid close unpaid orders' → line '    log.info(f"{len} of unpaid") unpaid(orders)', mode i, failed text
+- `4-dataclass#1` text/natural (command-gap): said 'open a line below' → line 'import logging', mode n, failed text,row,mode [ears: not a command: open a line below]
+- `4-dataclass#2` text/natural (translator): said 'from data classes import data class' → line 'from data_classes import data_class', mode i, failed text
+- `4-dataclass#4` text/natural (target-not-found): said 'go to the last line' → line 'from dataclasses import dataclass', mode n, failed row [ears: go to the last line → <Cmd>lua _G.ears_find([==[\c\<the_\?last_\?line\>]==], "", 1)<CR>; ears: not found: \c\<the_]
+- `4-dataclass#5` text/natural (command-gap): said 'open a line below' → line 'log = logging.getLogger(__name__)', mode n, failed text,row,mode [ears: not a command: open a line below]
+- `4-dataclass#6` text/natural (translator): said 'two blank lines' → line '2 blank_lines', mode i, failed text,row
+- `4-dataclass#7` text/natural (translator): said 'at dataclass' → line 'at(dataclass)', mode i, failed text
+- `4-dataclass#9` text/natural (translator): said 'id int' → line '    id int', mode i, failed text
+- `4-dataclass#10` text/natural (translator): said 'price float' → line '    price float', mode i, failed text
+- `4-dataclass#11` text/natural (translator): said 'paid bool defaults to false' → line '    paid_bool_defaults_to False', mode i, failed text
+- `4-dataclass#12` text/natural (translator): said 'two blank lines' → line '    2 blank_lines', mode i, failed text,row
+- `4-dataclass#13` text/natural (translator): said 'def unpaid total of orders' → line '    def paid(total(Order))():', mode i, failed text
+- `4-dataclass#14` text/natural (translator): said 'unpaid equals a list of o dot price for o in orders if not o dot paid' → line '    paid = a list(o.price for o in orders if not o.paid)', mode i, failed text
+- `4-dataclass#15` text/natural (translator): said 'log dot info f string len of unpaid in braces then unpaid orders' → line '    log.info_f("len of unpaid in braces then unpaid orders")', mode i, failed text
+- `5-retry-fix#1` text/strict (command-gap): said 'go to three' → line 'import time', mode n, failed row [ears: not a command: go to three]
+- `5-retry-fix#3` text/strict (translator): said 'five' → line '    5', mode i, failed text,row
+- `5-retry-fix#5` text/strict (command-gap): said 'go to five' → line 'def fetch(url, retries=5, timeout=5):', mode n, failed col [ears: not a command: go to five]
+- `5-retry-fix#7` text/strict (translator): said 'ten' → line '    10', mode i, failed text,row
+- `5-retry-fix#11` text/strict (translator): said 'time dot sleep of two star star attempt' → line '        time.sleep(2 * * attempt)', mode i, failed text
+- `5-retry-fix#15` text/strict (translator): said 'f string giving up on brace url' → line '    def "giving up on brace url"():', mode i, failed text,row
+- `5-retry-fix#4` text/natural (target-not-found): said 'change three to five' → line 'import time', mode n, failed text,row [ears: change three to five → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<3_\?to_\?5\>]==], nil)<CR>; ears: not found: \c\<3_]
+- `5-retry-fix#8` text/natural (command): said 'change timeout to ten' → line 'def fetch(url, retries=5, =5):', mode i, failed text,mode [ears: change timeout to ten → <Cmd>lua _G.ears_act([==[c]==], [==[\<timeout\>]==], nil)<CR>]
+- `5-retry-fix#9` text/natural (target-not-found): said 'go to return response' → line 'def fetch(url, retries=5, timeout=10):', mode n, failed row [ears: go to return response → <Cmd>lua _G.ears_find([==[\c\<return_\?response\>]==], "", 1)<CR>; ears: not found: \c\<re]
+- `5-retry-fix#10` text/natural (command-gap): said 'open a line below' → line '            return response.json()', mode n, failed text,row,mode [ears: not a command: open a line below]
+- `5-retry-fix#11` text/natural (translator): said 'time dot sleep two to the power of attempt' → line '        time.sleep(2 to_the_power(attempt))', mode i, failed text
+- `5-retry-fix#15` text/natural (target-not-found): said 'change the string to f string giving up on brace url' → line '        time.sleep(2 ** attempt)', mode n, failed text,row,mode [ears: change the string to f string giving up on brace url → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<the_\?string_\?to_\]
+- `1-argparse-cli#1` af_heart/strict (asr): said 'import argparse' heard 'Import arg parse.' → line 'import arg_parse', mode i, failed text
+- `1-argparse-cli#3` af_heart/strict (translator): said 'def parse args' heard 'Def parse args.' → line 'def argparse(args)():', mode i, failed text
+- `1-argparse-cli#4` af_heart/strict (asr+text-fails-too): said 'parser equals argparse dot pascal argument parser of description equals string count words in a file' heard 'Parser equals arg parse dot pascal argument parser of description equals string count words in a file.' → line '    parse_args = arg(argparse.Argument(parse_args(description = "count words in a file")))', mode i, failed text
+- `1-argparse-cli#6` af_heart/strict (translator): said 'parser dot add argument of quote dash dash top quote comma type equals int comma default equals ten' heard 'Parser dot add argument of quote dash dash top quote comma type equals int comma default equals ten.' → line '    parser(add_argument("-- top", type(= int(, default = 10))))', mode i, failed text
+- `1-argparse-cli#7` af_heart/strict (translator): said 'return parser dot parse args of' heard 'Return parser dot parse args of.' → line '    return parser(parse_args())', mode i, failed text
+- `1-argparse-cli#9` af_heart/strict (asr): said 'dedent def main' heard 'Dead and deaf, main.' → line '    dead and def(main)', mode i, failed text
+- `1-argparse-cli#11` af_heart/strict (translator): said 'print of f string reading brace args dot path' heard 'Print of f string reading brace args dot path.' → line '    print(f"reading {args}. path")', mode i, failed text
+- `1-argparse-cli#13` af_heart/strict (translator): said 'dedent if dunder name equals equals string dunder main' heard 'Dedent if dunder name equals equals string dunder main.' → line 'if __name__ == "dunder main":', mode i, failed text
+- `1-argparse-cli#14` af_heart/strict (translator): said 'main of' heard 'Main of.' → line '    __main__()', mode i, failed text
+- `1-argparse-cli#1` af_heart/natural (asr): said 'import argparse' heard 'Import arg parse.' → line 'import arg_parse', mode i, failed text
+- `1-argparse-cli#2` af_heart/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#3` af_heart/natural (asr+text-fails-too): said 'define a function called parse args' heard 'Define a function called parse_args.' → line 'def a_function_called_parse_args():', mode i, failed text
+- `1-argparse-cli#4` af_heart/natural (asr+text-fails-too): said 'parser equals argparse dot ArgumentParser with description count words in a file' heard 'Parser equals arg parse dot argument parser with description count words in a file.' → line '    parse_args = arg(argparse.argument(parse_args(description_count_words in a_file)))', mode i, failed text
+- `1-argparse-cli#5` af_heart/natural (translator): said 'parser dot add argument with the string path' heard 'Parser dot add argument with the string path.' → line '    parser.add_argument_with_the("path")', mode i, failed text
+- `1-argparse-cli#6` af_heart/natural (translator): said 'parser dot add argument dash dash top, type int, default ten' heard 'Parser dot add argument dash dash top type int default ten.' → line '    parser(add_argument -- top type(int(default(10))))', mode i, failed text
+- `1-argparse-cli#7` af_heart/natural (translator): said 'return parser dot parse args' heard 'Return parser dot parse args.' → line '    return parser(parse_args)', mode i, failed text
+- `1-argparse-cli#8` af_heart/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#9` af_heart/natural (asr+text-fails-too): said 'def main' heard 'Deaf main.' → line '    def main():', mode i, failed text
+- `1-argparse-cli#10` af_heart/natural (asr+text-fails-too): said 'args equals parse args' heard 'args equals parse_args.' → line '    args = parse_args', mode i, failed text
+- `1-argparse-cli#11` af_heart/natural (translator): said 'print f string reading args dot path in curly braces' heard 'Print f string reading args dot path in curly braces.' → line '    print(f"reading args. path in curly braces")', mode i, failed text
+- `1-argparse-cli#12` af_heart/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#13` af_heart/natural (translator): said 'if name equals main' heard 'If name equals main.' → line '    if name == main:', mode i, failed text
+- `1-argparse-cli#14` af_heart/natural (translator): said 'call main' heard 'Call main.' → line '    call(__main__)', mode i, failed text
+- `2-add-method#4` af_heart/strict (ears-command): said 'new line' heard 'New line.' → line '        ', mode i, failed text,row
+- `2-add-method#5` af_heart/strict (asr): said 'dedent def remove taking self comma name' heard 'Dead and deaf. Remove taking self, comma name.' → line '        dead and def(remove_taking(self, name))', mode i, failed text
+- `2-add-method#7` af_heart/strict (translator): said 'raise pascal key error of name' heard 'Raise Pascal key error of name.' → line '            raise KeyErrorOf(name)', mode i, failed text
+- `2-add-method#10` af_heart/strict (asr): said 'dedent def total taking self' heard 'Dead and deaf. Total taking self.' → line '        dead and def(total_taking(self))', mode i, failed text
+- `2-add-method#1` af_heart/natural (target-not-found): said 'go to the add method' heard 'Go to the add method.' → line 'class Inventory:', mode n, failed row [ears: Go to the add method. → <Cmd>lua _G.ears_find([==[\c\<the_\?add_\?method\>]==], "", 1)<CR>; ears: not found: \c\<t]
+- `2-add-method#2` af_heart/natural (command-gap): said 'next line' heard 'Next line.' → line '    def add(self, name, count=1):', mode n, failed row [ears: not a command: Next line.]
+- `2-add-method#3` af_heart/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line '        self.items[name] = self.items.get(name, 0) + count', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `2-add-method#4` af_heart/natural (translator): said 'blank line' heard 'Blank line.' → line '        blank_line', mode i, failed text,row
+- `2-add-method#5` af_heart/natural (asr+text-fails-too): said 'def remove self comma name' heard 'Def remove self common name.' → line '        def remove(self(common(name)))():', mode i, failed text
+- `2-add-method#7` af_heart/natural (translator): said 'raise key error name' heard 'Raise key error name.' → line '            raise key_error(name)', mode i, failed text
+- `2-add-method#8` af_heart/natural (asr+text-fails-too): said 'dedent del self dot items in square brackets name' heard 'Deadendel self dot items in square brackets name.' → line '            deadendel(self.items in [[name]])', mode i, failed text
+- `2-add-method#9` af_heart/natural (translator): said 'blank line' heard 'Blank line.' → line '        blank_line', mode i, failed text,row
+- `2-add-method#10` af_heart/natural (asr+text-fails-too): said 'def total self' heard 'Deaf total self.' → line '        def total(self)():', mode i, failed text
+- `2-add-method#11` af_heart/natural (translator): said 'return the sum of self dot items dot values' heard 'Return the sum of self dot items dot values.' → line '        return the sum(self.items.values)', mode i, failed text
+- `3-refactor-load#2` af_heart/strict (translator): said 'load config' heard 'Load config.' → line '    load(config)', mode i, failed text,row
+- `3-refactor-load#5` af_heart/strict (asr): said 'open above' heard 'Open a buff.' → line '    f = open(path)', mode n, failed text,mode [ears: not a command: Open a buff.]
+- `3-refactor-load#17` af_heart/strict (translator): said 'price' heard 'Price.' → line '        price', mode i, failed text,row
+- `3-refactor-load#3` af_heart/natural (command-gap): said 'rename load to load config' heard 'Rename load to load config.' → line 'import json', mode n, failed text,row [ears: not a command: Rename load to load config.]
+- `3-refactor-load#4` af_heart/natural (command-gap): said 'next line' heard 'Next line.' → line 'def load_config(path):', mode n, failed row [ears: not a command: Next line.]
+- `3-refactor-load#5` af_heart/natural (command-gap): said 'new line above' heard 'New line above.' → line '    f = open(path)', mode n, failed text,mode [ears: not a command: New line above.]
+- `3-refactor-load#8` af_heart/natural (command-gap): said 'next line' heard 'Next line.' → line '    try:', mode n, failed row [ears: not a command: Next line.]
+- `3-refactor-load#9` af_heart/natural (command-gap): said 'indent two lines' heard 'Indent two lines.' → line '    f = open(path)', mode n, failed text [ears: not a command: Indent two lines.]
+- `3-refactor-load#11` af_heart/natural (command-gap): said 'new line above' heard 'New line above.' → line '    return data', mode n, failed text,mode [ears: not a command: New line above.]
+- `3-refactor-load#12` af_heart/natural (translator): said 'except file not found error' heard 'Except file not found error.' → line '    except file not found_error:', mode i, failed text
+- `3-refactor-load#13` af_heart/natural (translator): said 'return an empty dict' heard 'Return an empty dict.' → line '        return an {}', mode i, failed text
+- `3-refactor-load#18` af_heart/natural (target-not-found): said 'change amount to price' heard 'Change amount to price.' → line '        return {}', mode n, failed text,row [ears: Change amount to price. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<amount_\?to_\?price\>]==], nil)<CR>; ears: not f]
+- `3-refactor-load#20` af_heart/natural (target-not-found): said 'delete the print line' heard 'Delete the print line.' → line '        total += row["price"]', mode n, failed text,row [ears: Delete the print line. → <Cmd>lua _G.ears_act([==[d]==], [==[\c\<the_\?print_\?line\>]==], nil)<CR>; ears: not fou]
+- `4-dataclass#2` af_heart/strict (asr): said 'from dataclasses import dataclass' heard 'From data classes, import data class.' → line 'from data_classes import data_class', mode i, failed text
+- `4-dataclass#6` af_heart/strict (translator): said 'double new line' heard 'Double new line.' → line '', mode i, failed text,row
+- `4-dataclass#7` af_heart/strict (asr): said 'at sign dataclass' heard 'At signed data class.' → line 'at(signed_data_class)', mode i, failed text
+- `4-dataclass#13` af_heart/strict (asr+text-fails-too): said 'dedent def unpaid total taking orders' heard 'Debent, deaf, unpaid, total, taking orders.' → line '    debent_deaf(paid(total_taking(Order)))', mode i, failed text
+- `4-dataclass#14` af_heart/strict (translator): said 'unpaid equals brackets o dot price for o in orders if not o dot paid' heard 'Unpaid equals brackets o dot price for o in orders. If not o dot paid.' → line '    paid = [o.price for o in orders if not o.paid]', mode i, failed text
+- `4-dataclass#15` af_heart/strict (translator): said 'log dot info of f string brace len of unpaid close unpaid orders' heard 'Log dot info of f string brace len of unpaid close unpaid orders.' → line '    log.info(f"{len} of unpaid") unpaid(orders)', mode i, failed text
+- `4-dataclass#1` af_heart/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line 'import logging', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `4-dataclass#2` af_heart/natural (translator): said 'from data classes import data class' heard 'From data classes, import data class.' → line 'from data_classes import data_class', mode i, failed text
+- `4-dataclass#4` af_heart/natural (target-not-found): said 'go to the last line' heard 'Go to the last line.' → line 'from dataclasses import dataclass', mode n, failed row [ears: Go to the last line. → <Cmd>lua _G.ears_find([==[\c\<the_\?last_\?line\>]==], "", 1)<CR>; ears: not found: \c\<the]
+- `4-dataclass#5` af_heart/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line 'log = logging.getLogger(__name__)', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `4-dataclass#6` af_heart/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '2 blank_lines', mode i, failed text,row
+- `4-dataclass#7` af_heart/natural (asr+text-fails-too): said 'at dataclass' heard 'At data class.' → line 'at(data_class)', mode i, failed text
+- `4-dataclass#9` af_heart/natural (asr+text-fails-too): said 'id int' heard "It ain't." → line "    it_ain't", mode i, failed text
+- `4-dataclass#10` af_heart/natural (translator): said 'price float' heard 'Price float.' → line '    price float', mode i, failed text
+- `4-dataclass#11` af_heart/natural (translator): said 'paid bool defaults to false' heard 'Paid bool defaults to false.' → line '    paid_bool_defaults_to False', mode i, failed text
+- `4-dataclass#12` af_heart/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `4-dataclass#13` af_heart/natural (asr+text-fails-too): said 'def unpaid total of orders' heard 'Deaf unpaid total of orders.' → line '    def paid(total(Order))():', mode i, failed text
+- `4-dataclass#14` af_heart/natural (translator): said 'unpaid equals a list of o dot price for o in orders if not o dot paid' heard 'Unpaid equals a list of o dot price for o in orders. If not o dot paid.' → line '    paid = a list(o.price for o in orders if not o.paid)', mode i, failed text
+- `4-dataclass#15` af_heart/natural (translator): said 'log dot info f string len of unpaid in braces then unpaid orders' heard 'Log dot info f string len of unpaid in braces, then unpaid orders.' → line '    log.info_f("len of unpaid in braces then unpaid orders")', mode i, failed text
+- `5-retry-fix#1` af_heart/strict (command-gap): said 'go to three' heard 'Go to three.' → line 'import time', mode n, failed row [ears: not a command: Go to three.]
+- `5-retry-fix#3` af_heart/strict (translator): said 'five' heard 'Five.' → line '    5', mode i, failed text,row
+- `5-retry-fix#5` af_heart/strict (command-gap): said 'go to five' heard 'Go to five.' → line 'def fetch(url, retries=5, timeout=5):', mode n, failed col [ears: not a command: Go to five.]
+- `5-retry-fix#7` af_heart/strict (translator): said 'ten' heard 'Ten.' → line '    10', mode i, failed text,row
+- `5-retry-fix#11` af_heart/strict (translator): said 'time dot sleep of two star star attempt' heard 'Time dot sleep of two star star attempt.' → line '        time.sleep(2 * * attempt)', mode i, failed text
+- `5-retry-fix#15` af_heart/strict (translator): said 'f string giving up on brace url' heard 'F string giving up on brace URL.' → line '    def "giving up on brace url"():', mode i, failed text,row
+- `5-retry-fix#4` af_heart/natural (target-not-found): said 'change three to five' heard 'Change three to five.' → line 'import time', mode n, failed text,row [ears: Change three to five. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<3_\?to_\?5\>]==], nil)<CR>; ears: not found: \c\<3]
+- `5-retry-fix#8` af_heart/natural (command): said 'change timeout to ten' heard 'Change timeout to ten.' → line 'def fetch(url, retries=5, =5):', mode i, failed text,mode [ears: Change timeout to ten. → <Cmd>lua _G.ears_act([==[c]==], [==[\<timeout\>]==], nil)<CR>]
+- `5-retry-fix#9` af_heart/natural (target-not-found): said 'go to return response' heard 'Go to return response.' → line 'def fetch(url, retries=5, timeout=10):', mode n, failed row [ears: Go to return response. → <Cmd>lua _G.ears_find([==[\c\<return_\?response\>]==], "", 1)<CR>; ears: not found: \c\<r]
+- `5-retry-fix#10` af_heart/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line '            return response.json()', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `5-retry-fix#11` af_heart/natural (translator): said 'time dot sleep two to the power of attempt' heard 'Time dot sleep two to the power of attempt.' → line '        time.sleep(2 to_the_power(attempt))', mode i, failed text
+- `5-retry-fix#15` af_heart/natural (target-not-found): said 'change the string to f string giving up on brace url' heard 'Change the string to f-string, giving up on brace URL.' → line '        time.sleep(2 ** attempt)', mode n, failed text,row,mode [ears: Change the string to f-string, giving up on brace URL. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<the_\?string_\?to]
+- `1-argparse-cli#1` espeak:en-us+m3/strict (asr): said 'import argparse' heard 'Import iron bars.' → line 'import iron_bars', mode i, failed text
+- `1-argparse-cli#3` espeak:en-us+m3/strict (asr+text-fails-too): said 'def parse args' heard 'The parsons.' → line 'the_parsons', mode i, failed text
+- `1-argparse-cli#4` espeak:en-us+m3/strict (asr+text-fails-too): said 'parser equals argparse dot pascal argument parser of description equals string count words in a file' heard 'Parser equals hard parser dot Pascal argument parser of description equals string count words in a file.' → line '    parse_args = hard(parse_args.Argument(parse_args(description = "count words in a file")))', mode i, failed text
+- `1-argparse-cli#6` espeak:en-us+m3/strict (asr+text-fails-too): said 'parser dot add argument of quote dash dash top quote comma type equals int comma default equals ten' heard 'parser dot an argument of quote dash dash top quote comma type equals int comma default equals ten' → line '    parser.add_argument("-- top", type(= int(, default = 10)))', mode i, failed text
+- `1-argparse-cli#7` espeak:en-us+m3/strict (asr+text-fails-too): said 'return parser dot parse args of' heard 'Return parser dot parse_args of.' → line '    return parser(parse_args())', mode i, failed text
+- `1-argparse-cli#9` espeak:en-us+m3/strict (asr): said 'dedent def main' heard "There's no main." → line "    there's_no_main", mode i, failed text
+- `1-argparse-cli#10` espeak:en-us+m3/strict (asr): said 'args equals parse args of' heard 'args equals parse_args add_argument description in top type int file default count words import return path main' → line '    args = parse_args(add_argument(description in top type(int(file(default(count(words import return(path(main)))))))))', mode i, failed text
+- `1-argparse-cli#11` espeak:en-us+m3/strict (translator): said 'print of f string reading brace args dot path' heard 'Print of f string reading brace args dot path.' → line '    print(f"reading {args}. path")', mode i, failed text
+- `1-argparse-cli#13` espeak:en-us+m3/strict (asr+text-fails-too): said 'dedent if dunder name equals equals string dunder main' heard 'Predicate under name equals equals string under main.' → line '    predicate_under_name == "under main"', mode i, failed text
+- `1-argparse-cli#14` espeak:en-us+m3/strict (asr+text-fails-too): said 'main of' heard 'May have.' → line '    may_have', mode i, failed text
+- `1-argparse-cli#1` espeak:en-us+m3/natural (asr): said 'import argparse' heard 'Import iron bars.' → line 'import iron_bars', mode i, failed text
+- `1-argparse-cli#2` espeak:en-us+m3/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#3` espeak:en-us+m3/natural (asr+text-fails-too): said 'define a function called parse args' heard 'Define a function called parse_args.' → line 'def a_function_called_parse_args():', mode i, failed text
+- `1-argparse-cli#4` espeak:en-us+m3/natural (asr+text-fails-too): said 'parser equals argparse dot ArgumentParser with description count words in a file' heard 'ParseArgs argparse import def count_words_in_file(filename):' → line '    parse_args(argparse import def(count_words_in_file(filename):))', mode i, failed text
+- `1-argparse-cli#5` espeak:en-us+m3/natural (translator): said 'parser dot add argument with the string path' heard 'Parser dot add argument with the string path.' → line '    parser.add_argument_with_the("path")', mode i, failed text
+- `1-argparse-cli#6` espeak:en-us+m3/natural (asr+text-fails-too): said 'parser dot add argument dash dash top, type int, default ten' heard 'Parser dot add_argument dash dash top type int default ten.' → line '    parser(add_argument -- top type(int(default(10))))', mode i, failed text
+- `1-argparse-cli#7` espeak:en-us+m3/natural (asr+text-fails-too): said 'return parser dot parse args' heard 'Return parser dot parse_args.' → line '    return parser(parse_args)', mode i, failed text
+- `1-argparse-cli#8` espeak:en-us+m3/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#9` espeak:en-us+m3/natural (asr+text-fails-too): said 'def main' heard 'Death main.' → line '    def main():', mode i, failed text
+- `1-argparse-cli#10` espeak:en-us+m3/natural (asr+text-fails-too): said 'args equals parse args' heard 'args equals parse_args add_argument count main top in return path type description ArgumentParser import words default int file' → line '    args = parse_args(add_argument(count(main(top in return(path type(description(ArgumentParser import words(default int(file)))))))))', mode i, failed text
+- `1-argparse-cli#11` espeak:en-us+m3/natural (asr+text-fails-too): said 'print f string reading args dot path in curly braces' heard 'Print f string reading args dot pass in curly braces.' → line '    print(f"reading args. pass in curly braces")', mode i, failed text
+- `1-argparse-cli#12` espeak:en-us+m3/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `1-argparse-cli#13` espeak:en-us+m3/natural (translator): said 'if name equals main' heard 'If name equals main.' → line '    if name == main:', mode i, failed text
+- `1-argparse-cli#14` espeak:en-us+m3/natural (translator): said 'call main' heard 'Call main.' → line '    call(main)', mode i, failed text
+- `2-add-method#1` espeak:en-us+m3/strict (asr): said 'go to def add' heard 'Go to Neffad.' → line 'class Inventory:', mode n, failed row [ears: Go to Neffad. → <Cmd>lua _G.ears_find([==[\c\<neffad\>]==], "", 1)<CR>; ears: not found: \c\<neffad\>]
+- `2-add-method#2` espeak:en-us+m3/strict (asr): said 'down' heard 'town.' → line '    def add(self, name, count=1):', mode n, failed row [ears: not a command: town.]
+- `2-add-method#4` espeak:en-us+m3/strict (ears-command): said 'new line' heard 'New line.' → line '        ', mode i, failed text,row
+- `2-add-method#5` espeak:en-us+m3/strict (asr): said 'dedent def remove taking self comma name' heard 'Self name items count Inventory add inv def class apple get __init__.' → line '        self(name(items(count(Inventory(add(inv(def(class(apple(get(__init__)))))))))))', mode i, failed text
+- `2-add-method#6` espeak:en-us+m3/strict (asr): said 'if name not in self dot items' heard 'If name not in self.name.items.' → line '        if name not in self(name(items)):', mode i, failed text
+- `2-add-method#7` espeak:en-us+m3/strict (translator): said 'raise pascal key error of name' heard 'Raise Pascal key error of name.' → line '            raise KeyErrorOf(name)', mode i, failed text
+- `2-add-method#8` espeak:en-us+m3/strict (asr): said 'dedent del self dot items index name' heard 'self name items def count Inventory add inv get remove apple if class KeyError not __init__ raise' → line '            self(name(items(def(count(Inventory(add(inv(get(remove(apple if class(KeyError not __init__(raise))))))))))))', mode i, failed text
+- `2-add-method#10` espeak:en-us+m3/strict (asr): said 'dedent def total taking self' heard 'Bed and theft, total taking self.' → line '        bed and theft_total_taking(self)', mode i, failed text
+- `2-add-method#1` espeak:en-us+m3/natural (target-not-found): said 'go to the add method' heard 'Go to the add method.' → line 'class Inventory:', mode n, failed row [ears: Go to the add method. → <Cmd>lua _G.ears_find([==[\c\<the_\?add_\?method\>]==], "", 1)<CR>; ears: not found: \c\<t]
+- `2-add-method#2` espeak:en-us+m3/natural (command-gap): said 'next line' heard 'Next line.' → line '    def add(self, name, count=1):', mode n, failed row [ears: not a command: Next line.]
+- `2-add-method#3` espeak:en-us+m3/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line '        self.items[name] = self.items.get(name, 0) + count', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `2-add-method#4` espeak:en-us+m3/natural (translator): said 'blank line' heard 'Blank line.' → line '        blank_line', mode i, failed text,row
+- `2-add-method#5` espeak:en-us+m3/natural (asr+text-fails-too): said 'def remove self comma name' heard 'self items name inv add count Inventory def __init__ apple get class' → line '        self(items(name(inv(add(count(Inventory(def(__init__(apple(get(class)))))))))))', mode i, failed text
+- `2-add-method#6` espeak:en-us+m3/natural (asr): said 'if name not in self dot items' heard 'If name not in self.__items.' → line '        if name not in self(items):', mode i, failed text
+- `2-add-method#7` espeak:en-us+m3/natural (translator): said 'raise key error name' heard 'Raise key error name.' → line '            raise key_error(name)', mode i, failed text
+- `2-add-method#8` espeak:en-us+m3/natural (asr+text-fails-too): said 'dedent del self dot items in square brackets name' heard 'Bad and tell self dot items in square brackets name.' → line '            bad and tell(self.items in [[name]])', mode i, failed text
+- `2-add-method#9` espeak:en-us+m3/natural (translator): said 'blank line' heard 'Blank line.' → line '        blank_line', mode i, failed text,row
+- `2-add-method#10` espeak:en-us+m3/natural (asr+text-fails-too): said 'def total self' heard 'self total sell.' → line '        self(total(self))', mode i, failed text
+- `2-add-method#11` espeak:en-us+m3/natural (asr+text-fails-too): said 'return the sum of self dot items dot values' heard 'Return the sum of self.items.value.' → line '        return the sum(self(items(value)))', mode i, failed text
+- `3-refactor-load#2` espeak:en-us+m3/strict (translator): said 'load config' heard 'Load config.' → line '    load(config)', mode i, failed text,row
+- `3-refactor-load#4` espeak:en-us+m3/strict (asr): said 'down' heard 'town.' → line 'def load_config(path):', mode n, failed row [ears: not a command: town.]
+- `3-refactor-load#8` espeak:en-us+m3/strict (asr): said 'down' heard 'town.' → line '    try:', mode n, failed row [ears: not a command: town.]
+- `3-refactor-load#9` espeak:en-us+m3/strict (asr): said 'indent twice' heard 'Invent twice.' → line '    f = open(path)', mode n, failed text [ears: not a command: Invent twice.]
+- `3-refactor-load#12` espeak:en-us+m3/strict (asr): said 'except pascal file not found error' heard 'Accept Pascal file not found error.' → line '    accept FileNotFoundError', mode i, failed text
+- `3-refactor-load#15` espeak:en-us+m3/strict (asr): said 'go to amount' heard 'Total amount.' → line '        return {}', mode n, failed row [ears: not a command: Total amount.]
+- `3-refactor-load#17` espeak:en-us+m3/strict (translator): said 'price' heard 'Price.' → line '        price', mode i, failed text,row
+- `3-refactor-load#3` espeak:en-us+m3/natural (command-gap): said 'rename load to load config' heard 'Rename load to load config.' → line 'import json', mode n, failed text,row [ears: not a command: Rename load to load config.]
+- `3-refactor-load#4` espeak:en-us+m3/natural (command-gap): said 'next line' heard 'Next line.' → line 'def load_config(path):', mode n, failed row [ears: not a command: Next line.]
+- `3-refactor-load#5` espeak:en-us+m3/natural (asr+text-fails-too): said 'new line above' heard 'New light above.' → line '    f = open(path)', mode n, failed text,mode [ears: not a command: New light above.]
+- `3-refactor-load#8` espeak:en-us+m3/natural (command-gap): said 'next line' heard 'Next line.' → line '    try:', mode n, failed row [ears: not a command: Next line.]
+- `3-refactor-load#9` espeak:en-us+m3/natural (asr+text-fails-too): said 'indent two lines' heard 'Invent two lines.' → line '    f = open(path)', mode n, failed text [ears: not a command: Invent two lines.]
+- `3-refactor-load#11` espeak:en-us+m3/natural (asr+text-fails-too): said 'new line above' heard 'New light above.' → line '    return data', mode n, failed text,mode [ears: not a command: New light above.]
+- `3-refactor-load#12` espeak:en-us+m3/natural (asr+text-fails-too): said 'except file not found error' heard "Except I'll not found error." → line "    except i'll not found_error:", mode i, failed text
+- `3-refactor-load#13` espeak:en-us+m3/natural (translator): said 'return an empty dict' heard 'Return an empty dict.' → line '        return an {}', mode i, failed text
+- `3-refactor-load#18` espeak:en-us+m3/natural (target-not-found): said 'change amount to price' heard 'Change amount to price.' → line '        return {}', mode n, failed text,row [ears: Change amount to price. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<amount_\?to_\?price\>]==], nil)<CR>; ears: not f]
+- `3-refactor-load#20` espeak:en-us+m3/natural (asr+text-fails-too): said 'delete the print line' heard 'Verlees de printlijn.' → line '        total += row["price"]', mode n, failed text,row [ears: not a command: Verlees de printlijn.]
+- `4-dataclass#2` espeak:en-us+m3/strict (asr): said 'from dataclasses import dataclass' heard 'From Vader classes, import Vader class.' → line 'from vader_classes import vader_class', mode i, failed text
+- `4-dataclass#6` espeak:en-us+m3/strict (translator): said 'double new line' heard 'Double new line.' → line '', mode i, failed text,row
+- `4-dataclass#7` espeak:en-us+m3/strict (asr): said 'at sign dataclass' heard 'At sign data class.' → line '@ data_class', mode i, failed text
+- `4-dataclass#9` espeak:en-us+m3/strict (asr): said 'id colon int' heard 'I D colon int.' → line '    i_d: int', mode i, failed text
+- `4-dataclass#11` espeak:en-us+m3/strict (asr): said 'paid colon bool equals false' heard 'PaidGoldenBull equals False.' → line '    paidgoldenbull = False', mode i, failed text
+- `4-dataclass#13` espeak:en-us+m3/strict (asr+text-fails-too): said 'dedent def unpaid total taking orders' heard 'Paid and unpaid total taking orders.' → line '    paid and paid(total_taking(Order))', mode i, failed text
+- `4-dataclass#14` espeak:en-us+m3/strict (asr+text-fails-too): said 'unpaid equals brackets o dot price for o in orders if not o dot paid' heard 'Unpaid equals bracket so dot price for loaded orders if not oh dot paid.' → line '    paid = bracket_so.price for loaded(orders if not oh.paid)', mode i, failed text
+- `4-dataclass#15` espeak:en-us+m3/strict (asr+text-fails-too): said 'log dot info of f string brace len of unpaid close unpaid orders' heard 'log.info of f string bracelet of unpaid close unpaid orders.' → line '    log(info(f"bracelet of unpaid") unpaid(orders))', mode i, failed text
+- `4-dataclass#1` espeak:en-us+m3/natural (asr+text-fails-too): said 'open a line below' heard 'Open line below.' → line 'import logging', mode n, failed text,row,mode [ears: not a command: Open line below.]
+- `4-dataclass#2` espeak:en-us+m3/natural (asr+text-fails-too): said 'from data classes import data class' heard 'From Vader classes, import Vader class.' → line 'from vader_classes import vader_class', mode i, failed text
+- `4-dataclass#4` espeak:en-us+m3/natural (target-not-found): said 'go to the last line' heard 'Go to the last line.' → line 'from dataclasses import dataclass', mode n, failed row [ears: Go to the last line. → <Cmd>lua _G.ears_find([==[\c\<the_\?last_\?line\>]==], "", 1)<CR>; ears: not found: \c\<the]
+- `4-dataclass#5` espeak:en-us+m3/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line 'log = logging.getLogger(__name__)', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `4-dataclass#6` espeak:en-us+m3/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '2 blank_lines', mode i, failed text,row
+- `4-dataclass#7` espeak:en-us+m3/natural (asr+text-fails-too): said 'at dataclass' heard 'Eerste klas.' → line 'eerste_klas', mode i, failed text
+- `4-dataclass#9` espeak:en-us+m3/natural (asr+text-fails-too): said 'id int' heard "I didn't." → line "    i_didn't", mode i, failed text
+- `4-dataclass#10` espeak:en-us+m3/natural (translator): said 'price float' heard 'Price float.' → line '    price float', mode i, failed text
+- `4-dataclass#11` espeak:en-us+m3/natural (asr+text-fails-too): said 'paid bool defaults to false' heard 'Payed bool defaults to false.' → line '    payed_bool_defaults_to False', mode i, failed text
+- `4-dataclass#12` espeak:en-us+m3/natural (translator): said 'two blank lines' heard 'Two blank lines.' → line '    2 blank_lines', mode i, failed text,row
+- `4-dataclass#13` espeak:en-us+m3/natural (asr+text-fails-too): said 'def unpaid total of orders' heard 'Number of unpaid total of orders.' → line '    number(paid(total(Order)))', mode i, failed text
+- `4-dataclass#14` espeak:en-us+m3/natural (asr+text-fails-too): said 'unpaid equals a list of o dot price for o in orders if not o dot paid' heard 'Unpaid equals a list of o dot price for loaded orders. If not o dot paid.' → line '    paid = a list(o.price for loaded(orders if not o.paid))', mode i, failed text
+- `4-dataclass#15` espeak:en-us+m3/natural (asr+text-fails-too): said 'log dot info f string len of unpaid in braces then unpaid orders' heard 'log.info f string of unpaid in braces and unpaid orders.' → line '    log(info_f("of unpaid in braces and unpaid orders"))', mode i, failed text
+- `5-retry-fix#1` espeak:en-us+m3/strict (command-gap): said 'go to three' heard 'Go to three.' → line 'import time', mode n, failed row [ears: not a command: Go to three.]
+- `5-retry-fix#3` espeak:en-us+m3/strict (translator): said 'five' heard 'Five.' → line '    5', mode i, failed text,row
+- `5-retry-fix#5` espeak:en-us+m3/strict (command-gap): said 'go to five' heard 'Go to five.' → line 'def fetch(url, retries=5, timeout=5):', mode n, failed col [ears: not a command: Go to five.]
+- `5-retry-fix#7` espeak:en-us+m3/strict (translator): said 'ten' heard 'Ten.' → line '    10', mode i, failed text,row
+- `5-retry-fix#11` espeak:en-us+m3/strict (translator): said 'time dot sleep of two star star attempt' heard 'Time dot sleep of two star star attempt.' → line '        time.sleep(2 * * attempt)', mode i, failed text
+- `5-retry-fix#13` espeak:en-us+m3/strict (asr): said 'go to giving' heard 'rồi sẽ gây viêm.' → line '        time.sleep(2 ** attempt)', mode n, failed row [ears: not a command: rồi sẽ gây viêm.]
+- `5-retry-fix#15` espeak:en-us+m3/strict (asr+text-fails-too): said 'f string giving up on brace url' heard 'f string giving up on raise URL.' → line '    def "giving up on raise url"():', mode i, failed text,row
+- `5-retry-fix#4` espeak:en-us+m3/natural (target-not-found): said 'change three to five' heard 'Change three to five.' → line 'import time', mode n, failed text,row [ears: Change three to five. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<3_\?to_\?5\>]==], nil)<CR>; ears: not found: \c\<3]
+- `5-retry-fix#8` espeak:en-us+m3/natural (command): said 'change timeout to ten' heard 'Change timeout to ten.' → line 'def fetch(url, retries=5, =5):', mode i, failed text,mode [ears: Change timeout to ten. → <Cmd>lua _G.ears_act([==[c]==], [==[\<timeout\>]==], nil)<CR>]
+- `5-retry-fix#9` espeak:en-us+m3/natural (target-not-found): said 'go to return response' heard 'Go to return response.' → line 'def fetch(url, retries=5, timeout=10):', mode n, failed row [ears: Go to return response. → <Cmd>lua _G.ears_find([==[\c\<return_\?response\>]==], "", 1)<CR>; ears: not found: \c\<r]
+- `5-retry-fix#10` espeak:en-us+m3/natural (command-gap): said 'open a line below' heard 'Open a line below.' → line '            return response.json()', mode n, failed text,row,mode [ears: not a command: Open a line below.]
+- `5-retry-fix#11` espeak:en-us+m3/natural (asr+text-fails-too): said 'time dot sleep two to the power of attempt' heard 'Time dot sleep to to the power of attempt.' → line '        time.sleep_to_to_the_power(attempt)', mode i, failed text
+- `5-retry-fix#15` espeak:en-us+m3/natural (asr+text-fails-too): said 'change the string to f string giving up on brace url' heard 'Change the string to f-string. Giving up on raise URL.' → line '        time.sleep(2 ** attempt)', mode n, failed text,row,mode [ears: Change the string to f-string. Giving up on raise URL. → <Cmd>lua _G.ears_act([==[c]==], [==[\c\<the_\?string_\?to]

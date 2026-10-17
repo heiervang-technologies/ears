@@ -38,7 +38,10 @@ KC3 = "/run/media/me/storage"
 KC3_UUID = "0c2db6de-b82a-4277-aa2c-0b2782373ba5"
 CACHE = os.path.join(KC3, "builds/ears/code-dictation-bench")
 TTS_URL = "http://localhost:30383/v1/audio/speech"
-VOICES = ["af_heart", "am_michael"]
+# Kokoro is a shared service (it OOMed once under a burst from this bench),
+# so one Kokoro voice, throttled, and one local espeak-ng voice.
+VOICES = ["af_heart", "espeak:en-us+m3"]
+TTS_PAUSE_S = 1.0
 CURSOR = "▮"
 # How the TTS should say what is written: it reads "def" as letters.
 SAY = {"def": "deff", "del": "dell", "argparse": "arg parse", "ArgumentParser": "argument parser",
@@ -161,6 +164,22 @@ def spoken_form(text):
     return " ".join(SAY.get(w, w) for w in text.split())
 
 
+_restarts = []
+
+
+def kokoro_guard():
+    """Stop if the Kokoro pod restarted since the run began."""
+    out = subprocess.run(["kubectl", "-n", "ai", "get", "pods", "-o",
+                          "jsonpath={range .items[*]}{.metadata.name} {.status.containerStatuses[0].restartCount}{'\\n'}{end}"],
+                         capture_output=True, text=True).stdout
+    count = sum(int(l.split()[1]) for l in out.splitlines() if l.startswith("kokoro") and len(l.split()) == 2)
+    if not out:
+        return
+    _restarts.append(count)
+    if count != _restarts[0]:
+        raise SystemExit("Kokoro restarted during this run; stopping TTS requests")
+
+
 def synthesize(text, voice):
     """Cached 16 kHz mono WAV of `text` in `voice`."""
     key = hashlib.sha1(f"kokoro|{voice}|{spoken_form(text)}".encode()).hexdigest()[:16]
@@ -168,6 +187,16 @@ def synthesize(text, voice):
     if os.path.exists(path):
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if voice.startswith("espeak:"):
+        subprocess.run(["espeak-ng", "-v", voice.split(":", 1)[1], "-s", "150", "-w", path + ".raw.wav",
+                        spoken_form(text)], check=True)
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", path + ".raw.wav", "-ar", "16000", "-ac", "1",
+                        path + ".part.wav"], check=True)
+        os.remove(path + ".raw.wav")
+        os.replace(path + ".part.wav", path)
+        return path
+    kokoro_guard()
+    time.sleep(TTS_PAUSE_S)
     body = {"model": "kokoro", "input": spoken_form(text), "voice": voice, "response_format": "wav"}
     req = urllib.request.Request(TTS_URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     raw = urllib.request.urlopen(req, timeout=120).read()
@@ -204,8 +233,9 @@ def run_job(task, steps, resync, translator, tmp, timeout_ms=8000, golden=False)
     path = os.path.join(tmp, "job.json")
     json.dump(job, open(path, "w"))
     env = {**os.environ, "EARS_CODE_HEADLESS": "1", "EARS_BENCH_JOB": path, "EARS_BENCH_CACHE": CACHE,
-           "XDG_RUNTIME_DIR": tmp}  # nothing here can reach the live ears sockets
-    env.pop("NVIM", None)
+           "EARS_BENCH_TASK": task["name"], "XDG_RUNTIME_DIR": tmp}  # nothing here can reach the live ears sockets
+    for var in ("NVIM", "NVIM_LISTEN_ADDRESS"):  # never the user's Neovim sockets
+        env.pop(var, None)
     if translator:
         env["EARS_CODE_TRANSLATOR"] = translator
     cmd = ["nvim", "--headless", "-n", "-u", "NONE", "-i", "NONE",
@@ -303,10 +333,32 @@ def _parses(lines):
         return False
 
 
+NUMBER_WORDS = {w: str(i) for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+
+
+def norm_words(text):
+    """Words for comparing what was said with what was heard: lowercase, no
+    punctuation, numbers as digits."""
+    words = re.sub(r"[^a-z0-9_ ]", " ", text.lower().replace("-", " ")).split()
+    return [NUMBER_WORDS.get(w, w) for w in words]
+
+
+def word_errors(said, heard):
+    """Word-level edit distance."""
+    a, b = norm_words(said), norm_words(heard)
+    d = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        prev, d[0] = d[0], i
+        for j in range(1, len(b) + 1):
+            prev, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] != b[j - 1]))
+    return d[len(b)], len(a)
+
+
 def category(step, snap, text_passed):
     """A first guess at why a step failed; RESULTS.md has the triage."""
-    if snap.get("asr_ms") is not None and text_passed:
-        return "asr"
+    if snap.get("asr_ms") is not None and (text_passed or snap["heard_errors"]):
+        return "asr" if text_passed else "asr+text-fails-too"
     if snap.get("error"):
         return "plugin-error"
     msgs = " ".join(snap["messages"])
@@ -338,7 +390,9 @@ def score_run(task, steps, snaps, resync=False):
                      "mode": snap["mode"], "row": snap["row"], "col": snap["col"],
                      "asr_ms": snap.get("asr_ms"), "asr_cached": snap.get("asr_cached"),
                      "translate_ms": snap.get("translate_ms"), "messages": snap["messages"],
-                     "error": snap.get("error"), "mode_before": step["mode_before"]})
+                     "error": snap.get("error"), "mode_before": step["mode_before"],
+                     "heard_errors": word_errors(step["text"], snap["heard"])[0] if snap.get("asr_ms") is not None else None,
+                     "said_words": len(norm_words(step["text"]))})
         rows[-1]["cascade"] = broken and not rows[-1]["pass"]
         broken = broken or not rows[-1]["pass"]
         if resync:
@@ -391,6 +445,14 @@ def report(results, label):
     trans = [s["translate_ms"] for r in results for s in (r["resync"] + r["chain"])[1:] if s["translate_ms"] is not None]
     first = [r["chain"][0]["translate_ms"] for r in results if r["chain"] and r["chain"][0]["translate_ms"]]
     out.append(f"- ASR (uncached requests, with context): {ms_stats(asr)}")
+    for inp in inputs:
+        if inp == "text":
+            continue
+        ss = [s for r in results if r["input"] == inp for s in r["resync"]]
+        wer = sum(s["heard_errors"] for s in ss) / max(1, sum(s["said_words"] for s in ss))
+        ok = [s["pass"] for s in ss if s["heard_errors"] == 0]
+        out.append(f"- {inp}: word error rate {100 * wer:.0f}%, utterances heard word-perfect "
+                   f"{sum(s['heard_errors'] == 0 for s in ss)}/{len(ss)}; of those, passed {sum(ok)}/{len(ok)}")
     out.append(f"- translate + apply (event to translator reply, excluding each run's first): {ms_stats(trans)}")
     out.append(f"- first utterance of a run (translator start-up): {ms_stats(first)}")
     out += ["", "## Failed steps (resync run; cascades counted, not listed)", ""]
