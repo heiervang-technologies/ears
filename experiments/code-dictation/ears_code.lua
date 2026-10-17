@@ -224,6 +224,30 @@ local function toggle()
   state.timer:start(PARTIAL_MS, PARTIAL_MS, vim.schedule_wrap(partial))
 end
 
+-- "ruff" / "format code": ruff for Python, otherwise conform or the LSP.
+function _G.ears_format()
+  local ok, conform = pcall(require, "conform")
+  if vim.bo.filetype == "python" and vim.fn.executable("ruff") == 1 then
+    if ok then
+      return conform.format({ formatters = { "ruff_format" }, async = false })
+    end
+    local buf = vim.api.nvim_get_current_buf()
+    local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
+    local out = vim.system({ "ruff", "format", "--stdin-filename", vim.api.nvim_buf_get_name(buf), "-" },
+      { stdin = text, text = true }):wait()
+    if out.code ~= 0 then
+      return vim.notify("ruff: " .. (out.stderr or "failed"), vim.log.levels.ERROR)
+    end
+    local view = vim.fn.winsaveview()
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(out.stdout:gsub("\n$", ""), "\n"))
+    return vim.fn.winrestview(view)
+  end
+  if ok then
+    return conform.format({ lsp_format = "fallback", async = false })
+  end
+  vim.lsp.buf.format()
+end
+
 -- VAD path: the ears input claim ---------------------------------------------
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"

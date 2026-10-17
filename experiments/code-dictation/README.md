@@ -78,6 +78,16 @@ python spoken.py py < py-heard.txt
   - calls and indexing: "print of x", "range ten", "items index key";
   - "close" closes the innermost bracket; anything still open closes at the
     end of the line. "open paren" / "close paren" etc. also work.
+- Calls, the unambiguous way: a name, then "of" (built-ins like `print` and
+  `len` open their own call); "comma" between arguments; strings as "quote
+  … quote", or "string …" when the string ends at "comma", "close" or the
+  end of the line; "close" ends the innermost call. Examples:
+  - "print of string hello comma x" → `print("hello", x)`
+  - "print of len of names close comma string done" → `print(len(names), "done")`
+  - "foo of a comma b plus c comma bar of d" → `foo(a, b + c, bar(d))`
+  - "log dot info of quote saved to quote comma path" → `log.info("saved to", path)`
+- "Ruff" or "format code", said on its own in any mode, formats the buffer:
+  ruff for Python, otherwise conform or the language server.
 - Surrounding existing code, in normal mode (through nvim-surround): "quote
   word", "paren word", "quote line", "unquote", "delete parens", "single
   quotes", "change string", "change args".
