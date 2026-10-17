@@ -86,6 +86,18 @@ python spoken.py py < py-heard.txt
   - "print of len of names close comma string done" → `print(len(names), "done")`
   - "foo of a comma b plus c comma bar of d" → `foo(a, b + c, bar(d))`
   - "log dot info of quote saved to quote comma path" → `log.info("saved to", path)`
+- Navigation, said as the whole utterance, in normal mode and (in code)
+  insert mode without leaving it:
+  - by name, fuzzy against the buffer's names: "go to pass args" →
+    `parse_args`, "back to total" (backwards), "go to total two" (second
+    match), "go to def run" (its definition), "go to colon" (a symbol);
+  - "after X" puts the cursor after it, ready to type ("after parse args",
+    then "of …"); "jump out" moves past the next closing bracket or quote;
+  - "next function", "previous class"; "next" / "previous" repeat the last
+    jump; "go back" / "go forward" walk the jump list;
+  - normal mode also has "down five", "go to line forty two", "start of line",
+    "end of line", "page down", "match"; insert mode has "cursor left three",
+    "word right", "end of line", "start of line".
 - "Ruff" or "format code", said on its own in any mode, formats the buffer:
   ruff for Python, otherwise conform or the language server.
 - Surrounding existing code, in normal mode (through nvim-surround): "quote
