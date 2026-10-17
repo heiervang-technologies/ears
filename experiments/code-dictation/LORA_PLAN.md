@@ -13,7 +13,7 @@ changed. The scripts in this directory are `zero_shot_probe.py`,
 
 | Question | Answer |
 |---|---|
-| Can the deployed vLLM serve LoRA adapters per request? | **Yes.** vLLM 0.28.0 marks `Qwen3ASRForConditionalGeneration` as `SupportsLoRA`. It needs `--enable-lora` and a pod restart. Adapter names from PEFT map cleanly to vLLM's (verified offline). |
+| Can the deployed vLLM serve LoRA adapters per request? | **Yes.** vLLM 0.28.0 marks `Qwen3ASRForConditionalGeneration` as `SupportsLoRA`. It needs `--enable-lora` and a pod restart. Adapter names from PEFT map cleanly to vLLM's (verified offline). The adapter library stays on the server (section 1b): `--lora-modules` plus the filesystem resolver over `~/Models/huggingface/lora/` on rogue, which the pod already mounts. A request names the adapter (`"model": "py-code"`) and never carries weights. A new language is a directory copy with no restart. |
 | Training recipe | Use the official `QwenLM/Qwen3-ASR/finetuning/qwen3_asr_sft.py` (full SFT, supports a `prompt`/context field), wrapped with PEFT LoRA r16 on the decoder only and gradient checkpointing turned on. That trains 17.4 M parameters and produces a ~33 MiB adapter. |
 | VRAM | About 7 to 10 GB for 1.7B at batch 8 with clips of 10 s or less; about 4 to 6 GB for 0.6B. |
 | Maintenance window | **No memory window needed on rogue**, whose 3090 has 14.7 GB free next to the live ASR. The catch is compute: training slows live ASR, so run it at night (about 2 h). Centurion has about 5 GB free and is not suitable. Titan is NotReady. |
@@ -98,6 +98,89 @@ nothing over B.
 1. Prototype with B, which touches nothing live, for a clean comparison.
 2. Move to A if the measured LoRA tax on base requests is small (it saves VRAM
    per language).
+
+### 1b. The adapter library lives on the server
+
+Requirement (2026-10-22): the server holds the adapters. A request only names
+one (`"model": "py-code"`) and never carries weights. vLLM 0.28.0 supports
+this three ways, checked in the pod's source. All three read from a path
+*inside the pod*, never from the request body.
+
+| Mechanism | How | Adding a language |
+|---|---|---|
+| **Static** `--lora-modules` | `--lora-modules py-code=/root/.cache/huggingface/lora/py-code sh-code=…/sh-code`; each adapter is listed in `/v1/models` at startup | Copy the dir in, edit args, restart (about 2–3 min) |
+| **Filesystem resolver** (plugin `lora_filesystem_resolver`) | `VLLM_LORA_RESOLVER_CACHE_DIR=/root/.cache/huggingface/lora`, `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`, `VLLM_PLUGINS=ears_stream,lora_filesystem_resolver`. An unknown `model` name `X` is looked up as `<dir>/X`; it loads if `adapter_config.json` says `peft_type: LORA` and `base_model_name_or_path == "Qwen/Qwen3-ASR-1.7B"` (`vllm/plugins/lora_resolvers/filesystem_resolver.py`) | Drop the dir into the library. The first request by that name loads it. **No restart.** |
+| **Load endpoint** | `POST /v1/load_lora_adapter {"lora_name": "py-code", "lora_path": "/root/.cache/.../py-code"}`; `lora_path` is a server-side path (`entrypoints/serve/lora/protocol.py`). The router only exists with `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` (`api_router.py:27`). | Copy the dir in, then one POST. No restart. |
+
+**Recommended:** static `--lora-modules` for the adapters we ship (`py-code`,
+`sh-code`), plus the filesystem resolver for new ones.
+
+- **Library location.** `/home/me/Models/huggingface/lora/<name>/` on rogue
+  (`adapter_config.json` plus `adapter_model.safetensors`, about 33 MiB at
+  r16). The pod already mounts `/home/me/Models/huggingface` as
+  `/root/.cache/huggingface` (hostPath), so there is no new volume and no
+  PVC. If the pod ever moves node, the library has to move with it or become
+  a PVC. The same applies to the base weights today.
+- **Adding a language.** Train, copy the adapter dir to rogue's library, and
+  call it by name: the resolver loads it on first use. Then add it to
+  `--lora-modules` at the next planned restart so it is pinned and listed.
+- **Resolver gotchas.**
+  - `VLLM_PLUGINS` is currently `ears_stream`. Listing plugins disables the
+    rest, so the resolver has to be added to that list explicitly.
+  - Do **not** enable `lora_hf_hub_resolver` or set
+    `VLLM_LORA_RESOLVER_HF_REPO_LIST`. That resolver downloads adapters from
+    the Hub, and the library is meant to be local only. `HF_HUB_OFFLINE=1` is
+    already set, which is a second guard.
+- **Security.** `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` also exposes unauthenticated
+  `/v1/load_lora_adapter` and `/v1/unload_lora_adapter` on the NodePort. Those
+  can only point at paths already in the pod (the library and HF cache), not
+  upload weights. If that surface is unwanted, use static `--lora-modules`
+  only, and restart to add a language.
+
+**Capacity and memory** (from `config/lora.py`, `lora/worker_manager.py`):
+
+- `--max-loras N` is the number of adapters resident on the GPU *at once*
+  (default 1). vLLM preallocates N slots of size `--max-lora-rank` for every
+  wrapped layer.
+  - Per slot at r16, that is the same 17.4 M parameters as the adapter:
+    **about 35 MB bf16**. At r32 it is about 70 MB, at r64 about 140 MB.
+  - `--max-loras 4 --max-lora-rank 16` is about 140 MB plus the LoRA
+    CUDA-graph variants. That fits in the 1.4 GiB of KV headroom of the 0.30
+    budget, and rogue has 14.7 GB unused besides.
+- `--max-cpu-loras M` (≥ N, default N) is an LRU cache of adapters held in
+  host RAM. Beyond M, an adapter is reloaded from the library on its next use.
+  - With the pod's 8 GiB memory limit, M = 16 costs only about 0.5 GB.
+- **Suggested flags:** `--enable-lora --max-lora-rank 16 --max-loras 4
+  --max-cpu-loras 16`.
+
+**Does switching per request cost latency?**
+
+- **Resident adapters:** no switch cost. vLLM batches requests for different
+  adapters (and the base model) together; the punica kernels index each token's
+  slot. The cost is the flat per-step LoRA overhead from section 1 (estimated
+  10–25 % of decode, paid by every request once LoRA is enabled).
+- **In host RAM but not on the GPU:** one copy of about 35 MB into a free
+  slot, which is under a few ms. If all N slots are busy in the current batch,
+  the request waits for a slot. With N ≥ the number of languages in use at
+  once (4), that does not happen.
+- **First use since startup, or evicted from host RAM:** the safetensors load
+  from local NVMe plus validation, estimated tens of ms. It happens once per
+  adapter per pod lifetime. Pinning the shipped adapters in `--lora-modules`
+  does not avoid it: they are registered at startup but loaded lazily. Warm
+  them with one dummy request after readiness.
+- **Measure before rollout** (all three are estimates until then):
+  1. p50 and p95 for a base request, with and without `--enable-lora`.
+  2. A `py-code` request, warm and cold.
+  3. Alternating `py-code`, `sh-code` and base under concurrent load.
+
+  `rank_probe.py` and `zero_shot_probe.py` already time sequential requests
+  and can be pointed at a test deployment.
+
+For comparison, option B (merged weights per language) holds its "library" as
+whole models, about 9 GB of VRAM and 4.4 GB of disk per language, and adding
+a language means a new deployment. That is fine for a prototype, but it does
+not scale past one or two languages, which is why the adapter library (option
+A) is the target.
 
 ## 2. Training recipe
 
@@ -214,7 +297,8 @@ One row per spoken line:
 5. Serve via option B (merged, second deployment) and run `e2e.py` against it.
    Measure the latency.
 6. If it wins over ranker plus `spoken.py`, move to option A (`--enable-lora`)
-   in a maintenance window of about 5 min. Measure the base-request latency
+   in a maintenance window of about 5 min, with the adapter library from
+   section 1b. Measure the base-request latency
    before and after.
 
 ## 3. Zero-shot probe (live endpoint, 2026-10-22)
