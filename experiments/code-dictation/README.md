@@ -41,7 +41,7 @@ python spoken.py py < py-heard.txt
 ./try.sh some_file.py      # or a .sh file; any other filetype gets plain text
 ```
 
-- `<leader>v` in normal mode, or `Alt-v` in insert mode: start talking. Press
+- `Alt-v` (normal or insert mode; Space v is NvChad's vertical terminal): start talking. Press
   it again to stop.
 - The buffer's names are sent as context, the line is translated, and it is
   inserted with indentation: it replaces a blank current line, otherwise it goes

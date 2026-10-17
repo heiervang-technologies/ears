@@ -1,5 +1,5 @@
 -- Push-to-talk code dictation for Neovim (experiment).
--- <leader>v (normal) or <M-v> (insert): start talking; press again to stop.
+-- <M-v> (Alt-v, normal or insert): start talking; press again to stop.
 -- The utterance is transcribed with the buffer's names as context, translated
 -- to Python or bash, and inserted as one line (one undo step).
 local here = debug.getinfo(1, "S").source:sub(2):match("(.*/)")
@@ -98,7 +98,7 @@ local function toggle()
   vim.notify("ears: listening (" .. lang() .. ")…")
 end
 
-vim.keymap.set("n", "<leader>v", toggle, { desc = "ears: dictate code" })
+vim.keymap.set("n", "<M-v>", toggle, { desc = "ears: dictate code" })
 vim.keymap.set("i", "<M-v>", toggle, { desc = "ears: dictate code" })
 
 return { toggle = toggle, insert = insert }
