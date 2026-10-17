@@ -11,8 +11,8 @@
 
 /// Speech RMS the gain aims for (about -20 dBFS).
 pub const TARGET_RMS: f32 = 0.1;
-/// Most boost applied (+12 dB).
-pub const MAX_GAIN: f32 = 4.0;
+/// Most boost applied (+18 dB): enough for a word said across the room.
+pub const MAX_GAIN: f32 = 8.0;
 /// The detector is never cut. Loud speech is detected anyway, but a cut
 /// learned from it also turned down the next, quieter speech; missed, it
 /// never raised the gain again, so detection ratcheted deaf after close-up

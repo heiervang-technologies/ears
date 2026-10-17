@@ -127,11 +127,15 @@ max_silence_duration_ms = 1200
 VAD sensitivity: once a word has started, speech continues down to
 `end_threshold` (default `speech_threshold - 0.15`), so soft syllables and
 short dips do not throw away the start of an utterance or end it early.
-`auto_gain = true` (the default) levels quiet speech before detection; it
-measures the level on speech only and never boosts by more than +12 dB, so
-room noise is not amplified into hallucinations. Segments that were barely
-speech (`min_mean_probability`, default 0.4) are dropped before
-transcription.
+`auto_gain = true` (the default) levels quiet speech before detection, so
+speech from across the room is heard as well as speech up close. It never
+turns speech down, recovers after a couple of seconds of silence, boosts by
+at most +18 dB, and never raises the room noise above -30 dBFS. Only the
+detector hears this gain; the audio sent for transcription is normalized as
+a whole. Segments that were barely speech (`min_mean_probability`, default
+0.4) are dropped before transcription; those just under it, and one-word
+bursts too short for the detector to confirm, are transcribed and kept only
+if the model's no-speech check (below) hears speech.
 
 With hysteresis, `min_speech_duration_ms = 200` is safe and catches quick
 one-word answers ("Stop", "No", "Sure") that 300 ms misses. Against noise,
