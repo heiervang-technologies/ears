@@ -1,0 +1,100 @@
+# A dataclass, a list comprehension and an f-string log line, added to a
+# file that has a logger. Starts in normal mode at the top.
+@start 1:0 n
+
+> open below
+~ open a line below
+@do keys o
+@row 2
+@mode i
+
+> from dataclasses import dataclass
+~ from data classes import data class
+@do line 0 from dataclasses import dataclass
+@line from dataclasses import dataclass
+
+> escape
+~ normal mode
+@do keys <Esc>
+@mode n
+
+> bottom
+~ go to the last line
+@do keys G
+@row 4
+
+> open below
+~ open a line below
+@do keys o
+@row 5
+@mode i
+
+> double new line
+~ two blank lines
+@do keys <CR><CR>
+@row 7
+@lines 7
+
+> at sign dataclass
+~ at dataclass
+@do line 0 @dataclass
+@line @dataclass
+
+> class order
+@do line 0 class Order:
+@line class Order:
+
+> id colon int
+~ id int
+@do line 0 id: int
+@line     id: int
+
+> price colon float
+~ price float
+@do line 0 price: float
+@line     price: float
+
+> paid colon bool equals false
+~ paid bool defaults to false
+@do line 0 paid: bool = False
+===
+import logging
+from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Order:
+    id: int
+    price: float
+    paid: bool = False▮
+===
+@mode i
+
+> triple new line
+~ two blank lines
+@do line 0
+@do line 0
+@do line 0
+@row 14
+
+> dedent def unpaid total taking orders
+~ def unpaid total of orders
+@do line -1 def unpaid_total(orders):
+@line def unpaid_total(orders):
+
+> unpaid equals brackets o dot price for o in orders if not o dot paid
+~ unpaid equals a list of o dot price for o in orders if not o dot paid
+@do line 0 unpaid = [o.price for o in orders if not o.paid]
+@line     unpaid = [o.price for o in orders if not o.paid]
+
+> log dot info of f string brace len of unpaid close unpaid orders
+~ log dot info f string len of unpaid in braces then unpaid orders
+@do line 0 log.info(f"{len(unpaid)} unpaid orders")
+@line     log.info(f"{len(unpaid)} unpaid orders")
+
+> return sum of unpaid
+@do line 0 return sum(unpaid)
+@line     return sum(unpaid)
+@mode i

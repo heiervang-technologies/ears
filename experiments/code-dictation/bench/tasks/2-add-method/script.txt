@@ -1,0 +1,84 @@
+# Add two methods to an existing class. Starts in normal mode at the top.
+@start 1:0 n
+
+> go to def add
+~ go to the add method
+@do keys <Cmd>call cursor(5, 5)<CR>
+@cursor 5:4
+@mode n
+
+> down
+~ next line
+@do keys j
+@row 6
+
+> open below
+~ open a line below
+@do keys o
+@row 7
+@mode i
+@line
+
+> new line
+~ blank line
+@do keys <CR>
+@row 8
+@lines 12
+
+> dedent def remove taking self comma name
+~ def remove self comma name
+@do line -1 def remove(self, name):
+@line     def remove(self, name):
+
+> if name not in self dot items
+@do line 0 if name not in self.items:
+@line         if name not in self.items:
+
+> raise pascal key error of name
+~ raise key error name
+@do line 0 raise KeyError(name)
+@line             raise KeyError(name)
+
+> dedent del self dot items index name
+~ dedent del self dot items in square brackets name
+@do line -1 del self.items[name]
+===
+class Inventory:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, name, count=1):
+        self.items[name] = self.items.get(name, 0) + count
+
+    def remove(self, name):
+        if name not in self.items:
+            raise KeyError(name)
+        del self.items[name]▮
+
+
+inv = Inventory()
+inv.add("apple")
+===
+
+> double new line
+~ blank line
+@do line 0
+@do line 0
+@row 13
+@lines 17
+
+> dedent def total taking self
+~ def total self
+@do line -1 def total(self):
+@line     def total(self):
+
+> return sum of self dot items dot values of
+~ return the sum of self dot items dot values
+@do line 0 return sum(self.items.values())
+@line         return sum(self.items.values())
+
+> escape
+~ normal mode
+@do keys <Esc>
+@mode n
+@row 14

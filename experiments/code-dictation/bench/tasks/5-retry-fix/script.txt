@@ -1,0 +1,120 @@
+# Fix a function in place: change two default arguments, add a backoff
+# line, turn a string into an f-string. Starts in normal mode at the top.
+@start 1:0 n
+
+> go to three
+~ -
+@do keys <Cmd>call cursor(4, 24)<CR>
+@cursor 4:23
+
+> change word
+~ -
+@do keys ciw
+@mode i
+@line def fetch(url, retries=, timeout=5):
+
+> five
+~ -
+@do keys 5
+@line def fetch(url, retries=5, timeout=5):
+
+> escape
+~ change three to five
+@do keys <Esc>
+@mode n
+===
+import time
+
+
+def fetch(url, retries=▮5, timeout=5):
+    for attempt in range(retries):
+        response = get(url, timeout=timeout)
+        if response.ok:
+            return response.json()
+    raise RuntimeError("giving up")
+===
+
+> go to five
+~ -
+@do keys <Cmd>call cursor(4, 35)<CR>
+@cursor 4:34
+
+> change word
+~ -
+@do keys ciw
+@mode i
+
+> ten
+~ -
+@do keys 10
+@line def fetch(url, retries=5, timeout=10):
+
+> escape
+~ change timeout to ten
+@do keys <Esc>
+@mode n
+===
+import time
+
+
+def fetch(url, retries=5, timeout=1▮0):
+    for attempt in range(retries):
+        response = get(url, timeout=timeout)
+        if response.ok:
+            return response.json()
+    raise RuntimeError("giving up")
+===
+
+> go to return
+~ go to return response
+@do keys <Cmd>call cursor(8, 13)<CR>
+@cursor 8:12
+
+> open below
+~ open a line below
+@do keys o
+@row 9
+@mode i
+
+> time dot sleep of two star star attempt
+~ time dot sleep two to the power of attempt
+@do line 0 time.sleep(2 ** attempt)
+@line         time.sleep(2 ** attempt)
+
+> escape
+~ normal mode
+@do keys <Esc>
+@mode n
+===
+import time
+
+
+def fetch(url, retries=5, timeout=10):
+    for attempt in range(retries):
+        response = get(url, timeout=timeout)
+        if response.ok:
+            return response.json()
+        time.sleep(2 ** attempt▮)
+    raise RuntimeError("giving up")
+===
+
+> go to giving
+~ -
+@do keys <Cmd>call cursor(10, 25)<CR>
+@row 10
+
+> change around string
+~ -
+@do keys ca"
+@mode i
+@line     raise RuntimeError()
+
+> f string giving up on brace url
+~ change the string to f string giving up on brace url
+@do keys f"giving up on {url}"
+@line     raise RuntimeError(f"giving up on {url}")
+
+> escape
+~ normal mode
+@do keys <Esc>
+@mode n

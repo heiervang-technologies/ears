@@ -1,0 +1,152 @@
+# Refactor existing code: rename a function, wrap two lines in try/except,
+# change a string, delete a debug print. Starts in normal mode at the top.
+# "~ -" skips a step in the natural variant: the natural phrase on the last
+# step of the group says the whole thing at once.
+@start 1:0 n
+
+> change load
+~ -
+@do keys <Cmd>call cursor(4, 5)<CR>ciw
+@cursor 4:4
+@mode i
+@line def (path):
+
+> load config
+~ -
+@do keys load_config
+@line def load_config(path):
+
+> escape
+~ rename load to load config
+@do keys <Esc>
+@mode n
+@line def load_config(path):
+
+> down
+~ next line
+@do keys j
+@row 5
+
+> open above
+~ new line above
+@do keys O
+@row 5
+@mode i
+@lines 16
+
+> try
+@do line 0 try:
+@line     try:
+
+> escape
+~ normal mode
+@do keys <Esc>
+@mode n
+
+> down
+~ next line
+@do keys j
+@row 6
+
+> indent twice
+~ indent two lines
+@do keys 2>>
+===
+import json
+
+
+def load_config(path):
+    try:
+        ▮f = open(path)
+        data = json.load(f)
+    return data
+
+
+def report(data):
+    total = 0
+    for row in data:
+        total += row["amount"]
+    print("debug", total)
+    return total
+===
+@mode n
+
+> go to return
+~ go to return data
+@do keys <Cmd>call cursor(8, 5)<CR>
+@cursor 8:4
+
+> open above
+~ new line above
+@do keys O
+@row 8
+@mode i
+
+> except pascal file not found error
+~ except file not found error
+@do line 0 except FileNotFoundError:
+@line     except FileNotFoundError:
+
+> return empty dict
+~ return an empty dict
+@do line 0 return {}
+@line         return {}
+
+> escape
+~ normal mode
+@do keys <Esc>
+===
+import json
+
+
+def load_config(path):
+    try:
+        f = open(path)
+        data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    return data
+
+
+def report(data):
+    total = 0
+    for row in data:
+        total += row["amount"]
+    print("debug", total)
+    return total
+===
+@mode n
+
+> go to amount
+~ -
+@do keys <Cmd>call cursor(16, 23)<CR>
+@cursor 16:22
+
+> change string
+~ -
+@do keys ci"
+@mode i
+@line         total += row[""]
+
+> price
+~ -
+@do keys price
+@line         total += row["price"]
+
+> escape
+~ change amount to price
+@do keys <Esc>
+@mode n
+@line         total += row["price"]
+
+> go to print
+~ -
+@do keys <Cmd>call cursor(17, 5)<CR>
+@row 17
+
+> delete line
+~ delete the print line
+@do keys dd
+@lines 17
+@line     return total
+@mode n

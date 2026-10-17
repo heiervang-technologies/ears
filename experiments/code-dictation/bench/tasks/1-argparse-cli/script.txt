@@ -1,0 +1,101 @@
+# Write a small argparse CLI from scratch, in an empty file, in insert mode.
+@start 1:0 i
+
+> import argparse
+@do line 0 import argparse
+@line import argparse
+
+> triple new line
+~ two blank lines
+@do line 0
+@do line 0
+@do line 0
+@row 4
+
+> def parse args
+~ define a function called parse args
+@do line 0 def parse_args():
+@line def parse_args():
+
+> parser equals argparse dot pascal argument parser of description equals string count words in a file
+~ parser equals argparse dot ArgumentParser with description count words in a file
+@do line 0 parser = argparse.ArgumentParser(description="count words in a file")
+@line     parser = argparse.ArgumentParser(description="count words in a file")
+
+> parser dot add argument of string path
+~ parser dot add argument with the string path
+@do line 0 parser.add_argument("path")
+@line     parser.add_argument("path")
+
+> parser dot add argument of quote dash dash top quote comma type equals int comma default equals ten
+~ parser dot add argument dash dash top, type int, default ten
+@do line 0 parser.add_argument("--top", type=int, default=10)
+@line     parser.add_argument("--top", type=int, default=10)
+
+> return parser dot parse args of
+~ return parser dot parse args
+@do line 0 return parser.parse_args()
+===
+import argparse
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="count words in a file")
+    parser.add_argument("path")
+    parser.add_argument("--top", type=int, default=10)
+    return parser.parse_args()▮
+===
+
+> triple new line
+~ two blank lines
+@do line 0
+@do line 0
+@do line 0
+@row 11
+
+> dedent def main
+~ def main
+@do line -1 def main():
+@line def main():
+
+> args equals parse args of
+~ args equals parse args
+@do line 0 args = parse_args()
+@line     args = parse_args()
+
+> print of f string reading brace args dot path
+~ print f string reading args dot path in curly braces
+@do line 0 print(f"reading {args.path}")
+===
+import argparse
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="count words in a file")
+    parser.add_argument("path")
+    parser.add_argument("--top", type=int, default=10)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    print(f"reading {args.path}")▮
+===
+
+> triple new line
+~ two blank lines
+@do line 0
+@do line 0
+@do line 0
+@row 16
+
+> dedent if dunder name equals equals string dunder main
+~ if name equals main
+@do line -1 if __name__ == "__main__":
+@line if __name__ == "__main__":
+
+> main of
+~ call main
+@do line 0 main()
+@line     main()
+@mode i

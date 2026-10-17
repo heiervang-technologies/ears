@@ -464,7 +464,11 @@ local function has_focus()
   return false
 end
 
-local vad = { events = nil, claim = nil, focused = has_focus(), translator = nil, pending = {}, next_id = 0 }
+-- EARS_CODE_HEADLESS=1 (the benchmark): no ears sockets and no focus checks;
+-- events come from the caller through on_event, under a stand-in claim.
+local headless = os.getenv("EARS_CODE_HEADLESS") == "1"
+local vad = { events = nil, claim = nil, focused = not headless and has_focus(), translator = nil,
+  pending = {}, next_id = 0 }
 
 -- Loading again (`:luafile`) replaces the previous instance instead of
 -- leaving it connected, which would insert every utterance twice.
@@ -489,7 +493,11 @@ end
 local function translate(text, mode, on_reply)
   if not vad.translator then
     local buffered = ""
-    vad.translator = vim.system({ "python3", here .. "dictate.py", "--serve" }, {
+    -- EARS_CODE_TRANSLATOR: a shell command serving the same JSON lines, to
+    -- try another translator backend.
+    local custom = os.getenv("EARS_CODE_TRANSLATOR")
+    local cmd = custom and { "sh", "-c", custom } or { "python3", here .. "dictate.py", "--serve" }
+    vad.translator = vim.system(cmd, {
       cwd = here,
       stdin = true,
       stdout = function(_, data)
@@ -674,12 +682,16 @@ resolve = function()
   end
 end
 
-local group = vim.api.nvim_create_augroup("ears_code", { clear = true })
-vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = function() vad.focused = true; resolve() end })
-vim.api.nvim_create_autocmd("FocusLost", { group = group, callback = function() vad.focused = false; resolve() end })
-vim.api.nvim_create_autocmd({ "BufEnter", "FileType", "ModeChanged" }, { group = group, callback = function() resolve() end })
-listen()
-vim.defer_fn(resolve, 300)
+if headless then
+  vad.claim = { is_closing = function() return true end, close = function() end }
+else
+  local group = vim.api.nvim_create_augroup("ears_code", { clear = true })
+  vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = function() vad.focused = true; resolve() end })
+  vim.api.nvim_create_autocmd("FocusLost", { group = group, callback = function() vad.focused = false; resolve() end })
+  vim.api.nvim_create_autocmd({ "BufEnter", "FileType", "ModeChanged" }, { group = group, callback = function() resolve() end })
+  listen()
+  vim.defer_fn(resolve, 300)
+end
 
 vim.keymap.set({ "n", "i" }, "<M-v>", toggle, { desc = "ears: dictate code" })
 
