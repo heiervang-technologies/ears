@@ -253,3 +253,49 @@ if __name__ == "__main__":
     for line in sys.stdin:
         line = line.rstrip("\n")
         print(f"{line!r:60} -> {(python_line if lang == 'py' else bash_line)(line)!r}")
+
+
+
+# Spoken layout words, overridable in ~/.config/ears/code.toml:
+#   new_line = ["new line", "newline", "next line"]
+#   indent = ["indent"]
+#   dedent = ["dedent", "outdent"]
+LAYOUT = {"new_line": ["new line", "newline", "next line"],
+          "indent": ["indent"], "dedent": ["dedent", "outdent"]}
+
+
+def layout():
+    import os
+    import tomllib
+    path = os.path.expanduser("~/.config/ears/code.toml")
+    words = dict(LAYOUT)
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            words.update({k: v for k, v in tomllib.load(f).items() if k in LAYOUT})
+    return words
+
+
+def code_lines(lang, heard, scope=()):
+    """One utterance -> lines: [{"code", "shift"}]. A new-line phrase splits
+    it; a trailing one leaves an empty line to continue on. Leading indent and
+    dedent phrases shift that line by one level each (+1 / -1)."""
+    words = layout()
+    translate = {"py": python_line, "sh": bash_line}.get(lang, lambda t, s: t.strip())
+    breaks = "|".join(re.escape(p) for p in words["new_line"])
+    parts = [p.strip(" .,!?") for p in re.split(rf"\b(?:{breaks})\b[.,!?]*", heard, flags=re.I)]
+    shifts = [(p, 1) for p in words["indent"]] + [(p, -1) for p in words["dedent"]]
+    lines = []
+    for k, part in enumerate(parts):
+        shift, text = 0, " ".join(re.sub(r"[.,!?]", " ", part).split())
+        while True:
+            low = text.lower()
+            hit = next(((p, d) for p, d in shifts if low == p or low.startswith(p + " ")), None)
+            if not hit:
+                break
+            shift += hit[1]
+            text = text[len(hit[0]):].strip()
+        if text:
+            lines.append({"code": translate(text, scope), "shift": shift})
+        elif shift or (k == len(parts) - 1 and len(parts) > 1):
+            lines.append({"code": "", "shift": shift})
+    return lines
