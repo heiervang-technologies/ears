@@ -1,0 +1,137 @@
+lines sampled: 5750 (from 176 files); not single-line, not sampled: {'oneline': 126, 'multiline': 1684}
+terse    unsayable   2.2%  exact  47.4%  lenient  51.9%
+explicit unsayable   2.2%  exact  48.8%  lenient  53.0%
+
+by source (terse, lenient):
+  ht              2161   55.3%
+  site-packages   1699   46.3%
+  stdlib          1890   53.2%
+
+by statement:  n  terse-exact  terse-lenient  explicit-lenient
+  assign                    1573   39.5%   45.5%   45.8%
+  call                       736   31.7%   39.5%   38.3%
+  def                        593   30.4%   30.4%   36.1%
+  if                         584   58.9%   65.4%   63.7%
+  return                     579   56.0%   62.2%   61.1%
+  import                     197   97.0%   97.0%   97.0%
+  from-import                197   42.1%   42.1%   42.1%
+  try                        177  100.0%  100.0%  100.0%
+  for                        149   75.8%   77.9%   80.5%
+  class                      137   11.7%   11.7%   11.7%
+  else                       104  100.0%  100.0%  100.0%
+  except                      93   52.7%   52.7%   52.7%
+  raise                       93   18.3%   28.0%   26.9%
+  annassign                   80    7.5%    7.5%    7.5%
+  decorator                   55    0.0%    0.0%   85.5%
+  elif                        52   50.0%   67.3%   61.5%
+  with                        50   58.0%   66.0%   66.0%
+  augassign                   48   43.8%   56.2%   54.2%
+  continue                    46   97.8%   97.8%   97.8%
+  pass                        44   97.7%   97.7%   97.7%
+  assert                      35   48.6%   62.9%   60.0%
+  async-def                   21    0.0%    0.0%    0.0%
+  while                       19   63.2%   63.2%   63.2%
+  finally                     19  100.0%  100.0%  100.0%
+  expr                        19  100.0%  100.0%  100.0%
+  break                       16  100.0%  100.0%  100.0%
+  await                       15   60.0%   73.3%   73.3%
+  del                         14   64.3%   64.3%   64.3%
+  global                       3    0.0%    0.0%    0.0%
+  async-with                   1    0.0%    0.0%    0.0%
+  async-for                    1    0.0%    0.0%    0.0%
+
+by construct on the line:  n  terse-exact  terse-lenient  explicit-lenient
+  call                      2328   38.0%   45.4%   44.8%
+  attribute                 2220   34.7%   40.0%   40.1%
+  string                    1199   21.8%   43.8%   42.0%
+  compare                    495   53.3%   61.2%   61.0%
+  int                        495   48.7%   52.7%   53.5%
+  subscript                  484   32.4%   38.4%   39.5%
+  binop                      384   26.3%   35.4%   35.7%
+  tuple                      299   40.8%   50.8%   50.8%
+  kwarg                      254   25.2%   31.9%   31.1%
+  int>12                     202   28.2%   29.2%   29.2%
+  op equals equals           182   51.1%   61.0%   61.5%
+  unary                      161   62.1%   64.6%   60.9%
+  op plus                    151   29.1%   39.7%   40.4%
+  f-string                   137    8.0%   26.3%    5.8%
+  list                       137   51.1%   59.1%   59.9%
+  boolop                     133   44.4%   48.9%   48.9%
+  annotation                 122    0.0%    0.0%    0.0%
+  float                       98    1.0%    1.0%    1.0%
+  comprehension               97   38.1%   43.3%   43.3%
+  param default               95    1.1%    1.1%    1.1%
+  op times                    78   30.8%   30.8%   30.8%
+  op slash                    75   28.0%   41.3%   41.3%
+  op is                       68   79.4%   79.4%   79.4%
+  ternary                     62   27.4%   37.1%   35.5%
+  op in                       59   54.2%   76.3%   72.9%
+  dict                        58   34.5%   48.3%   48.3%
+  op minus                    54   50.0%   50.0%   50.0%
+  op is not                   54   61.1%   64.8%   64.8%
+  slice                       50   50.0%   62.0%   68.0%
+  op pipe                     45    4.4%    4.4%    4.4%
+  op less than                43   44.2%   44.2%   44.2%
+  op greater than             41   53.7%   53.7%   53.7%
+  star params                 36    0.0%    0.0%    0.0%
+  op percent                  33   21.2%   51.5%   51.5%
+  op not in                   33   45.5%   60.6%   60.6%
+  starred                     30   33.3%   36.7%   36.7%
+  await                       29   58.6%   69.0%   69.0%
+  op not equals               23   56.5%   60.9%   60.9%
+  op less than or equal       20   10.0%   10.0%   10.0%
+  bytes                       20   10.0%   10.0%   10.0%
+  op greater than or equal    18    0.0%    0.0%    0.0%
+  lambda                      14   42.9%   50.0%   50.0%
+  op slash slash              13    0.0%    0.0%    0.0%
+  set                         13   15.4%   53.8%   53.8%
+  op ampersand                10    0.0%    0.0%    0.0%
+  op shift left                9    0.0%    0.0%    0.0%
+  op at sign                   5    0.0%    0.0%    0.0%
+  op shift right               3    0.0%    0.0%    0.0%
+  op star star                 3    0.0%    0.0%    0.0%
+  walrus                       1    0.0%    0.0%    0.0%
+
+terse failures by cause (2637 lines; share of all sampled lines):
+    831  14.5%  attribute                                  e.g. 'class StreamWriter(Codec,codecs.StreamWriter):'
+    306   5.3%  name: holds a spoken keyword               e.g. 'curlen = selective_len(str, char)'
+    141   2.5%  statement: def                             e.g. 'def punycode_encode(text):'
+     95   1.7%  string: other                              e.g. 'print("Hello world!", file=stdout)'
+     90   1.6%  float                                      e.g. 'SSL_HANDSHAKE_TIMEOUT = 60.0'
+     86   1.5%  name: other                                e.g. 'FILE_ATTRIBUTE_REPARSE_POINT = 1024'
+     82   1.4%  statement: from-import                     e.g. 'from http.server import BaseHTTPRequestHandler, HTTPServer'
+     77   1.3%  statement: def (param default)             e.g. "def decode(self, input, errors='strict'):"
+     77   1.3%  statement: assign                          e.g. '_localeconv = localeconv'
+     63   1.1%  string: holds a spoken keyword             e.g. 'trace("keymap {k!r}", k=self.keymap)'
+     58   1.0%  string: punctuation spacing                e.g. 'raise ValueError("I/O operation on closed socket.")'
+     54   0.9%  call                                       e.g. 'return hashlib.new(digest_like, d)'
+     51   0.9%  statement: def (return annotation)         e.g. 'def empty(self) -> bool:'
+     50   0.9%  statement: class (bases)                   e.g. 'class Codec(codecs.Codec):'
+     50   0.9%  statement: def (annotation)                e.g. 'def insert(self, event: Event) -> None:'
+     46   0.8%  statement: decorator                       e.g. '@property'
+     41   0.7%  subscript                                  e.g. 'self.events: deque[Event] = deque()'
+     36   0.6%  tuple                                      e.g. 'assert isinstance(char, (int, bytes))'
+     32   0.6%  statement: from-import (relative)          e.g. 'from .console import Event'
+     30   0.5%  name: is a spoken keyword (f)              e.g. 'f = BytesIO(value)'
+     26   0.5%  binop pipe                                 e.g. 'def push(self, char: int | bytes) -> None:'
+     24   0.4%  statement: def (star params)               e.g. 'def is_resource(anchor, *path_names):'
+     24   0.4%  joinedstr                                  e.g. "markers = f'({markers})'"
+     22   0.4%  int: 13-19                                 e.g. "p, q = [('%f' % float.fromhex('0.' + x)) for x in (h[:16], h"
+     17   0.3%  call: no args                              e.g. 'extended = set()'
+     16   0.3%  string: holds numbers                      e.g. "raise ValueError('field 4 out of range (need an 8-bit value)"
+     16   0.3%  call: kwargs                               e.g. "return _Call(('', args, kwargs), name='()')"
+     13   0.2%  name: has digits                           e.g. 'addr, addr2rc[addr], addr2guts[addr] = m.groups()'
+     12   0.2%  bytes                                      e.g. 'digits = b"abcdefghijklmnopqrstuvwxyz0123456789"'
+     11   0.2%  statement: return                          e.g. 'return _call'
+     10   0.2%  compare greater than or equal              e.g. 'assert n >= 0'
+      9   0.2%  binop slash slash                          e.g. 'delta = delta // 35'
+      8   0.1%  compare less than or equal                 e.g. 'if count <= 0:'
+      8   0.1%  call: builtin                              e.g. 'if isinstance(source, CompleteDirs):'
+      7   0.1%  call: star args                            e.g. 'return files(anchor).joinpath(*path_names)'
+      7   0.1%  binop plus                                 e.g. "software_version = server_version + ' ' + sys_version"
+      6   0.1%  statement: import                          e.g. 'import ast as _ast'
+      6   0.1%  statement: class                           e.g. 'class Reader:'
+      6   0.1%  statement: async-def (annotation)          e.g. 'async def handle_async_request(self, request: Request) -> Re'
+      5   0.1%  ifexp                                      e.g. 'ord_char = char if isinstance(char, int) else ord(char)'
+
+unsayable (terse): {'number: non-decimal': 64, 'f-string: format spec or conversion': 18, 'name: underscore only': 15, 'string: control char': 13, 'string: non-ascii': 11, 'number: float': 4, 'number: underscores': 1}

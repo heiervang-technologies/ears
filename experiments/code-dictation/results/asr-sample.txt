@@ -1,0 +1,23 @@
+context=none
+  all                          n=229  WER  33.8%  all words right  17.5%  code exact  25.4%  lenient  25.4%
+  kokoro:af_heart              n= 15  WER  17.9%  all words right  46.7%  code exact  60.0%  lenient  60.0%
+  kokoro:bm_george             n= 14  WER  16.9%  all words right  50.0%  code exact  71.4%  lenient  71.4%
+  espeak                       n=100  WER  29.2%  all words right  19.0%  code exact  25.7%  lenient  25.7%
+  espeak:en-us+f3              n=100  WER  42.7%  all words right   7.0%  code exact   8.6%  lenient   8.6%
+  style terse                  n=109  WER  32.1%  all words right  23.9%  code exact  33.9%  lenient  33.9%
+  style explicit               n= 60  WER  38.7%  all words right   8.3%  code exact  10.0%  lenient  10.0%
+  style natural                n= 60  WER  30.9%  all words right  15.0%
+context=scope names
+  all                          n=229  WER  39.3%  all words right  17.0%  code exact  20.1%  lenient  20.1%
+  kokoro:af_heart              n= 15  WER  22.8%  all words right  40.0%  code exact  40.0%  lenient  40.0%
+  kokoro:bm_george             n= 14  WER  20.0%  all words right  42.9%  code exact  42.9%  lenient  42.9%
+  espeak                       n=100  WER  33.2%  all words right  20.0%  code exact  25.7%  lenient  25.7%
+  espeak:en-us+f3              n=100  WER  50.1%  all words right   7.0%  code exact   5.7%  lenient   5.7%
+  style terse                  n=109  WER  43.5%  all words right  22.0%  code exact  26.6%  lenient  26.6%
+  style explicit               n= 60  WER  36.7%  all words right  10.0%  code exact   8.3%  lenient   8.3%
+  style natural                n= 60  WER  35.2%  all words right  15.0%
+median latency 178 ms
+word-perfect transcripts (context=False): code exact 100.0% of 31
+word-perfect transcripts (context=True): code exact 90.0% of 30
+transcripts (no context) writing symbols the words named (',', '_', '(' ...): 30 of 229; with context: 59
+common substitutions: dot->not (56), p->the (6), index->in (5), equals->equal (5), index->indexed (4), io->i (4), error->o (4), comma->error (4), dunder->under (4), pos->pose (4), self->if (4), outputs->output (4), arr->are (4), except->accept (3), self->else (3), is->labels (3), not->is (3), none->not (3), dict->vic (2), dict->dick (2), y->why (2), pos->post (2), self->elf (2), int->in (2), len->land (2)

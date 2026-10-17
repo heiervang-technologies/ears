@@ -28,6 +28,9 @@ as context.
   `camel`, `pascal`, `constant`), and fuzzy matching against names in scope
   (`pass args` → `parse_args`).
 - `e2e.py`: audio → ASR with the scope as context → `spoken.py`.
+- `verbalize.py`, `roundtrip.py`, `make_dataset.py`, `audio_sample.py`: real
+  code → spoken variants (training data), the round trip through `spoken.py`
+  (52% → 92.5% of real lines), and an ASR sample. See `VERBALIZER.md`.
 
 ```bash
 python e2e.py py e2e-py.txt
