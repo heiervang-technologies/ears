@@ -98,6 +98,24 @@ python spoken.py py < py-heard.txt
   - normal mode also has "down five", "go to line forty two", "start of line",
     "end of line", "page down", "match"; insert mode has "cursor left three",
     "word right", "end of line", "start of line".
+- Selecting and editing by what is there (normal mode): a verb (select /
+  highlight, delete / cut, copy / yank, change) and what to act on:
+  - a name or symbol: "select total", "change parse args" (deletes it and
+    starts insert mode, so the next words replace it);
+  - a range: "select from total to argv", "delete from def parse args to
+    colon";
+  - a pair, inside by default: "select inside parens", "delete around
+    string", "change args", "copy brackets";
+  - "select line", "select function", "copy class", "delete function".
+- Moving and copying: "move line to after return", "move line above def
+  main", "copy argv to after total", "move total to before len",
+  "move line up two", "duplicate line". With a selection (visual mode), say
+  "move to after X" or "copy to before X", or "delete", "copy", "indent",
+  "paren it", "quote it" (nvim-surround). Lines land below or above the line
+  holding the destination; a word moved next to a word gets a space.
+- Between symbols, in insert mode: "inside parens", "inside brackets",
+  "inside string" put the cursor just inside the next pair; "next argument"
+  goes past the next comma; "jump out" leaves it again.
 - "Ruff" or "format code", said on its own in any mode, formats the buffer:
   ruff for Python, otherwise conform or the language server.
 - Surrounding existing code, in normal mode (through nvim-surround): "quote

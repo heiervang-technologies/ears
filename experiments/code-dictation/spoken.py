@@ -467,6 +467,8 @@ def navigation(words, scope, lang):
     phrase = " ".join(words)
     if phrase in ("jump out", "skip out", "out"):
         return find_keys(CLOSERS, "e", count)
+    if phrase in INSIDE:
+        return find_keys(INSIDE[phrase], "e", count)
     if len(words) == 2 and words[0] in ("next", "previous") and words[1] in KINDS:
         pattern = BLOCKS.get(lang, {}).get(KINDS[words[1]])
         return pattern and find_keys(pattern, "" if words[0] == "next" else "b", count)
@@ -474,6 +476,83 @@ def navigation(words, scope, lang):
         if phrase.startswith(lead + " "):
             return find_keys(target(phrase[len(lead) + 1:].split(), scope, lang), SEEK[lead], count)
     return None
+
+
+# Editing by what is there: a verb, then what to act on.
+#   "select total", "delete from print to colon", "change inside string",
+#   "copy function", "move line to after return", "copy argv to after total".
+VERBS = {"select": "v", "highlight": "v", "mark": "v", "delete": "d", "cut": "d",
+         "copy": "y", "yank": "y", "change": "c", "replace": "c"}
+# Text objects: "inside parens" (the default) or "around parens".
+OBJECTS = {"parens": "(", "parentheses": "(", "parenthesis": "(", "args": "(", "arguments": "(",
+           "call": "(", "brackets": "[", "list": "[", "index": "[", "braces": "{",
+           "dict": "{", "string": '"', "quotes": '"', "double quotes": '"',
+           "single quotes": "'", "word": "w", "block": "p", "paragraph": "p"}
+LINES = {"line", "this line", "the line", "lines"}
+PLACES = {"to after": "after", "after": "after", "below": "after", "under": "after",
+          "to before": "before", "before": "before", "above": "before", "over": "before",
+          "to": "after"}
+# In visual mode: what to do with the selection.
+VISUAL = {"delete": "d", "cut": "d", "copy": "y", "yank": "y", "change": "c",
+          "indent": ">", "dedent": "<", "the indent": "<", "upper case": "U", "lower case": "u",
+          "paren it": "S)", "wrap in parens": "S)", "bracket it": "S]", "brace it": "S}",
+          "quote it": 'S"', "single quote it": "S'", "escape": "<Esc>", "join": "J"}
+# Insert mode, in code: put the cursor inside the next pair or argument.
+INSIDE = {"inside parens": r"\V(", "inside brackets": r"\V[", "inside braces": r"\V{",
+          "inside string": r"\V\"", "inside quotes": r"\V\"", "inside args": r"\V(",
+          "next argument": r",\s*", "next arg": r",\s*"}
+
+
+def lua(fn, *args):
+    def arg(a):
+        return "nil" if a is None else str(a) if isinstance(a, int) else f"[==[{a}]==]"
+    return f"<Cmd>lua _G.{fn}({', '.join(map(arg, args))})<CR>"
+
+
+def editing(words, scope, lang, visual=False):
+    """A verb with what it acts on -> keys, else None."""
+    phrase = " ".join(words)
+    if visual:
+        if phrase in VISUAL:
+            return VISUAL[phrase]
+        for verb in ("move", "copy"):
+            for place in sorted(PLACES, key=len, reverse=True):
+                if phrase.startswith(f"{verb} {place} ") or phrase.startswith(f"{verb} selection {place} "):
+                    rest = phrase.split(f" {place} ", 1)[1]
+                    return lua("ears_move", "selection", target(rest.split(), scope, lang),
+                               PLACES[place], int(verb == "copy"))
+    if len(words) > 2 and words[0] == "move" and words[1] in ("line", "lines") and words[2] in ("up", "down"):
+        count = next((int(w) for w in words[3:] if w.isdigit()), 1)
+        return f"<Cmd>move .{'-' + str(count + 1) if words[2] == 'up' else '+' + str(count)}<CR>=="
+    if phrase in ("duplicate line", "duplicate"):
+        return "yyp"
+    if words and words[0] in ("move", "copy"):
+        rest = " ".join(words[1:])
+        for place in sorted(PLACES, key=len, reverse=True):
+            if f" {place} " in f" {rest} " and not rest.startswith(place + " "):
+                what, where = rest.split(f" {place} ", 1)
+                source = "line" if what in LINES else target(what.split(), scope, lang)
+                return lua("ears_move", source, target(where.split(), scope, lang),
+                           PLACES[place], int(words[0] == "copy"))
+        if words[0] == "move":
+            return None
+    if not words or words[0] not in VERBS or len(words) < 2:
+        return None
+    verb, rest = VERBS[words[0]], words[1:]
+    what = " ".join(rest)
+    if what in LINES:
+        return "V" if verb == "v" else verb * 2
+    if what in KINDS or what in ("this function", "the function", "this class"):
+        return lua("ears_block", verb, KINDS[what.split()[-1]])
+    side = "i"
+    if rest[0] in ("inside", "in", "around"):
+        side, what = ("a" if rest[0] == "around" else "i"), " ".join(rest[1:])
+    if what in OBJECTS:
+        return verb + side + OBJECTS[what]
+    if rest[0] == "from" and " to " in what:
+        a, b = what[len("from "):].split(" to ", 1)
+        return lua("ears_act", verb, target(a.split(), scope, lang), target(b.split(), scope, lang))
+    return lua("ears_act", verb, target(rest, scope, lang), None)
 
 
 def config():
@@ -515,14 +594,16 @@ def take_count(words):
     return count, words
 
 
-def normal_keys(heard, scope=(), lang=None):
+def normal_keys(heard, scope=(), lang=None, visual=False):
     """A normal-mode utterance -> keys, or None when it is not a command
     (then nothing happens: dictation never lands in normal mode)."""
     conf = config()
     count, words = take_count(plain(heard).split())
     phrase = " ".join(words)
     table = {plain(k): v for k, v in conf["normal"].items()}
-    keys = table.get(phrase)
+    keys = table.get(phrase) if not (visual and phrase in VISUAL) else None
+    if keys is None and (edit := editing(plain(heard).split(), scope, lang, visual)):
+        return edit
     if keys is None and (seek := navigation(plain(heard).split(), scope, lang)):
         return seek
     if keys is None and words:
