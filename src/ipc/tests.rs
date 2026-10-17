@@ -130,3 +130,46 @@ async fn command_routing_and_duplicate_start_do_not_replace_owner() {
     server.shutdown().await;
     assert!(!path.exists());
 }
+
+#[tokio::test]
+async fn claim_lasts_until_release_or_disconnect() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("commands.sock");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let server = start_cmd_server_at(path.clone(), tx);
+    let next = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<EarsCommand>| {
+        let command = rx.try_recv();
+        match command {
+            Ok(EarsCommand::Claim { held }) => Some(held),
+            _ => None,
+        }
+    };
+
+    let stream = connect(&path).await;
+    let (reader, mut writer) = stream.into_split();
+    let mut lines = BufReader::new(reader).lines();
+    for (verb, reply, held) in [
+        ("claim", "claimed", Some(true)),
+        ("claim", "claimed", None), // already held: not counted twice
+        ("release", "released", Some(false)),
+        ("claim", "claimed", Some(true)),
+    ] {
+        writer
+            .write_all(format!("{verb}\n").as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(lines.next_line().await.unwrap().unwrap(), reply);
+        assert_eq!(next(&mut rx), held, "after {verb}");
+    }
+
+    // A client that goes away gives the claim back.
+    drop(writer);
+    drop(lines);
+    let command = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(command, EarsCommand::Claim { held: false }));
+    server.shutdown().await;
+}

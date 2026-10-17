@@ -69,6 +69,9 @@ pub struct TypingSettings {
     /// Ghost completion: show partials as inline preedit via the fcitx5
     /// `earsghost` addon and commit the final text through it.
     pub ghost: bool,
+    /// A client holds the input claim (`ears claim`): typing is off and
+    /// partials are published for it. Headless VAD only.
+    pub claimed: bool,
 }
 
 impl Default for TypingSettings {
@@ -82,6 +85,7 @@ impl Default for TypingSettings {
             language: None,
             guided_grammar: None,
             ghost: false,
+            claimed: false,
         }
     }
 }
@@ -197,6 +201,7 @@ pub async fn start_vad_pipeline(
                         engine.set_text_filters(s.text_filters, s.language);
                         engine.set_guided_grammar(s.guided_grammar.clone());
                         engine.set_ghost(s.ghost);
+                        engine.set_claimed(s.claimed);
                         tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
                     }
 
@@ -302,6 +307,10 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         let _ = respond.send(format!("auto-enter:{}", state));
                         app.add_log(&format!("Auto-enter: {}", state));
                     }
+                    crate::ipc::EarsCommand::Claim { .. } => {
+                        // Claims are for the headless VAD (`ears vad`); the
+                        // TUI keeps typing as its panels say.
+                    }
                     crate::ipc::EarsCommand::Typing { request, respond } => {
                         let next = request.apply(typing);
                         if request.changes_state() {
@@ -344,6 +353,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         language: app.language.clone(),
                         guided_grammar: app.active_grammar(),
                         ghost: app.vad_ghost,
+                        claimed: false,
                     });
                 }
             }
@@ -375,6 +385,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             language: app.language.clone(),
                             guided_grammar: app.active_grammar(),
                             ghost: app.vad_ghost,
+                            claimed: false,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);

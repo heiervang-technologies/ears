@@ -1,6 +1,6 @@
 //! Ghost session state, stream fallback, partials, and application delivery.
 
-use super::{f32_to_i16, run_blocking, write_wav, StreamingEngine};
+use super::{f32_to_i16, run_blocking, write_wav, StreamingEngine, StreamingEvent};
 use crate::desktop::{TextInput, TypingMode};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -409,7 +409,7 @@ impl StreamingEngine {
         let Some(ghost) = self.ghost.as_mut() else {
             return false;
         };
-        if muted {
+        if muted && !self.claimed {
             // Nothing may be shown; do not spend the server on it either.
             ghost.stream_cancel();
             return true;
@@ -512,6 +512,8 @@ impl StreamingEngine {
     /// Apply finished partial transcriptions for the utterance in progress.
     pub(super) fn ghost_poll_partials(&mut self) {
         let muted = self.typing_mode == TypingMode::None;
+        let claimed = self.claimed;
+        let mut published = Vec::new();
         let filters = self.text_filters.clone();
         let language = self.language.clone();
         let bash = self.guided_grammar.is_some();
@@ -551,7 +553,7 @@ impl StreamingEngine {
             if !streamed {
                 ghost.decoder = decoder;
             }
-            if muted {
+            if muted && !claimed {
                 continue; // typing switched off: show nothing in the target
             }
             let text = match result {
@@ -566,6 +568,10 @@ impl StreamingEngine {
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
+            if muted {
+                published.push(text); // the claimant draws it, not fcitx
+                continue;
+            }
             let shown = ghost.spaced(&text);
             let command = commands
                 .as_ref()
@@ -585,6 +591,9 @@ impl StreamingEngine {
             if r.is_ok() {
                 ghost.showing = true;
             }
+        }
+        for text in published {
+            self.send_event(StreamingEvent::Partial { text });
         }
     }
 

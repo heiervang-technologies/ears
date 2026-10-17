@@ -1595,6 +1595,7 @@ impl App {
             StreamingEvent::VoiceCommand { name, text } => {
                 self.add_log(&format!("Voice command: {} (\"{}\")", name, text));
             }
+            StreamingEvent::Partial { .. } => {} // for the claimant, not the TUI
             StreamingEvent::StatsUpdate {
                 segments_processed,
                 avg_latency_ms,

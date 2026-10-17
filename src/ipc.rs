@@ -126,6 +126,11 @@ pub enum EarsCommand {
     ToggleAutoEnter {
         respond: tokio::sync::oneshot::Sender<String>,
     },
+    /// A client took (`claim`) or gave up (`release`, or by disconnecting)
+    /// the input claim: while any claim is held, nothing is typed and the
+    /// claimant gets the words as events instead (`Partial`,
+    /// `SegmentCompleted`, `VoiceCommand`).
+    Claim { held: bool },
     /// Switch typing into the focused window on/off (`typing-on|off|toggle|status`).
     Typing {
         request: crate::typing_switch::TypingRequest,
@@ -169,9 +174,20 @@ pub fn start_cmd_server_at(
                             use tokio::io::{AsyncBufReadExt, BufReader};
                             let (reader, mut writer) = stream.split();
                             let mut lines = BufReader::new(reader).lines();
+                            // A claim lasts as long as this connection, so a
+                            // client that dies cannot leave typing off.
+                            let mut holding = false;
                             while let Ok(Some(line)) = lines.next_line().await {
                                 let verb = line.trim();
                                 let response = match verb {
+                                    "claim" | "release" => {
+                                        let held = verb == "claim";
+                                        if held != holding {
+                                            holding = held;
+                                            let _ = tx.send(EarsCommand::Claim { held });
+                                        }
+                                        if held { "claimed" } else { "released" }.to_string()
+                                    }
                                     v if crate::typing_switch::TypingRequest::from_command(v)
                                         .is_some() =>
                                     {
@@ -204,6 +220,9 @@ pub fn start_cmd_server_at(
                                 {
                                     break;
                                 }
+                            }
+                            if holding {
+                                let _ = tx.send(EarsCommand::Claim { held: false });
                             }
                         });
                     }

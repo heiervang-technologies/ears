@@ -77,6 +77,11 @@ pub enum StreamingEvent {
         uncommitted: String,
     },
 
+    /// The utterance in progress as heard so far, published instead of drawn
+    /// as ghost text while a client holds the input claim (`ears claim`), so
+    /// it can show its own preview.
+    Partial { text: String },
+
     /// Transcription segment completed. `audio_path` is the utterance as a
     /// 16 kHz mono WAV, present only when the engine keeps audio
     /// ([`StreamingEngine::set_keep_audio_dir`]); the consumer owns the file.
@@ -243,6 +248,9 @@ pub struct StreamingEngine {
     keep_audio_dir: Option<PathBuf>,
     /// Listening without typing until the wake phrase (see `crate::wake`).
     standby: bool,
+    /// A client holds the input claim: nothing is typed or drawn, and
+    /// partials are published as `Partial` events for it to show.
+    claimed: bool,
     wake: Box<dyn crate::wake::WakeDetector>,
     /// File that exists while in standby, for `ears prompt`.
     standby_marker: Option<PathBuf>,
@@ -297,6 +305,7 @@ impl StreamingEngine {
             continuous_http: false,
             keep_audio_dir: None,
             standby: false,
+            claimed: false,
             wake: Box::new(crate::wake::NoWake),
             standby_marker: None,
         })
@@ -1151,6 +1160,7 @@ impl StreamingEngine {
                     | StreamingEvent::SpeechRejected
                     | StreamingEvent::SegmentDiscarded { .. }
                     | StreamingEvent::TranscriptUpdate { .. }
+                    | StreamingEvent::Partial { .. }
                     | StreamingEvent::SegmentCompleted { .. }
             )
         {
@@ -1228,6 +1238,12 @@ impl StreamingEngine {
                 ghost.stream_cancel();
             }
         }
+    }
+
+    /// Hold or drop the input claim. The caller also switches typing off
+    /// while it is held; this keeps partials decoding for the claimant.
+    pub fn set_claimed(&mut self, claimed: bool) {
+        self.claimed = claimed;
     }
 
     /// Update text filters and language
