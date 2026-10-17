@@ -136,6 +136,13 @@ async fn main() -> Result<()> {
         Some(Commands::Test { file }) => {
             test_config(&config, file.as_deref()).await?;
         }
+        Some(Commands::MicCheck {
+            device,
+            no_transcribe,
+            json,
+        }) => {
+            ears::mic_check::run(&config, device, !no_transcribe, json).await?;
+        }
         Some(Commands::Prompt { .. }) => unreachable!("handled before config load"),
         Some(Commands::AutoEnter) => {
             handle_auto_enter().await?;

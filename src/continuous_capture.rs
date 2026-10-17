@@ -13,7 +13,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
@@ -42,9 +42,6 @@ pub struct ContinuousCaptureConfig {
     /// Audio device to capture from
     pub device: String,
 
-    /// Sample rate (Hz)
-    pub sample_rate: usize,
-
     /// Chunk size in samples to read at a time
     pub chunk_size: usize,
 }
@@ -53,7 +50,6 @@ impl Default for ContinuousCaptureConfig {
     fn default() -> Self {
         Self {
             device: "default".to_string(),
-            sample_rate: 16000,
             chunk_size: crate::pipeline::AUDIO_CHUNK_SAMPLES, // 100ms at 16kHz
         }
     }
@@ -158,18 +154,8 @@ impl ContinuousCapture {
             self.config.device
         );
 
-        // Start pw-record in continuous mode
-        // Output raw PCM data (16-bit signed, mono, 16kHz)
-        let mut child = Command::new("pw-record")
-            .arg("--target")
-            .arg(&self.config.device)
-            .arg("--rate")
-            .arg(self.config.sample_rate.to_string())
-            .arg("--channels")
-            .arg("1") // Mono
-            .arg("--format")
-            .arg("s16") // 16-bit signed
-            .arg("-") // Output to stdout
+        // Start pw-record in continuous mode, raw PCM on stdout
+        let mut child = crate::pcm::pw_record(&self.config.device, "-")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -250,15 +236,7 @@ impl ContinuousCapture {
                             break None;
                         }
                         // Convert i16 samples to f32
-                        let samples: Vec<f32> = buffer
-                            .as_chunks::<2>()
-                            .0
-                            .iter()
-                            .map(|bytes| {
-                                let sample_i16 = i16::from_le_bytes([bytes[0], bytes[1]]);
-                                sample_i16 as f32 / 32768.0 // Normalize to -1.0..1.0
-                            })
-                            .collect();
+                        let samples = crate::pcm::samples_f32(&buffer);
 
                         if let Some(ref health) = health {
                             health.captured(&samples);
@@ -373,13 +351,13 @@ impl Drop for ContinuousCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use tempfile::TempDir;
 
     #[test]
     fn test_continuous_capture_config_default() {
         let config = ContinuousCaptureConfig::default();
         assert_eq!(config.device, "default");
-        assert_eq!(config.sample_rate, 16000);
         assert_eq!(config.chunk_size, 1600);
     }
 

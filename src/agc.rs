@@ -62,30 +62,17 @@ impl SpeechGain {
     }
 }
 
-/// RMS of a block of samples.
-pub fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-}
+pub use crate::pcm::rms;
 
 /// Scale a finished speech segment so its speech, the louder half of its
 /// 32 ms frames, sits at [`TARGET_RMS`], within the same gain limits and
 /// with peaks kept below full scale. Returns the gain applied.
 pub fn normalize_segment(samples: &mut [f32]) -> f32 {
-    const FRAME: usize = 512;
-    let mut levels: Vec<f32> = samples.chunks(FRAME).map(rms).collect();
-    if levels.is_empty() {
-        return 1.0;
-    }
-    levels.sort_by(|a, b| b.total_cmp(a));
-    let loud = &levels[..levels.len().div_ceil(2)];
-    let speech = (loud.iter().map(|l| l * l).sum::<f32>() / loud.len() as f32).sqrt();
+    let speech = crate::pcm::speech_rms(samples);
     if speech < FLOOR_RMS {
         return 1.0;
     }
-    let peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+    let peak = crate::pcm::peak(samples);
     let mut gain = (TARGET_RMS / speech).clamp(MIN_GAIN, MAX_GAIN);
     if peak > 0.0 {
         gain = gain.min(0.98 / peak);

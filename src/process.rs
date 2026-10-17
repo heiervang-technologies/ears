@@ -50,14 +50,7 @@ impl ProcessManager {
         let mut cmd = Command::new("timeout");
         cmd.arg(self.timeout.as_secs().to_string())
             .arg("pw-record")
-            .arg("--target")
-            .arg(device)
-            .arg("--rate")
-            .arg("16000")
-            .arg("--channels")
-            .arg("1")
-            .arg("--format")
-            .arg("s16")
+            .args(crate::pcm::pw_record_args(device))
             .arg(output_file);
 
         // Spawn the process
