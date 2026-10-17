@@ -284,7 +284,9 @@ LAYOUT = {"new_line": ["new line", "newline", "next line"],
 # dee", "paste three times") goes before the keys, except for ":" commands,
 # which run that many times. Overridable under [normal] in code.toml.
 NORMAL = {
-    "delete line": "dd", "yank line": "yy", "copy line": "yy", "change line": "cc",
+    "delete line": "dd", "diddy": "dd", "didi": "dd", "deedee": "dd", "teddy": "dd",
+    "clear line": "cc<Esc>", "clear": "cc<Esc>", "erase": "cc<Esc>",
+    "yank line": "yy", "copy line": "yy", "change line": "cc",
     "paste": "p", "paste above": "P", "undo": "u", "redo": "<C-r>",
     "insert": "i", "append": "A", "open": "o", "open below": "o", "open above": "O",
     "down": "j", "up": "k", "left": "h", "right": "l", "word": "w", "back word": "b",
