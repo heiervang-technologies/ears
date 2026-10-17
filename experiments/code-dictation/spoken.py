@@ -275,9 +275,12 @@ if __name__ == "__main__":
 # Spoken layout words, overridable in ~/.config/ears/code.toml:
 #   new_line = ["new line", "newline", "next line"]
 #   indent = ["indent"]
-#   dedent = ["dedent", "outdent"]
+#   dedent = ["dedent", "the indent", "outdent", "unindent"]
 LAYOUT = {"new_line": ["new line", "newline", "next line"],
-          "indent": ["indent"], "dedent": ["dedent", "outdent"]}
+          "indent": ["indent"],
+          # "dedent" is often heard as "the indent"; "outdent" and "unindent"
+          # are harder to mishear.
+          "dedent": ["dedent", "the indent", "de indent", "deindent", "outdent", "unindent"]}
 
 
 # Normal-mode commands: phrase -> keys. A count ("down five", "triple dee
@@ -291,7 +294,8 @@ NORMAL = {
     "insert": "i", "append": "A", "open": "o", "open below": "o", "open above": "O",
     "down": "j", "up": "k", "left": "h", "right": "l", "word": "w", "back word": "b",
     "end": "$", "start": "^", "top": "gg", "bottom": "G", "line": "G", "go to line": "G",
-    "center": "zz", "join": "J", "indent": ">>", "dedent": "<<", "next": "n",
+    "center": "zz", "join": "J", "indent": ">>", "dedent": "<<", "the indent": "<<",
+    "outdent": "<<", "unindent": "<<", "next": "n",
     "previous": "N", "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
 }
 # Spoken letter names; an utterance made only of letters is typed as keys:

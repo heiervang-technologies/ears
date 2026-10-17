@@ -3,7 +3,7 @@
 
 new_line = ["new line", "newline", "next line"]
 indent = ["indent"]
-dedent = ["dedent", "outdent"]
+dedent = ["dedent", "the indent", "outdent", "unindent"]
 
 # Insert mode, said as the whole utterance. A count repeats the keys:
 # "backspace three times", "triple backspace".
