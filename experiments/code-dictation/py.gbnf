@@ -1,0 +1,12 @@
+root ::= scaffold line
+scaffold ::= "language " [A-Za-z]+ "<asr_text>"
+line ::= stmt
+stmt ::= "import " name (" as " name)? | "def " name "(" params? "):" | "for " name " in " expr ":" | "if " expr ":" | "return " expr | name " = " expr
+params ::= name (", " name)*
+expr ::= atom (" " op " " atom)*
+op ::= "==" | "!=" | "+" | "-" | "*" | "/" | "<" | ">" | "is" | "and" | "or"
+atom ::= primary trailer*
+trailer ::= "." name | "(" args? ")" | "[" expr "]"
+args ::= expr (", " expr)*
+primary ::= name | [0-9]+ | "\"" [^"]{0,40} "\""
+name ::= [A-Za-z_] [A-Za-z0-9_]{0,30}

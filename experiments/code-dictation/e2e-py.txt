@@ -1,0 +1,7 @@
+def parse args taking argv
+for i in range ten
+if x equals none
+return self dot items index key
+class request handler
+total equals sum of x dot size for x in parts
+import numpy as np

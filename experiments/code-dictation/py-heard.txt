@@ -1,0 +1,11 @@
+For I in range ten colon.
+F pass args open paren args close paren colon.
+If x e equals e equals non colon.
+Return self. dot items. open bracket key closed bracket.
+def parse args taking argv
+if x equals none
+for key comma value in sorted of items dot items
+total equals sum of x dot size for x in parts
+print len names
+class request handler
+return self dot items index key

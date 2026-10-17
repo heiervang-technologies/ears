@@ -1,0 +1,3 @@
+git commit dash m quote fix typo quote
+ls dash la tilde slash downloads pipe grep pdf
+cargo test dash dash release and then git push
