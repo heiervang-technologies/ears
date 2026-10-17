@@ -43,8 +43,14 @@ python spoken.py py < py-heard.txt
 
 - `Alt-v` (normal or insert mode; Space v is NvChad's vertical terminal): start talking. Press
   it again to stop.
+- While you talk, the recording so far is re-transcribed every 500 ms and the
+  translated line shows as yellow ghost text where it will land, with the words
+  heard after it.
 - The buffer's names are sent as context, the line is translated, and it is
   inserted with indentation: it replaces a blank current line, otherwise it goes
   below. Each utterance is one undo step (`u`).
+- About a second later, beam-search hypotheses that translate differently (and
+  the plain words, as an escape hatch) open as a completion menu over the line:
+  `Ctrl-n`/`Ctrl-p` to pick, `Esc` to keep what was inserted.
 - Put the VAD in standby first ("ears off"), or it types the raw words too.
 - `dictate.py` is the bridge: `python3 dictate.py py file.wav scope.txt`.

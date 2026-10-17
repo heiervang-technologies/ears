@@ -21,6 +21,19 @@ def asr(path, system=None, grammar=None, max_tokens=96):
     out = json.load(urllib.request.urlopen(req, timeout=60))["choices"][0]["message"]["content"]
     return (out.split("<asr_text>", 1)[-1].strip() or "RAW:" + out), time.time() - t
 
+def asr_nbest(path, system=None, n=4, max_tokens=96):
+    """Beam-search hypotheses, best first."""
+    audio = base64.b64encode(open(path, "rb").read()).decode()
+    messages = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": [
+        {"type": "input_audio", "input_audio": {"data": audio, "format": "wav"}}]})
+    body = {"model": MODEL, "messages": messages, "max_tokens": max_tokens,
+            "temperature": 0.0, "n": n, "use_beam_search": True}
+    req = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    choices = json.load(urllib.request.urlopen(req, timeout=60))["choices"]
+    return [c["message"]["content"].split("<asr_text>", 1)[-1].strip() for c in choices]
+
+
 if __name__ == "__main__":
     cases = [l.rstrip("\n") for l in open(sys.argv[1]) if l.strip()]
     system = open(sys.argv[2]).read() if len(sys.argv) > 2 and sys.argv[2] != "-" else None
