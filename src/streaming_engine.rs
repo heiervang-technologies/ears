@@ -449,8 +449,8 @@ impl StreamingEngine {
         );
 
         match self.wake.check_audio(&segment.samples) {
-            crate::wake::AudioVerdict::Wake => {
-                self.toggle_standby("");
+            crate::wake::AudioVerdict::Wake(wake) => {
+                self.apply_wake(wake, "");
                 return Ok(());
             }
             crate::wake::AudioVerdict::NotWake if self.standby => return Ok(()),
@@ -549,8 +549,8 @@ impl StreamingEngine {
             return Ok(());
         }
 
-        if self.wake.check_transcript(&transcript) {
-            self.toggle_standby(&transcript);
+        if let Some(wake) = self.wake.check_transcript(&transcript) {
+            self.apply_wake(wake, &transcript);
             return Ok(());
         }
         if self.standby {
@@ -850,7 +850,11 @@ impl StreamingEngine {
     /// Also sets the wake phrases (`standby`) when commands are enabled.
     pub fn set_commands(&mut self, commands: crate::commands::VoiceCommands) {
         self.wake = if commands.enabled {
-            Box::new(crate::wake::PhraseWake::new(&commands.standby))
+            Box::new(crate::wake::PhraseWake::new(
+                &commands.standby,
+                &commands.wake,
+                &commands.sleep,
+            ))
         } else {
             Box::new(crate::wake::NoWake)
         };
@@ -873,9 +877,20 @@ impl StreamingEngine {
         self.standby
     }
 
-    /// Switch between typing and standby (the wake phrase was heard).
-    fn toggle_standby(&mut self, heard: &str) {
-        self.standby = !self.standby;
+    /// Act on a wake phrase. One that asks for the current mode only
+    /// repeats its tone, so it is confirmed but never typed.
+    fn apply_wake(&mut self, wake: crate::wake::Wake, heard: &str) {
+        let standby = wake.standby_after(self.standby);
+        if standby == self.standby {
+            debug!("Wake phrase for the current mode: {:?}", wake);
+            if standby {
+                crate::desktop::AudioFeedback::beep_toggle_off().ok();
+            } else {
+                crate::desktop::AudioFeedback::beep_toggle_on().ok();
+            }
+            return;
+        }
+        self.standby = standby;
         self.ghost_clear();
         if let Some(path) = &self.standby_marker {
             let result = if self.standby {

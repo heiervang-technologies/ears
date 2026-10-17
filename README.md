@@ -469,6 +469,8 @@ undo = ["scratch that"]   # delete the last dictated utterance
 back = ["back"]           # "Back 3." / "Back three." deletes the last 3 words (1-10)
 backtrack = ["backtrack", "back track"]  # delete the last dictated sentence
 standby = ["ears vad", "ears v a d"]     # switch between typing and standby (below)
+wake = ["ears on"]                        # resume typing from standby
+sleep = ["ears off"]                      # stand by
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
 
@@ -512,7 +514,8 @@ writes for silence.
 Saying a `standby` phrase on its own ("Ears VAD.") puts VAD in standby: it
 keeps listening but types nothing, runs no other command, plays no cues,
 ducks nothing and publishes nothing on the socket. The same phrase resumes
-typing. Utterances heard in standby are transcribed by your server only to
+typing. "Ears on." and "Ears off." switch one way only; said in the mode
+they ask for, they just repeat its tone. Utterances heard in standby are transcribed by your server only to
 find the phrase; they are not logged. `ears prompt` shows `○ vad` meanwhile.
 The keybind (`ears vad`) still turns VAD fully off.
 

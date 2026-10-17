@@ -37,6 +37,12 @@ pub struct VoiceCommands {
     /// listens for these phrases (see `crate::wake`).
     #[serde(default = "default_standby")]
     pub standby: Vec<String>,
+    /// Phrases that resume typing from standby ("ears on").
+    #[serde(default = "default_wake")]
+    pub wake: Vec<String>,
+    /// Phrases that put VAD in standby ("ears off").
+    #[serde(default = "default_sleep")]
+    pub sleep: Vec<String>,
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal")]
     pub literal: Vec<String>,
@@ -78,6 +84,14 @@ fn default_standby() -> Vec<String> {
     vec!["ears vad".into(), "ears v a d".into()]
 }
 
+fn default_wake() -> Vec<String> {
+    vec!["ears on".into()]
+}
+
+fn default_sleep() -> Vec<String> {
+    vec!["ears off".into()]
+}
+
 fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
@@ -96,6 +110,8 @@ impl Default for VoiceCommands {
             back: default_back(),
             backtrack: default_backtrack(),
             standby: default_standby(),
+            wake: default_wake(),
+            sleep: default_sleep(),
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
