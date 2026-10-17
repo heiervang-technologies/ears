@@ -27,7 +27,7 @@ SYMBOLS = {
     "percent": "%", "at sign": "@", "hash": "#", "underscore": "_",
 }
 CASES = {"snake", "camel", "pascal", "constant", "smash", "kebab", "spell", "dunder"}
-MISHEARD = {"closed": "close", "non": "none", "f": "def", "def.": "def"}
+MISHEARD = {"closed": "close", "non": "none", "def.": "def"}
 
 PY_KEYWORDS = {"in", "is", "not", "and", "or", "as", "if", "else", "for", "lambda",
                "None", "True", "False", "await", "yield", "from", "import"}
@@ -114,17 +114,57 @@ def case(style, parts):
     return "_".join(parts)
 
 
+# Surrounding syntax, as words. Openers close themselves at the end of the
+# line, or at "close" (the innermost one).
+OPENERS = {"brackets": ("[", "]"), "square": ("[", "]"), "braces": ("{", "}"),
+           "curly": ("{", "}"), "parens": ("(", ")")}
+EMPTY = {"list": "[]", "dict": "{}", "string": '""', "tuple": "()", "set": "set()"}
+STRING_ENDS = {("end", "string"), ("end", "quote"), ("close", "quote")}
+RESERVED = {"of", "index", "call", "sub", "at", "close", "string", "empty"} | set(OPENERS)
+
+
+def string_literal(tokens, i, f=False):
+    """Words after "string" (or a quote) up to the closing quote, "end
+    string", or the end of the line -> a string literal. In an f-string,
+    "brace NAME" is {name}. Returns (literal, next index)."""
+    parts, j = [], i
+    while j < len(tokens):
+        kind, val = tokens[j]
+        if (kind, val) == ("sym", '"'):
+            j += 1
+            break
+        if kind == "word" and j + 1 < len(tokens) and (val, tokens[j + 1][1]) in STRING_ENDS:
+            j += 2
+            break
+        if f and (kind, val) == ("word", "brace") and j + 1 < len(tokens):
+            parts.append("{" + str(tokens[j + 1][1]) + "}")
+            j += 2
+            continue
+        glue = kind == "sym" and val in ".,:;!?/"
+        parts.append(("\0" if glue else "") + str(val))
+        j += 1
+    text = " ".join(parts).replace(" \0", "").replace("\0", "")
+    return ("f" if f else "") + '"' + text + '"', j
+
+
 def python_expr(tokens, condition=False):
     """Render an expression; adjacent plain words become one snake_case name."""
     out, opened, i = [], [], 0
 
     def emit(piece, space=True):
-        if out and space and not out[-1].endswith(("(", "[", "{", ".")) and piece not in ")]},.:([":
+        """space: True (unless punctuation), False, or "force"."""
+        if out and not out[-1].endswith(("(", "[", "{", ".")) and (
+                space == "force" or space and piece.strip() not in ")]},.:(["):
             out.append(" ")
         out.append(piece)
 
+    def open_(o, c, space=False):
+        emit(o, space=space)
+        opened.append(c)
+
     while i < len(tokens):
         kind, val = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else (None, None)
         if kind == "case":
             j = i + 1
             while j < len(tokens) and tokens[j][0] == "word":
@@ -132,42 +172,54 @@ def python_expr(tokens, condition=False):
             emit(case(val, [t[1] for t in tokens[i + 1:j]]))
             i = j
             continue
+        if (kind, val) == ("sym", '"') or (kind, val) == ("word", "string"):
+            literal, i = string_literal(tokens, i + 1)
+            emit(literal)
+            continue
+        if (kind, val) == ("word", "f") and nxt == ("word", "string"):
+            literal, i = string_literal(tokens, i + 2, f=True)
+            emit(literal)
+            continue
+        if (kind, val) == ("word", "empty") and nxt[1] in EMPTY:
+            emit(EMPTY[nxt[1]])
+            i += 2
+            continue
         if kind == "word" and val in PY_LITERALS:
             emit(PY_LITERALS[val])
+        elif kind == "word" and val in OPENERS:
+            open_(*OPENERS[val], space="force")
+        elif (kind, val) == ("word", "close") and opened:
+            emit(opened.pop())
         elif kind == "word" and val in ("of", "call", "with") and out:
-            emit("(", space=False)
-            opened.append(")")
+            open_("(", ")")
         elif kind == "word" and val in ("index", "sub", "at") and out:
-            emit("[", space=False)
-            opened.append("]")
+            open_("[", "]")
         elif kind == "word" and val in PY_KEYWORDS:
             emit(val)
         elif kind == "word" and val in PY_CALLABLES:
             emit(val)
-            if i + 1 < len(tokens) and tokens[i + 1] == ("word", "of"):
+            if nxt == ("word", "of"):
                 i += 1  # "sum of x" already says the call
             if i + 1 < len(tokens) and tokens[i + 1] != ("sym", "("):
-                emit("(", space=False)  # "range ten" -> range(10)
-                opened.append(")")
+                open_("(", ")")  # "range ten" -> range(10)
         elif kind == "word":
             j = i
             while j < len(tokens) and tokens[j][0] == "word" and tokens[j][1] not in (
-                    PY_KEYWORDS | PY_CALLABLES | set(PY_LITERALS) | {"of", "index", "call", "sub", "at"}):
+                    PY_KEYWORDS | PY_CALLABLES | set(PY_LITERALS) | RESERVED):
                 j += 1
-            emit("_".join(t[1] for t in tokens[i:j]))
-            i = j
+            emit("_".join(t[1] for t in tokens[i:max(j, i + 1)]))
+            i = max(j, i + 1)
             continue
         elif kind == "sym":
             if val == "=" and condition:
                 val = "=="
-            if val in ("(", "["):
-                opened.append(")" if val == "(" else "]")
-                emit(val, space=False)
-            elif val in (")", "]") and opened:
+            if val in ("(", "[", "{"):
+                open_(val, {"(": ")", "[": "]", "{": "}"}[val], space="force" if val == "{" else False)
+            elif val in (")", "]", "}") and opened:
                 opened.pop()
                 emit(val)
-            elif val in (",", ".", ":"):
-                emit(val)
+            elif val == ":" and opened and opened[-1] == "}":
+                emit(": ")  # dict entries
             else:
                 emit(val)
         else:
@@ -177,6 +229,7 @@ def python_expr(tokens, condition=False):
         emit(opened.pop())
     text = "".join(out)
     text = re.sub(r",(?=\S)", ", ", text)
+    text = re.sub(r": +", ": ", text)
     text = re.sub(r"== None\b", "is None", text).replace("!= None", "is not None")
     return text.rstrip(":").strip()
 
@@ -296,7 +349,15 @@ NORMAL = {
     "end": "$", "start": "^", "top": "gg", "bottom": "G", "line": "G", "go to line": "G",
     "center": "zz", "join": "J", "indent": ">>", "dedent": "<<", "the indent": "<<",
     "outdent": "<<", "unindent": "<<", "next": "n",
-    "previous": "N", "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
+    "previous": "N",
+    # Surrounding existing code (nvim-surround) and editing inside it.
+    "quote word": 'ysiw"', "single quote word": "ysiw'", "paren word": "ysiw)",
+    "bracket word": "ysiw]", "brace word": "ysiw}", "quote line": 'yss"', "paren line": "yss)",
+    "unquote": 'ds"', "delete quotes": 'ds"', "delete parens": "ds)", "delete brackets": "ds]",
+    "single quotes": "cs\"'", "double quotes": "cs'\"",
+    "change string": 'ci"', "change inside quotes": 'ci"', "change args": "ci(",
+    "change inside parens": "ci(", "change inside brackets": "ci[", "delete args": "di(",
+    "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
 }
 # Spoken letter names; an utterance made only of letters is typed as keys:
 # "dee dee" -> dd, "why why" -> yy, "gee gee" -> gg.

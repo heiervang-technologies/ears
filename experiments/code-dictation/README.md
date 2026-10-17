@@ -68,6 +68,19 @@ python spoken.py py < py-heard.txt
 - Inside dictation, "new line" breaks the line; a leading "indent" or
   "dedent" shifts it a level. "Double new line", "dedent twice" and
   "backspace three times" repeat. "Dunder init" is `__init__`.
+- Surrounding syntax while dictating:
+  - strings: "string hello world" → `"hello world"`, ending at "end string"
+    or the end of the line; "f string total colon brace total" →
+    `f"total: {total}"`; "quote ok quote" also works;
+  - containers: "brackets one comma two" → `[1, 2]`, "braces string host end
+    string colon string localhost" → `{"host": "localhost"}`, "parens a plus b
+    close times c" → `(a + b) * c`, "empty list" / "empty dict";
+  - calls and indexing: "print of x", "range ten", "items index key";
+  - "close" closes the innermost bracket; anything still open closes at the
+    end of the line. "open paren" / "close paren" etc. also work.
+- Surrounding existing code, in normal mode (through nvim-surround): "quote
+  word", "paren word", "quote line", "unquote", "delete parens", "single
+  quotes", "change string", "change args".
 - All phrases are configurable in `~/.config/ears/code.toml`; see
   `code.toml.example`.
 - Push-to-talk without the VAD: put the VAD in standby first ("ears off").
