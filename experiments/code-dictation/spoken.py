@@ -329,7 +329,7 @@ if __name__ == "__main__":
 #   new_line = ["new line", "newline", "next line"]
 #   indent = ["indent"]
 #   dedent = ["dedent", "the indent", "outdent", "unindent"]
-LAYOUT = {"new_line": ["new line", "newline", "next line"],
+LAYOUT = {"new_line": ["new line", "newline", "next line", "you lie"],  # heard for "newline"
           "indent": ["indent"],
           # "dedent" is often heard as "the indent"; "outdent" and "unindent"
           # are harder to mishear.
