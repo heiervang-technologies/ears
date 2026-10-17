@@ -37,9 +37,10 @@ if sys.argv[1] == "--serve":  # translate JSON lines: {"id", "lang", "text", "sc
     for request in sys.stdin:
         r = json.loads(request)
         if r.get("mode") == "normal":
-            print(json.dumps({"id": r["id"], "keys": normal_keys(r["text"])}), flush=True)
+            keys = normal_keys(r["text"], r.get("scope", []), r["lang"])
+            print(json.dumps({"id": r["id"], "keys": keys}), flush=True)
             continue
-        keys = insert_keys(r["text"])
+        keys = insert_keys(r["text"], r.get("scope", []), r["lang"])
         if keys:
             print(json.dumps({"id": r["id"], "keys": keys}), flush=True)
             continue

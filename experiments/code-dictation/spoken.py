@@ -400,6 +400,11 @@ NORMAL = {
     "change inside parens": "ci(", "change inside brackets": "ci[", "delete args": "di(",
     **FORMAT_PHRASES,
     "visual": "v", "visual line": "V", "escape": "<Esc>", "save": ":w<CR>",
+    # Moving around; "go to <name>", "next function" etc. are in navigation().
+    "start of line": "^", "end of line": "$", "end of word": "e", "first line": "gg",
+    "last line": "G", "page down": "<C-d>", "page up": "<C-u>", "match": "%",
+    "matching bracket": "%", "next block": "}", "previous block": "{",
+    "go back": "<C-o>", "jump back": "<C-o>", "go forward": "<C-i>", "jump forward": "<C-i>",
 }
 # Spoken letter names; an utterance made only of letters is typed as keys:
 # "dee dee" -> dd, "why why" -> yy, "gee gee" -> gg.
@@ -411,9 +416,64 @@ LETTERS = {"dee": "d", "why": "y", "gee": "g", "see": "c", "pee": "p", "you": "u
 INSERT = {
     "clear line": "<Esc>cc", "clear": "<Esc>cc", "backspace": "<BS>",
     "delete word": "<C-w>", "delete back": "<C-w>", "escape": "<Esc>", "normal mode": "<Esc>",
+    # Moving without leaving insert mode.
+    "cursor left": "<Left>", "cursor right": "<Right>", "cursor up": "<Up>",
+    "cursor down": "<Down>", "word left": "<C-Left>", "word right": "<C-Right>",
+    "end of line": "<End>", "start of line": "<C-o>^",
     **FORMAT_PHRASES,
 }
 REPEATS = {"double": 2, "triple": 3, "quadruple": 4, "twice": 2, "thrice": 3}
+
+
+# Navigation by what is there, not by keys: "go to parse args", "back to
+# total", "after colon", "next function", "go to def main". The plugin runs
+# the search (_G.ears_find), so it works in insert mode without leaving it,
+# and "next" / "previous" repeat it.
+SEEK = {"go to": "", "jump to": "", "find": "", "before": "", "back to": "b",
+        "after": "e", "back after": "be"}
+DEFINES = {"py": r"\<\(def\|class\)\s\+", "sh": r"\<\(function\s\+\)\?"}
+BLOCKS = {
+    "py": {"function": r"^\s*\(async\s\+\)\?def\>", "class": r"^\s*class\>"},
+    "sh": {"function": r"^\s*\(function\s\+\w\+\|\w\+\s*()\)"},
+}
+KINDS = {"function": "function", "def": "function", "method": "function",
+         "definition": "function", "class": "class"}
+CLOSERS = r"""[\])}"']"""
+
+
+def find_keys(pattern, how="", count=None):
+    return f'<Cmd>lua _G.ears_find([==[{pattern}]==], "{how}", {count or 1})<CR>'
+
+
+def target(words, scope, lang):
+    """Spoken target -> a Vim pattern: a symbol ("colon"), a name in scope
+    ("pass args" -> parse_args), or the words as one name, any case."""
+    phrase = " ".join(words)
+    if phrase in SYMBOLS:
+        return r"\V" + SYMBOLS[phrase].replace("\\", "\\\\")
+    if words and words[0] in KINDS and len(words) > 1 and lang in DEFINES:
+        return DEFINES[lang] + target(words[1:], scope, lang).removeprefix(r"\V")
+    compact = {re.sub(r"[^a-z0-9]", "", s.lower()): s for s in scope}
+    joined = "".join(words)
+    m = [joined] if joined in compact else difflib.get_close_matches(joined, compact, 1, 0.75)
+    if m:
+        return r"\<" + compact[m[0]] + r"\>"
+    return r"\c\<" + r"_\?".join(words) + r"\>"
+
+
+def navigation(words, scope, lang):
+    """Navigation said as the whole utterance -> keys, else None."""
+    count, words = take_count(words)
+    phrase = " ".join(words)
+    if phrase in ("jump out", "skip out", "out"):
+        return find_keys(CLOSERS, "e", count)
+    if len(words) == 2 and words[0] in ("next", "previous") and words[1] in KINDS:
+        pattern = BLOCKS.get(lang, {}).get(KINDS[words[1]])
+        return pattern and find_keys(pattern, "" if words[0] == "next" else "b", count)
+    for lead in sorted(SEEK, key=len, reverse=True):
+        if phrase.startswith(lead + " "):
+            return find_keys(target(phrase[len(lead) + 1:].split(), scope, lang), SEEK[lead], count)
+    return None
 
 
 def config():
@@ -455,7 +515,7 @@ def take_count(words):
     return count, words
 
 
-def normal_keys(heard):
+def normal_keys(heard, scope=(), lang=None):
     """A normal-mode utterance -> keys, or None when it is not a command
     (then nothing happens: dictation never lands in normal mode)."""
     conf = config()
@@ -463,6 +523,8 @@ def normal_keys(heard):
     phrase = " ".join(words)
     table = {plain(k): v for k, v in conf["normal"].items()}
     keys = table.get(phrase)
+    if keys is None and (seek := navigation(plain(heard).split(), scope, lang)):
+        return seek
     if keys is None and words:
         spelled = re.sub(r"\bdouble you\b", "w", phrase).split()
         letters = [LETTERS.get(w, w if len(w) == 1 and w.isalpha() else None) for w in spelled]
@@ -477,11 +539,14 @@ def normal_keys(heard):
     return (str(count) if count else "") + keys
 
 
-def insert_keys(heard):
-    """A whole insert-mode utterance that is a command -> keys, else None."""
+def insert_keys(heard, scope=(), lang=None):
+    """A whole insert-mode utterance that is a command -> keys, else None.
+    Navigation by name only in code: in prose, "go to the shop" is text."""
     count, words = take_count(plain(heard).split())
     keys = {plain(k): v for k, v in config()["insert"].items()}.get(" ".join(words))
-    return keys * min(count or 1, 50) if keys else None
+    if keys:
+        return keys * min(count or 1, 50)
+    return navigation(plain(heard).split(), scope, lang) if lang in BLOCKS else None
 
 
 def expand_repeats(text, phrases):

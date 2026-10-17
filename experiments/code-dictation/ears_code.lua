@@ -248,6 +248,27 @@ function _G.ears_format()
   vim.lsp.buf.format()
 end
 
+-- Voice navigation ("go to parse args", "after colon", "next function"): a
+-- search that leaves insert mode alone and that "next" / "previous" repeat.
+-- how: "b" backwards, "e" to the end of the match (in insert mode, after it).
+function _G.ears_find(pattern, how, count)
+  local flags = "sw" .. (how:find("b") and "b" or "") .. (how:find("e") and "e" or "")
+  local found = 0
+  for _ = 1, count or 1 do
+    if vim.fn.search(pattern, flags) == 0 then break end
+    found = found + 1
+  end
+  if found == 0 then
+    return vim.notify("ears: not found: " .. pattern, vim.log.levels.WARN)
+  end
+  vim.fn.setreg("/", pattern)
+  vim.fn.histadd("/", pattern)
+  if how:find("e") and vim.api.nvim_get_mode().mode:match("^[iR]") then
+    local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+    vim.api.nvim_win_set_cursor(0, { row, col + 1 })
+  end
+end
+
 -- VAD path: the ears input claim ---------------------------------------------
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
@@ -317,7 +338,7 @@ local function translate(text, mode, on_reply)
   vad.pending[vad.next_id] = on_reply
   vad.translator:write(vim.json.encode({
     id = vad.next_id, lang = lang(), text = text, mode = mode,
-    scope = mode == "insert" and scope_names() or {},
+    scope = scope_names(),
   }) .. "\n")
 end
 
