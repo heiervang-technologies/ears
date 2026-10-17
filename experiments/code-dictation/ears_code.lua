@@ -7,8 +7,8 @@
 -- hypotheses follow in the background and, when they translate differently,
 -- open as a completion menu over the inserted line.
 --
--- With the ears VAD running: while this Neovim has focus on a Python or
--- shell buffer, it holds the ears input claim. ears then types nothing and
+-- With the ears VAD running: while this Neovim has focus (on any buffer but a
+-- terminal or picker), it holds the ears input claim. ears then types nothing and
 -- sends the words here instead: partials become ghost text, each utterance is
 -- translated and inserted, and spoken ears commands act on the buffer
 -- ("enter"/"new line" open a line, "scratch that" undoes, "back N" drops N
@@ -16,8 +16,15 @@
 -- drops, so ears types normally there. A crash closes the socket, which
 -- drops the claim too.
 --
--- Inside any utterance, "new line" breaks the line and a leading "indent" or
--- "dedent" shifts it a level (words configurable in ~/.config/ears/code.toml).
+-- Neovim's mode decides what an utterance is. In insert mode it is dictation,
+-- or an insert command said on its own ("clear line", "backspace three
+-- times"). In any other mode it is a Vim command from a closed list ("dee
+-- dee", "why why", "down five", "triple paste"), and anything else is
+-- ignored, never inserted.
+--
+-- Inside dictation, "new line" breaks the line and a leading "indent" or
+-- "dedent" shifts it a level; "double new line" or "dedent twice" repeat.
+-- All phrases are configurable in ~/.config/ears/code.toml.
 local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/"
 local PARTIAL_MS = 500
 local ns = vim.api.nvim_create_namespace("ears_code")
@@ -220,7 +227,8 @@ end
 -- VAD path: the ears input claim ---------------------------------------------
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
-local CODE_FILETYPES = { python = true, sh = true, bash = true, zsh = true }
+-- Terminals and pickers keep ordinary ears typing.
+local SKIP_BUFTYPES = { terminal = true, prompt = true }
 -- Whether the window holding this Neovim has focus right now; after this,
 -- FocusGained/FocusLost keep it current. Under tmux, assume yes.
 local function has_focus()
@@ -240,6 +248,18 @@ end
 
 local vad = { events = nil, claim = nil, focused = has_focus(), translator = nil, pending = {}, next_id = 0 }
 
+-- Loading again (`:luafile`) replaces the previous instance instead of
+-- leaving it connected, which would insert every utterance twice.
+if _G.ears_code_vad then
+  local old = _G.ears_code_vad
+  old.dead = true
+  for _, pipe in ipairs({ old.events, old.claim }) do
+    if pipe and not pipe:is_closing() then pipe:close() end
+  end
+  if old.translator then old.translator:kill("sigterm") end
+end
+_G.ears_code_vad = vad
+
 local function scope_names()
   local path = scope_file()
   local names = vim.split(vim.fn.readfile(path)[1] or "", " ", { trimempty = true })
@@ -248,7 +268,7 @@ local function scope_names()
 end
 
 -- One translator process for all utterances: no startup cost per partial.
-local function translate(text, on_lines)
+local function translate(text, mode, on_reply)
   if not vad.translator then
     local buffered = ""
     vad.translator = vim.system({ "python3", here .. "dictate.py", "--serve" }, {
@@ -262,7 +282,7 @@ local function translate(text, on_lines)
           local done = ok and vad.pending[reply.id]
           if done then
             vad.pending[reply.id] = nil
-            vim.schedule(function() done(reply.lines) end)
+            vim.schedule(function() done(reply) end)
           end
         end
         buffered = buffered:match("[^\n]*$")
@@ -270,8 +290,11 @@ local function translate(text, on_lines)
     }, function() vad.translator = nil end)
   end
   vad.next_id = vad.next_id + 1
-  vad.pending[vad.next_id] = on_lines
-  vad.translator:write(vim.json.encode({ id = vad.next_id, lang = lang(), text = text, scope = scope_names() }) .. "\n")
+  vad.pending[vad.next_id] = on_reply
+  vad.translator:write(vim.json.encode({
+    id = vad.next_id, lang = lang(), text = text, mode = mode,
+    scope = mode == "insert" and scope_names() or {},
+  }) .. "\n")
 end
 
 local function voice_command(name)
@@ -290,24 +313,56 @@ local function voice_command(name)
   end
 end
 
+local function feed(keys, heard)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
+  vim.api.nvim_echo({ { "ears: " .. heard .. " → " .. keys, "EarsHeard" } }, false, {})
+end
+
+-- Prose goes in where the cursor is, like typing would.
+local function put_text(text)
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local before = vim.api.nvim_get_current_line():sub(col, col)
+  if before ~= "" and not before:match("%s") then text = " " .. text end
+  vim.api.nvim_put({ text }, "c", false, true)
+end
+
+-- Neovim's mode decides what an utterance is: in insert mode it is dictation
+-- (or an insert command like "clear line"), anywhere else a Vim command from
+-- the closed list in code.toml, or nothing at all.
+local function voice_mode()
+  return vim.api.nvim_get_mode().mode:match("^[iR]") and "insert" or "normal"
+end
+
 local function on_event(ev)
-  if not vad.claim or state.rec then return end
+  if vad.dead or not vad.claim or state.rec then return end
   local buf = vim.api.nvim_get_current_buf()
+  local mode = voice_mode()
   if ev == "SpeechStarted" then
     ghost("", "listening", buf)
   elseif type(ev) ~= "table" then
     return
   elseif ev.Partial then
     local heard = ev.Partial.text
-    translate(heard, function(lines)
-      if vad.claim and lines[1] then ghost(lines[1].code, heard, buf) end
+    if mode ~= "insert" or lang() == "text" then return ghost("", heard, buf) end
+    translate(heard, mode, function(reply)
+      if vad.claim and reply.lines and reply.lines[1] then ghost(reply.lines[1].code, heard, buf) end
     end)
   elseif ev.SegmentCompleted then
     local heard = ev.SegmentCompleted.text
     ghost("", heard, buf)
-    translate(heard, function(lines)
+    translate(heard, mode, function(reply)
       vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-      if vim.api.nvim_get_current_buf() == buf and #lines > 0 then insert_lines(lines) end
+      if vim.g.ears_debug then io.stderr:write(mode .. " " .. vim.inspect(reply) .. "\n") end
+      if vim.api.nvim_get_current_buf() ~= buf then return end
+      if reply.keys and reply.keys ~= vim.NIL then
+        feed(reply.keys, heard)
+      elseif mode ~= "insert" then
+        vim.api.nvim_echo({ { "ears: not a command: " .. heard, "WarningMsg" } }, false, {})
+      elseif lang() == "text" then
+        put_text(heard)
+      elseif reply.lines and #reply.lines > 0 then
+        insert_lines(reply.lines)
+      end
     end)
   elseif ev.VoiceCommand then
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
@@ -352,16 +407,17 @@ local function listen()
     if vad.events ~= pipe then return end
     vad.events = nil
     if vad.claim then
-      vad.claim:close()
+      if not vad.claim:is_closing() then vad.claim:close() end
       vad.claim = nil
     end
-    vim.defer_fn(function() listen(); resolve() end, 3000)
+    if not vad.dead then vim.defer_fn(function() listen(); resolve() end, 3000) end
   end)
 end
 
 -- Hold the claim exactly while this Neovim is focused on a code buffer.
 resolve = function()
-  local want = vad.focused and CODE_FILETYPES[vim.bo.filetype] and vad.events ~= nil
+  local want = vad.focused and vad.events ~= nil and not SKIP_BUFTYPES[vim.bo.buftype]
+    and vim.api.nvim_get_mode().mode ~= "t"
   if want and not vad.claim then
     local pipe = connect(runtime .. "/ears-cmd.sock", function() end, function(pipe)
       if vad.claim == pipe then vad.claim = nil end
@@ -379,7 +435,7 @@ end
 local group = vim.api.nvim_create_augroup("ears_code", { clear = true })
 vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = function() vad.focused = true; resolve() end })
 vim.api.nvim_create_autocmd("FocusLost", { group = group, callback = function() vad.focused = false; resolve() end })
-vim.api.nvim_create_autocmd({ "BufEnter", "FileType" }, { group = group, callback = function() resolve() end })
+vim.api.nvim_create_autocmd({ "BufEnter", "FileType", "ModeChanged" }, { group = group, callback = function() resolve() end })
 listen()
 vim.defer_fn(resolve, 300)
 
