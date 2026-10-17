@@ -1,0 +1,8 @@
+git commit dash m quote fix typo quote
+for i in range ten colon
+def parse args open paren argv close paren colon
+if x equals equals none colon
+export path equals dollar home slash bin colon dollar path
+grep dash r todo dot pipe wc dash l
+import numpy as np
+return self dot items open bracket key close bracket
