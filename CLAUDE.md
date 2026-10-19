@@ -29,6 +29,8 @@ src/
 ├── process.rs           # Child process management
 ├── prompt.rs            # `ears prompt` marker for shell prompts (starship)
 ├── audio.rs             # Audio device discovery
+├── pcm.rs               # 16 kHz PCM16 format: levels, WAV files, pw-record args
+├── mic_check.rs         # `ears mic-check` microphone quality report
 ├── recording.rs         # Recording orchestration
 ├── whisper.rs           # Whisper.cpp HTTP client
 ├── desktop.rs           # Notifications, audio feedback, typing

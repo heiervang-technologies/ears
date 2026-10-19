@@ -71,6 +71,80 @@ pub struct HealthSnapshot {
     pub speaking: bool,
     pub capture_error: Option<String>,
     pub typing_paused: bool,
+    /// Background level between utterances (dBFS, smoothed; raw input,
+    /// before gain).
+    pub noise_dbfs: f32,
+    /// Speech level while speaking (dBFS, smoothed; raw input).
+    pub speech_dbfs: f32,
+    pub clipped_samples: u64,
+    /// Microphone quality problem, if any. `ears mic-check` explains more.
+    pub mic_warning: Option<&'static str>,
+    #[serde(skip)]
+    levels: MicLevels,
+}
+
+/// Smoothed input levels behind [`HealthSnapshot::mic_warning`].
+#[derive(Clone, Debug, Default)]
+struct MicLevels {
+    noise_power: f32,
+    speech_power: f32,
+    noise_chunks: u32,
+    speech_chunks: u32,
+    /// Smoothed fraction of clipped samples.
+    clip_rate: f32,
+}
+
+/// Capture chunks (100 ms) of each kind before their level is judged.
+const MIC_SETTLE_CHUNKS: u32 = 20;
+
+impl MicLevels {
+    fn observe(&mut self, rms: f32, clipped: f32, speaking: bool) {
+        let power = rms * rms;
+        if speaking {
+            let alpha = if self.speech_chunks == 0 { 1.0 } else { 0.1 };
+            self.speech_power += alpha * (power - self.speech_power);
+            self.speech_chunks = self.speech_chunks.saturating_add(1);
+        } else {
+            // A floor tracker: falls fast, rises slowly, so speech onsets the
+            // detector has not flagged yet barely lift it.
+            let alpha = match self.noise_chunks {
+                0 => 1.0,
+                _ if power < self.noise_power => 0.2,
+                _ => 0.02,
+            };
+            self.noise_power += alpha * (power - self.noise_power);
+            self.noise_chunks = self.noise_chunks.saturating_add(1);
+        }
+        self.clip_rate += 0.05 * (clipped - self.clip_rate);
+    }
+
+    fn noise_dbfs(&self) -> f32 {
+        crate::pcm::dbfs(self.noise_power.sqrt())
+    }
+
+    fn speech_dbfs(&self) -> f32 {
+        crate::pcm::dbfs(self.speech_power.sqrt())
+    }
+
+    /// Same thresholds as `ears mic-check`, judged on live audio.
+    fn warning(&self) -> Option<&'static str> {
+        use crate::mic_check as mc;
+        let noise_known = self.noise_chunks >= MIC_SETTLE_CHUNKS;
+        let speech_known = self.speech_chunks >= MIC_SETTLE_CHUNKS;
+        if noise_known && self.noise_dbfs() <= mc::DEAD_DBFS && self.speech_chunks == 0 {
+            return Some("mic silent");
+        }
+        if self.clip_rate > mc::MAX_CLIPPED {
+            return Some("mic clipping");
+        }
+        if speech_known && self.speech_dbfs() < mc::QUIET_DBFS {
+            return Some("speech too quiet");
+        }
+        if noise_known && self.noise_dbfs() > mc::NOISY_DBFS {
+            return Some("noisy background");
+        }
+        None
+    }
 }
 
 impl HealthSnapshot {
@@ -131,10 +205,13 @@ impl PipelineHealth {
         if samples.is_empty() {
             return;
         }
-        let peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
-        let rms = (samples.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / samples.len() as f64)
-            .sqrt() as f32;
+        let peak = crate::pcm::peak(samples);
+        let rms = crate::pcm::rms(samples);
+        let clipped = crate::pcm::clipped(samples);
         self.update(|s| {
+            s.levels
+                .observe(rms, clipped as f32 / samples.len() as f32, s.speaking);
+            s.clipped_samples += clipped as u64;
             s.capture_last_ms = Some(monotonic_ms());
             s.captured_samples += samples.len() as u64;
             s.rms = rms;
@@ -212,6 +289,9 @@ impl PipelineHealth {
             .captured_samples
             .saturating_sub(state.processed_frames * 512)
             / 16;
+        state.noise_dbfs = state.levels.noise_dbfs();
+        state.speech_dbfs = state.levels.speech_dbfs();
+        state.mic_warning = state.levels.warning();
         state
     }
 }
@@ -309,6 +389,11 @@ impl HealthMonitor {
             speaking: false,
             capture_error: None,
             typing_paused: false,
+            noise_dbfs: crate::pcm::dbfs(0.0),
+            speech_dbfs: crate::pcm::dbfs(0.0),
+            clipped_samples: 0,
+            mic_warning: None,
+            levels: MicLevels::default(),
         })));
         let path: PathBuf = state_dir.join(HEALTH_FILE);
         publish(&path, &health.snapshot())?;
@@ -316,6 +401,7 @@ impl HealthMonitor {
         let watched = health.clone();
         let worker = thread::Builder::new().name("ears-health".into()).spawn(move || {
             let mut previous_problem = None;
+            let mut previous_mic = None;
             let mut write_failed = false;
             loop {
                 let done = rx.recv_timeout(Duration::from_secs(1)) != Err(mpsc::RecvTimeoutError::Timeout);
@@ -333,6 +419,19 @@ impl HealthMonitor {
                         tracing::info!(session = %snapshot.session_id, "VAD health recovered");
                     }
                     previous_problem = problem;
+                }
+                if snapshot.mic_warning != previous_mic && !done {
+                    match snapshot.mic_warning {
+                        Some(reason) => tracing::warn!(
+                            session = %snapshot.session_id,
+                            reason,
+                            noise_dbfs = snapshot.noise_dbfs,
+                            speech_dbfs = snapshot.speech_dbfs,
+                            "Microphone quality (run ears mic-check)"
+                        ),
+                        None => tracing::info!(session = %snapshot.session_id, "Microphone quality recovered"),
+                    }
+                    previous_mic = snapshot.mic_warning;
                 }
                 tracing::debug!(target: "ears::health", snapshot = ?snapshot, "VAD health");
                 if let Err(e) = publish(&path, &snapshot) {
@@ -412,6 +511,55 @@ mod tests {
             snap.problem(snap.updated_monotonic_ms),
             Some("capture stopped")
         );
+    }
+
+    #[test]
+    fn mic_warnings_follow_the_live_levels() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        let chunk = |level: f32| -> Vec<f32> {
+            (0..1600)
+                .map(|i| if i % 2 == 0 { level } else { -level })
+                .collect()
+        };
+        // Too little audio to judge yet.
+        health.captured(&[0.0; 1600]);
+        assert_eq!(health.snapshot().mic_warning, None);
+        for _ in 0..MIC_SETTLE_CHUNKS {
+            health.captured(&[0.0; 1600]);
+        }
+        assert_eq!(health.snapshot().mic_warning, Some("mic silent"));
+
+        // A quiet room and normal speech.
+        for _ in 0..200 {
+            health.captured(&chunk(0.001));
+        }
+        health.frame(0.9, 0.5, 5, true, None);
+        for _ in 0..MIC_SETTLE_CHUNKS {
+            health.captured(&chunk(0.1));
+        }
+        let snap = health.snapshot();
+        assert_eq!(snap.mic_warning, None, "{snap:?}");
+        assert!((snap.speech_dbfs + 20.0).abs() < 0.5);
+        assert!((snap.noise_dbfs + 60.0).abs() < 0.5);
+
+        // Quiet speech.
+        for _ in 0..60 {
+            health.captured(&chunk(0.003));
+        }
+        assert_eq!(health.snapshot().mic_warning, Some("speech too quiet"));
+
+        // Clipping wins, and is counted.
+        for _ in 0..60 {
+            health.captured(&chunk(1.0));
+        }
+        let snap = health.snapshot();
+        assert_eq!(snap.mic_warning, Some("mic clipping"));
+        assert!(snap.clipped_samples >= 60 * 1600);
+        let value: serde_json::Value = serde_json::to_value(&snap).unwrap();
+        assert_eq!(value["mic_warning"], "mic clipping");
+        assert!(value.get("levels").is_none());
     }
 
     #[test]

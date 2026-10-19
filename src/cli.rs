@@ -119,6 +119,22 @@ pub enum Commands {
         file: Option<String>,
     },
 
+    /// Measure the microphone: background noise, speech level, clipping,
+    /// narrow band (Bluetooth call audio), and how well a read sentence
+    /// transcribes
+    #[command(name = "mic-check")]
+    MicCheck {
+        /// Device to check (default: the configured one)
+        #[arg(long)]
+        device: Option<String>,
+        /// Only measure; don't transcribe the sentence
+        #[arg(long)]
+        no_transcribe: bool,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Print a short marker for shell prompts (starship) while recording,
     /// transcribing or in VAD mode; prints nothing while idle
     Prompt {

@@ -206,6 +206,37 @@ ears select    # Interactive selection (fzf)
 ears current   # Show current device
 ```
 
+### Check microphone quality
+
+```bash
+ears mic-check                  # Measure the configured microphone
+ears mic-check --device NAME    # ...or another one (names from ears list)
+ears mic-check --no-transcribe  # Levels only, no server needed
+ears mic-check --json           # Machine-readable report
+```
+
+It records 3 seconds of silence, then 6 seconds of you reading a sentence,
+and reports the background level, speech level, signal-to-noise ratio,
+clipping, and whether the audio is **narrow band**: a Bluetooth headset in
+its call profile sends 8 kHz audio that PipeWire upsamples to 16 kHz, so it
+looks normal until you check for content above 4.5 kHz (wide band speech
+measures about -25 dB there, narrow band about -70). The sentence is then
+transcribed and scored. Each problem comes with what to do about it:
+
+```
+Background    -62 dBFS    (under -45 is quiet)
+Speech        -24 dBFS    (over -40 is loud enough)
+Signal/noise  38 dB       (over 15 is good)
+Peak          -3.1 dBFS   0.00% clipped
+Above 4.5k    -71 dB      narrow band
+Transcript    0% wrong    "The quick brown fox jumps over the lazy dog and six sheep follow."
+
+Verdict: narrow band. The audio stops near 4 kHz: a Bluetooth headset in its call profile, ...
+```
+
+While VAD runs, the same thresholds are applied to the live input: see
+`mic_warning` under [VAD appears unresponsive](#vad-appears-unresponsive).
+
 ### Environment variables
 
 Environment variables override config file values:
@@ -432,10 +463,10 @@ In VAD mode a whole utterance can be a command instead of text:
 ```toml
 [commands]
 enabled = true
-enter = ["over"]          # "Over." on its own presses Enter (default: ["enter"])
+enter = ["enter", "over"] # "Enter." or "Over." on its own presses Enter (default: ["enter"])
 new_line = ["new line"]   # Shift+Enter: a new line without sending
 undo = ["scratch that"]   # delete the last dictated utterance
-literal = ["literal"]     # "Literal over." types "over." instead
+literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
 
 [commands.keys]           # any phrase to any key combination
@@ -483,6 +514,7 @@ ears list, l           List audio devices
 ears select, s         Select device interactively
 ears current, c        Show current device
 ears server [URL]      Show or set whisper server URL
+ears mic-check         Measure microphone quality (see above)
 ears prompt            Prompt marker while recording / VAD (see below)
 ears help              Show help
 ```
@@ -567,6 +599,12 @@ probability, rejected-candidate count, audio backlog, and current processing
 stage. It contains no audio or transcript text. A separate supervisor reports
 missing audio or slow processing in `debug.log`, even if the processing task
 is blocked. These are diagnostic warnings, not automatic restarts.
+
+The snapshot also tracks the raw input level: `noise_dbfs` between
+utterances, `speech_dbfs` while speaking, and `clipped_samples`. When they
+cross the `ears mic-check` thresholds, `mic_warning` is set to `mic silent`,
+`mic clipping`, `speech too quiet` or `noisy background`, and `debug.log`
+records the change. Run `ears mic-check` for the full picture.
 
 For detailed periodic measurements, start Ears with:
 

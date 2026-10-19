@@ -25,7 +25,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::time::Duration;
 
 /// Samples per second the recorder produces (mono PCM16).
-pub const SAMPLE_RATE: usize = 16_000;
+pub const SAMPLE_RATE: usize = crate::pcm::SAMPLE_RATE as usize;
 
 /// Qwen3-ASR encoder attention window: `n_window_infer` 800 mel frames at a
 /// 10 ms hop.
@@ -439,15 +439,16 @@ impl Rollover {
 /// Samples inspected for a pause at a segment boundary.
 pub const PAUSE_WINDOW: usize = SAMPLE_RATE * 3 / 10;
 
+/// RMS under which a [`PAUSE_WINDOW`] counts as a pause (about -36 dBFS).
+pub const PAUSE_RMS: f32 = 500.0 / 32768.0;
+
 /// Whether `pcm` (the last [`PAUSE_WINDOW`] samples) is quiet enough to cut
-/// between words: RMS under about -36 dBFS.
+/// between words: RMS under [`PAUSE_RMS`].
 pub fn is_pause(pcm: &[i16]) -> bool {
     if pcm.len() < PAUSE_WINDOW {
         return false;
     }
-    let tail = &pcm[pcm.len() - PAUSE_WINDOW..];
-    let energy: f64 = tail.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
-    (energy / tail.len() as f64).sqrt() < 500.0
+    crate::pcm::rms_i16(&pcm[pcm.len() - PAUSE_WINDOW..]) < PAUSE_RMS
 }
 
 /// Finished segments' text followed by the live segment's.
@@ -540,33 +541,7 @@ pub fn language_name(code: &str) -> Option<&'static str> {
     })
 }
 
-/// Mono 16 kHz PCM16 WAV in memory.
-pub fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
-    let data_len = (pcm.len() * 2) as u32;
-    let mut out = Vec::with_capacity(44 + data_len as usize);
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
-    out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&(SAMPLE_RATE as u32).to_le_bytes());
-    out.extend_from_slice(&(SAMPLE_RATE as u32 * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
-    for s in pcm {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    out
-}
-
-/// PCM16 samples from little-endian bytes (a trailing odd byte is dropped).
-pub fn samples(bytes: &[u8]) -> Vec<i16> {
-    let (pairs, _) = bytes.as_chunks::<2>();
-    pairs.iter().map(|&b| i16::from_le_bytes(b)).collect()
-}
+pub use crate::pcm::{samples_i16 as samples, wav_bytes};
 
 #[cfg(test)]
 mod tests {
@@ -582,15 +557,6 @@ mod tests {
         assert_eq!(settled_prefix("one two", 3), "");
         assert_eq!(settled_prefix("", 3), "");
         assert_eq!(settled_prefix("one two", 0), "one two");
-    }
-
-    #[test]
-    fn wav_bytes_is_a_valid_header() {
-        let wav = wav_bytes(&[1, -1, 3]);
-        assert_eq!(wav.len(), 44 + 6);
-        assert_eq!(&wav[0..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
-        assert_eq!(samples(&wav[44..]), vec![1, -1, 3]);
     }
 
     #[test]

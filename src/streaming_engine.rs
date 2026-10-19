@@ -968,53 +968,7 @@ fn prune_kept_audio(dir: &std::path::Path, keep: usize) {
     }
 }
 
-fn f32_to_i16(sample: f32) -> i16 {
-    (sample.clamp(-1.0, 1.0) * 32767.0) as i16
-}
-
-/// Write mono 16 kHz 16-bit PCM WAV.
-fn write_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), std::io::Error> {
-    {
-        use std::fs::File;
-        use std::io::Write;
-
-        let mut file = File::create(path)?;
-
-        // WAV header
-        let sample_rate = 16000u32;
-        let num_channels = 1u16;
-        let bits_per_sample = 16u16;
-        let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
-        let block_align = num_channels * bits_per_sample / 8;
-        let data_size = (samples.len() * 2) as u32; // 16-bit samples
-        let file_size = 36 + data_size;
-
-        // RIFF header
-        file.write_all(b"RIFF")?;
-        file.write_all(&file_size.to_le_bytes())?;
-        file.write_all(b"WAVE")?;
-
-        // fmt chunk
-        file.write_all(b"fmt ")?;
-        file.write_all(&16u32.to_le_bytes())?; // chunk size
-        file.write_all(&1u16.to_le_bytes())?; // audio format (PCM)
-        file.write_all(&num_channels.to_le_bytes())?;
-        file.write_all(&sample_rate.to_le_bytes())?;
-        file.write_all(&byte_rate.to_le_bytes())?;
-        file.write_all(&block_align.to_le_bytes())?;
-        file.write_all(&bits_per_sample.to_le_bytes())?;
-
-        // data chunk
-        file.write_all(b"data")?;
-        file.write_all(&data_size.to_le_bytes())?;
-
-        for &sample in samples {
-            file.write_all(&f32_to_i16(sample).to_le_bytes())?;
-        }
-
-        Ok(())
-    }
-}
+use crate::pcm::{to_i16 as f32_to_i16, write_wav};
 
 impl StreamingEngine {
     /// Send an event to listeners

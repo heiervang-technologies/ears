@@ -249,22 +249,7 @@ pub fn write_pcm16_wav(
     pcm: &[u8],
     sample_rate: u32,
 ) -> std::io::Result<()> {
-    let data_len = pcm.len() as u32;
-    let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
-    out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&sample_rate.to_le_bytes());
-    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
-    out.extend_from_slice(pcm);
-    std::fs::write(path, out)
+    std::fs::write(path, crate::pcm::wav_from_bytes(pcm, sample_rate))
 }
 
 /// Client for the `earsghost` fcitx5 addon.
