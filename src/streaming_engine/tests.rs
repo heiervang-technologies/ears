@@ -1235,11 +1235,41 @@ async fn test_audio_wake_detector_skips_transcription_in_standby() {
     engine.standby = true;
     engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::NotWake)));
     assert!(run_one(&mut engine, &mut rx).await.is_empty());
-    engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::Wake)));
+    engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::Wake(
+        crate::wake::Wake::Toggle,
+    ))));
     let events = run_one(&mut engine, &mut rx).await;
     assert!(!engine.is_standby());
     assert!(
         events.contains(&"VoiceCommand { name: \"resume\", text: \"\" }".into()),
         "{events:?}"
     );
+}
+
+#[tokio::test]
+async fn test_ears_off_and_on_switch_one_way_and_are_never_typed() {
+    let enabled = crate::commands::VoiceCommands {
+        enabled: true,
+        ..Default::default()
+    };
+    let (mut engine, mut rx, _server, _dir) = command_engine("Ears off.").await;
+    engine.set_commands(enabled.clone());
+    run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby());
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby(), "off again stays off");
+    assert!(events.is_empty(), "{events:?}");
+
+    let (mut engine, mut rx, _server, _dir) = command_engine("Ears on.").await;
+    engine.set_commands(enabled);
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(!engine.is_standby(), "on while typing stays on");
+    assert!(engine.accumulated_text.is_empty(), "and is not typed");
+    assert!(
+        !events.iter().any(|e| e.starts_with("SegmentCompleted")),
+        "{events:?}"
+    );
+    engine.standby = true;
+    run_one(&mut engine, &mut rx).await;
+    assert!(!engine.is_standby());
 }
