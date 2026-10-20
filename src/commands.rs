@@ -26,6 +26,13 @@ pub struct VoiceCommands {
     /// delete the one before). Only in the window it was typed into.
     #[serde(default = "default_undo")]
     pub undo: Vec<String>,
+    /// Words that, followed by a number from 1 to 10 ("back 3", "back
+    /// three"), delete that many of the last dictated words.
+    #[serde(default = "default_back")]
+    pub back: Vec<String>,
+    /// Phrases that delete the last dictated sentence.
+    #[serde(default = "default_backtrack")]
+    pub backtrack: Vec<String>,
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal")]
     pub literal: Vec<String>,
@@ -52,6 +59,17 @@ fn default_undo() -> Vec<String> {
     vec!["scratch that".into()]
 }
 
+fn default_back() -> Vec<String> {
+    vec!["back".into()]
+}
+
+fn default_backtrack() -> Vec<String> {
+    vec!["backtrack".into(), "back track".into()]
+}
+
+/// Most words "back N" deletes.
+pub const BACK_MAX_WORDS: usize = 10;
+
 fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
@@ -67,6 +85,8 @@ impl Default for VoiceCommands {
             enter: default_enter(),
             new_line: default_new_line(),
             undo: default_undo(),
+            back: default_back(),
+            backtrack: default_backtrack(),
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
@@ -83,6 +103,10 @@ pub enum Command {
     NewLine,
     /// Delete the last dictated utterance.
     Undo,
+    /// Delete this many of the last dictated words (1 to 10).
+    Back(usize),
+    /// Delete the last dictated sentence.
+    Backtrack,
     /// Press a key combination from `[commands.keys]`, e.g. "ctrl+b".
     Keys(String),
     /// Type this text instead of interpreting it.
@@ -96,6 +120,8 @@ impl Command {
             Command::Enter => "enter",
             Command::NewLine => "new_line",
             Command::Undo => "undo",
+            Command::Back(_) => "back",
+            Command::Backtrack => "backtrack",
             Command::Keys(_) => "keys",
             Command::Literal(_) => "literal",
         }
@@ -106,6 +132,7 @@ impl Command {
     pub fn label(&self) -> String {
         match self {
             Command::Keys(combo) => format!("keys:{combo}"),
+            Command::Back(n) => format!("back:{n}"),
             other => other.name().to_string(),
         }
     }
@@ -153,6 +180,20 @@ impl VoiceCommands {
         if is(&self.undo) {
             return Some(Command::Undo);
         }
+        if is(&self.backtrack) {
+            return Some(Command::Backtrack);
+        }
+        for word in &self.back {
+            let prefix = normalize(word);
+            if let Some(n) = said
+                .strip_prefix(&prefix)
+                .filter(|_| !prefix.is_empty())
+                .and_then(|rest| rest.strip_prefix(' '))
+                .and_then(count)
+            {
+                return Some(Command::Back(n));
+            }
+        }
         if let Some((_, combo)) = self
             .keys
             .iter()
@@ -174,6 +215,25 @@ impl VoiceCommands {
         }
         None
     }
+}
+
+/// A spoken count from 1 to [`BACK_MAX_WORDS`]: digits, number words, and
+/// the homophones ASR writes for them ("to", "for").
+fn count(word: &str) -> Option<usize> {
+    let n = match word {
+        "one" | "won" => 1,
+        "two" | "to" | "too" => 2,
+        "three" => 3,
+        "four" | "for" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        digits => digits.parse().ok()?,
+    };
+    (1..=BACK_MAX_WORDS).contains(&n).then_some(n)
 }
 
 /// Linux input keycodes for a combination like "ctrl+b" or "alt+left",
@@ -302,6 +362,31 @@ mod tests {
         assert_eq!(c.parse("It's over now."), None);
         assert_eq!(c.parse("Over and out."), None);
         assert_eq!(c.parse("Press enter to continue."), None);
+    }
+
+    #[test]
+    fn back_takes_a_count_from_one_to_ten() {
+        let c = over();
+        assert_eq!(c.parse("Back 3."), Some(Command::Back(3)));
+        assert_eq!(c.parse("Back, three."), Some(Command::Back(3)));
+        assert_eq!(c.parse("back two"), Some(Command::Back(2)));
+        assert_eq!(c.parse("Back to."), Some(Command::Back(2)));
+        assert_eq!(c.parse("Back 10."), Some(Command::Back(10)));
+        assert_eq!(c.parse("Back 11."), None);
+        assert_eq!(c.parse("Back 0."), None);
+        assert_eq!(c.parse("Back."), None, "a bare back is dictation");
+        assert_eq!(c.parse("Back to the drawing board."), None);
+        assert_eq!(c.parse("Backup 3."), None);
+        assert!(Command::Back(3).presses_key());
+        assert_eq!(Command::Back(3).label(), "back:3");
+    }
+
+    #[test]
+    fn backtrack_phrase() {
+        let c = over();
+        assert_eq!(c.parse("Backtrack."), Some(Command::Backtrack));
+        assert_eq!(c.parse("Back track!"), Some(Command::Backtrack));
+        assert_eq!(c.parse("Let's backtrack a bit."), None);
     }
 
     #[test]
