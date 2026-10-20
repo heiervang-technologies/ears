@@ -40,6 +40,7 @@ src/
 ├── continuous.rs        # Continuous live decoding (Qwen3-ASR on vLLM)
 ├── stream_client.rs     # Ears stream protocol client (docs/STREAM_PROTOCOL.md)
 ├── vad.rs               # Voice activity detection
+├── wake.rs              # Wake detection for VAD standby (swappable detector)
 ├── continuous_capture.rs # Continuous capture mode
 ├── progressive_typing.rs # Progressive text output
 └── tui/

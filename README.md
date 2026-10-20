@@ -468,6 +468,7 @@ new_line = ["new line"]   # Shift+Enter: a new line without sending
 undo = ["scratch that"]   # delete the last dictated utterance
 back = ["back"]           # "Back 3." / "Back three." deletes the last 3 words (1-10)
 backtrack = ["backtrack", "back track"]  # delete the last dictated sentence
+standby = ["ears vad", "ears v a d"]     # switch between typing and standby (below)
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
 
@@ -505,6 +506,21 @@ recognized, while "Send" once came back as "Send it" and an invented word
 "go": they are real answers to agents, and "Okay." is also what the model
 writes for silence.
 
+
+#### Standby
+
+Saying a `standby` phrase on its own ("Ears VAD.") puts VAD in standby: it
+keeps listening but types nothing, runs no other command, plays no cues,
+ducks nothing and publishes nothing on the socket. The same phrase resumes
+typing. Utterances heard in standby are transcribed by your server only to
+find the phrase; they are not logged. `ears prompt` shows `○ vad` meanwhile.
+The keybind (`ears vad`) still turns VAD fully off.
+
+Deciding what is the wake phrase sits behind the `WakeDetector` trait in
+`src/wake.rs`: the default matches transcripts, and a small wake word model can
+replace it and decide from the audio alone, so standby would not transcribe
+at all.
+
 ### All Commands
 
 ```
@@ -524,7 +540,8 @@ ears help              Show help
 ### Shell prompt (starship)
 
 `ears prompt` prints a short marker while ears is recording (`● rec`),
-transcribing (`◌ …`) or in VAD mode (`◉ vad`), and nothing while idle. It only
+transcribing (`◌ …`) or in VAD mode (`◉ vad`, or `○ vad` in standby), and
+nothing while idle. It only
 reads the state directory and checks that the recorder or VAD process is still
 alive, so a crash never leaves a stale marker. It takes about 2 ms, and doesn't
 load config or write to the debug log, so it is safe to run on every prompt.
@@ -533,7 +550,7 @@ load config or write to the debug log, so it is safe to run on every prompt.
 state to a [starship](https://starship.rs) prompt. Put `${custom.ears_rec}`,
 `${custom.ears_vad}` and `${custom.ears_busy}` in your `format`, and copy the
 three `[custom.ears_*]` tables. Change the text with `--recording`,
-`--transcribing` and `--vad`. The marker updates whenever the prompt is
+`--transcribing`, `--vad` and `--standby`. The marker updates whenever the prompt is
 redrawn, not while you sit at it.
 
 ## How It Works

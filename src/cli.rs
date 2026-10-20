@@ -150,6 +150,9 @@ pub enum Commands {
         /// Text while VAD mode is on
         #[arg(long, default_value = "◉ vad")]
         vad: String,
+        /// Text while VAD is in standby (listening for the wake phrase)
+        #[arg(long, default_value = "○ vad")]
+        standby: String,
     },
 
     /// Toggle auto-enter on the running ears instance

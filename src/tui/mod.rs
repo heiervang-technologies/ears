@@ -161,6 +161,7 @@ pub async fn start_vad_pipeline(
     engine.set_health(health.clone());
     engine.set_continuous(continuous);
     engine.set_commands(config.commands.clone());
+    engine.set_standby_marker(config.state_dir.join(crate::prompt::STANDBY_MARKER));
     engine.set_final_correction(config.final_correction);
 
     // Shutdown channel

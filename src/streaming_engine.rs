@@ -241,6 +241,11 @@ pub struct StreamingEngine {
     /// Keep each transcribed utterance as a WAV here and report it on
     /// `SegmentCompleted` (ws-listen `--keep-audio`).
     keep_audio_dir: Option<PathBuf>,
+    /// Listening without typing until the wake phrase (see `crate::wake`).
+    standby: bool,
+    wake: Box<dyn crate::wake::WakeDetector>,
+    /// File that exists while in standby, for `ears prompt`.
+    standby_marker: Option<PathBuf>,
 }
 
 impl StreamingEngine {
@@ -291,6 +296,9 @@ impl StreamingEngine {
             continuous: None,
             continuous_http: false,
             keep_audio_dir: None,
+            standby: false,
+            wake: Box::new(crate::wake::NoWake),
+            standby_marker: None,
         })
     }
 
@@ -329,7 +337,7 @@ impl StreamingEngine {
 
         let segment = self.handle_vad_outcome(outcome);
 
-        if self.ghost.is_some() {
+        if self.ghost.is_some() && !self.standby {
             self.ghost_poll_partials();
             if segment.is_none() {
                 self.ghost_maybe_start_partial();
@@ -440,6 +448,15 @@ impl StreamingEngine {
             segment.samples.len()
         );
 
+        match self.wake.check_audio(&segment.samples) {
+            crate::wake::AudioVerdict::Wake => {
+                self.toggle_standby("");
+                return Ok(());
+            }
+            crate::wake::AudioVerdict::NotWake if self.standby => return Ok(()),
+            _ => {}
+        }
+
         if self.normalize_segments {
             let gain = crate::agc::normalize_segment(&mut segment.samples);
             debug!("Segment normalized by {:.2}x", gain);
@@ -529,6 +546,16 @@ impl StreamingEngine {
             debug!("Transcript filtered out (empty after filters)");
             self.ghost_clear();
             self.discard("filtered out");
+            return Ok(());
+        }
+
+        if self.wake.check_transcript(&transcript) {
+            self.toggle_standby(&transcript);
+            return Ok(());
+        }
+        if self.standby {
+            // Not typed, published or logged: standby hears everything.
+            debug!("Standby: utterance ignored");
             return Ok(());
         }
 
@@ -820,8 +847,65 @@ impl StreamingEngine {
     }
 
     /// Spoken commands to recognize.
+    /// Also sets the wake phrases (`standby`) when commands are enabled.
     pub fn set_commands(&mut self, commands: crate::commands::VoiceCommands) {
+        self.wake = if commands.enabled {
+            Box::new(crate::wake::PhraseWake::new(&commands.standby))
+        } else {
+            Box::new(crate::wake::NoWake)
+        };
         self.commands = commands;
+    }
+
+    /// Replace the wake detector (e.g. with a wake word model).
+    pub fn set_wake(&mut self, wake: Box<dyn crate::wake::WakeDetector>) {
+        self.wake = wake;
+    }
+
+    /// Keep `path` in existence while in standby, so the shell prompt can
+    /// show it. Removes a stale one now.
+    pub fn set_standby_marker(&mut self, path: PathBuf) {
+        let _ = std::fs::remove_file(&path);
+        self.standby_marker = Some(path);
+    }
+
+    pub fn is_standby(&self) -> bool {
+        self.standby
+    }
+
+    /// Switch between typing and standby (the wake phrase was heard).
+    fn toggle_standby(&mut self, heard: &str) {
+        self.standby = !self.standby;
+        self.ghost_clear();
+        if let Some(path) = &self.standby_marker {
+            let result = if self.standby {
+                std::fs::write(path, b"")
+            } else {
+                std::fs::remove_file(path)
+            };
+            if let Err(e) = result {
+                warn!("Cannot update standby marker {}: {}", path.display(), e);
+            }
+        }
+        let name = if self.standby { "standby" } else { "resume" };
+        info!(
+            "VAD {}",
+            if self.standby {
+                "in standby: listening for the wake phrase only"
+            } else {
+                "resumed typing"
+            }
+        );
+        if self.standby {
+            crate::desktop::AudioFeedback::beep_toggle_off().ok();
+        } else {
+            crate::desktop::AudioFeedback::beep_toggle_on().ok();
+        }
+        // Sent after the switch: always published, in either direction.
+        self.send_event(StreamingEvent::VoiceCommand {
+            name: name.to_string(),
+            text: heard.to_string(),
+        });
     }
 
     /// Commit a completed VAD transcript according to the active mode.
@@ -1041,6 +1125,22 @@ fn cut_sentence(text: &str, floor: usize) -> usize {
 impl StreamingEngine {
     /// Send an event to listeners
     fn send_event(&self, event: StreamingEvent) {
+        // In standby nothing is dictated: no cues, no ducking, nothing for
+        // socket consumers, except the switch back.
+        if self.standby
+            && matches!(
+                event,
+                StreamingEvent::SpeechProbable
+                    | StreamingEvent::SpeechStarted
+                    | StreamingEvent::SpeechEnded
+                    | StreamingEvent::SpeechRejected
+                    | StreamingEvent::SegmentDiscarded { .. }
+                    | StreamingEvent::TranscriptUpdate { .. }
+                    | StreamingEvent::SegmentCompleted { .. }
+            )
+        {
+            return;
+        }
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(event);
         }

@@ -15,14 +15,20 @@ pub enum PromptState {
     Recording,
     Transcribing,
     Vad,
+    /// VAD listening for the wake phrase only.
+    Standby,
 }
+
+/// File in the state directory that exists while VAD is in standby.
+pub const STANDBY_MARKER: &str = "vad.standby";
 
 impl PromptState {
     pub fn name(self) -> &'static str {
         match self {
             PromptState::Recording => "recording",
             PromptState::Transcribing => "transcribing",
-            PromptState::Vad => "vad",
+            // One prompt segment covers VAD in either mode.
+            PromptState::Vad | PromptState::Standby => "vad",
         }
     }
 }
@@ -63,7 +69,11 @@ pub fn current(state_dir: &Path) -> Option<PromptState> {
         "vad_active"
             if pid_alive(&state_dir.join("vad.pid")) || crate::ipc::socket_path().exists() =>
         {
-            Some(PromptState::Vad)
+            if state_dir.join(STANDBY_MARKER).exists() {
+                Some(PromptState::Standby)
+            } else {
+                Some(PromptState::Vad)
+            }
         }
         _ => None,
     }
