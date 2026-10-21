@@ -450,9 +450,13 @@ impl VadSegmentDetector {
             let result = self.vad.process_frame(&frame)?;
             if self.vad.last_probability() >= self.vad.config.speech_threshold {
                 self.gain.observe_speech(raw_rms);
-                if let Some(ref health) = self.vad.health {
-                    health.gain(self.gain.gain());
-                }
+            } else if !self.vad.is_speaking()
+                && self.vad.last_probability() < self.vad.config.end_threshold()
+            {
+                self.gain.observe_silence(raw_rms);
+            }
+            if let Some(ref health) = self.vad.health {
+                health.gain(self.gain.gain());
             }
             if let Some(segment) = self.apply_result(result, &frame) {
                 segment_complete = Some(segment);
@@ -525,6 +529,21 @@ impl VadSegmentDetector {
     }
 
     /// Check if currently in a confirmed speech segment
+    /// Speech probability of the last frame (after gain).
+    pub fn last_probability(&self) -> f32 {
+        self.vad.last_probability()
+    }
+
+    /// Gain applied before detection (see [`crate::agc::SpeechGain`]).
+    pub fn gain(&self) -> f32 {
+        self.gain.gain()
+    }
+
+    /// Samples per detector frame.
+    pub fn frame_size(&self) -> usize {
+        SILERO_FRAME_SIZE
+    }
+
     pub fn is_speaking(&self) -> bool {
         self.vad.is_speaking()
     }
