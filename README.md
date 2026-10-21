@@ -524,6 +524,22 @@ Deciding what is the wake phrase sits behind the `WakeDetector` trait in
 replace it and decide from the audio alone, so standby would not transcribe
 at all.
 
+### Input claim (for editor plugins)
+
+An app can take the words instead of having them typed: it connects to the
+command socket (`$XDG_RUNTIME_DIR/ears-cmd.sock`) and sends `claim`. While any
+claim is held, headless VAD types nothing and draws no ghost text. The
+claimant gets everything on the event socket (`ears.sock`) instead:
+- `Partial` events with the utterance heard so far, for its own preview;
+- `SegmentCompleted` with the final text;
+- `VoiceCommand` for spoken commands, which are published but not pressed.
+
+`release`, or closing the connection, gives the claim back, so a client that
+crashes cannot leave typing off. Unlike `ears typing off`, a claim is not
+persisted and plays no cue. A Neovim plugin, for example, can hold the claim
+only while it has focus, so dictation into Neovim goes through the plugin
+and every other window is typed into as usual.
+
 ### All Commands
 
 ```

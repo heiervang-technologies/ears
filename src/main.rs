@@ -507,7 +507,10 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
 
     // Helper to build typing settings from current config state
     // With typing off, the engine only transcribes and publishes on ears.sock.
-    let make_settings = |auto_enter: bool, typing: bool| {
+    // A held claim switches typing off the same way, without the cue or the
+    // persisted switch, and keeps partials coming for the claimant.
+    let make_settings = |auto_enter: bool, typing: bool, claimed: bool| {
+        let typing = typing && !claimed;
         let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
         ears::tui::TypingSettings {
             progressive_typing: typing,
@@ -518,12 +521,13 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
             language,
             guided_grammar: config.active_grammar(),
             ghost,
+            claimed,
         }
     };
 
     // Send config-driven settings to the engine
     let mut typing = ears::typing_switch::load();
-    let _ = settings_tx.send(make_settings(config.auto_enter, typing));
+    let _ = settings_tx.send(make_settings(config.auto_enter, typing, false));
 
     AudioFeedback::beep_vad_open().ok();
     if ghost {
@@ -541,6 +545,7 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
 
     // Track mutable settings for command updates
     let mut auto_enter = config.auto_enter;
+    let mut claims: usize = 0;
 
     let save_to_clipboard = config.save_to_clipboard;
     let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
@@ -612,7 +617,7 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                 match cmd {
                     ears::ipc::EarsCommand::ToggleAutoEnter { respond } => {
                         auto_enter = !auto_enter;
-                        let _ = settings_tx.send(make_settings(auto_enter, typing));
+                        let _ = settings_tx.send(make_settings(auto_enter, typing, claims > 0));
                         if auto_enter {
                             AudioFeedback::beep_toggle_on().ok();
                         } else {
@@ -623,6 +628,17 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                         tracing::info!("Auto-enter toggled to {}", auto_enter);
                         eprintln!("Auto-enter: {}", state);
                     }
+                    ears::ipc::EarsCommand::Claim { held } => {
+                        let before = claims > 0;
+                        claims = if held { claims + 1 } else { claims.saturating_sub(1) };
+                        if before != (claims > 0) {
+                            let _ = settings_tx.send(make_settings(auto_enter, typing, claims > 0));
+                            tracing::info!(
+                                "Input {}",
+                                if claims > 0 { "claimed: publishing instead of typing" } else { "released: typing again" }
+                            );
+                        }
+                    }
                     ears::ipc::EarsCommand::Typing { request, respond } => {
                         let next = request.apply(typing);
                         if request.changes_state() {
@@ -631,7 +647,7 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
                             }
                             if next != typing {
                                 typing = next;
-                                let _ = settings_tx.send(make_settings(auto_enter, typing));
+                                let _ = settings_tx.send(make_settings(auto_enter, typing, claims > 0));
                                 if typing {
                                     AudioFeedback::beep_toggle_on().ok();
                                 } else {
@@ -738,6 +754,7 @@ async fn handle_ws_listen(
                 language: config.language.clone(),
                 guided_grammar: config.active_grammar(),
                 ghost: false,
+                claimed: false,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();
