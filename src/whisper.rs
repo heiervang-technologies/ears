@@ -323,6 +323,18 @@ impl WhisperClient {
         audio_path: impl AsRef<Path>,
         grammar: Option<&str>,
     ) -> Result<String, WhisperError> {
+        self.transcribe_checked(audio_path, grammar, false).await
+    }
+
+    /// Like [`Self::transcribe_with_grammar`]. With `verify`, the result is
+    /// kept only if the model is asked and hears speech, whatever its
+    /// length: for audio the VAD itself was unsure about.
+    pub async fn transcribe_checked(
+        &self,
+        audio_path: impl AsRef<Path>,
+        grammar: Option<&str>,
+        verify: bool,
+    ) -> Result<String, WhisperError> {
         let path = audio_path.as_ref();
 
         // Validate audio file exists and has content
@@ -354,7 +366,12 @@ impl WhisperClient {
             return Err(WhisperError::EmptyTranscription);
         }
 
-        if grammar.is_none()
+        if verify {
+            if grammar.is_some() || self.hears_speech(path).await != Some(true) {
+                info!("Dropping {:?}: not confirmed as speech", filtered);
+                return Err(WhisperError::EmptyTranscription);
+            }
+        } else if grammar.is_none()
             && self.filter_silence_artifacts
             && filtered.split_whitespace().count() <= NO_SPEECH_CHECK_MAX_WORDS
             && self.hears_speech(path).await == Some(false)

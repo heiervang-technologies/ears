@@ -78,11 +78,24 @@ fn test_confirmed_speech_emits_started_and_ended_not_rejected() {
 #[test]
 fn test_rejected_then_confirmed_sequence() {
     let (mut engine, mut rx) = seq_engine();
-    feed(&mut engine, &[0.9, 0.9, 0.0, 0.0, 0.0, 0.0]);
+    feed(&mut engine, &[0.9, 0.0, 0.0, 0.0, 0.0, 0.0]);
     assert_eq!(drain(&mut rx), vec!["SpeechProbable", "SpeechRejected"]);
 
     let segs = feed(&mut engine, &[0.9, 0.9, 0.9, 0.0, 0.0, 0.0]);
     assert_eq!(segs.len(), 1);
+    assert_eq!(
+        drain(&mut rx),
+        vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
+    );
+}
+
+#[test]
+fn test_short_word_kept_from_a_rejected_candidate_is_announced() {
+    let (mut engine, mut rx) = seq_engine();
+    // Two clear frames, then silence: too short to confirm, kept anyway.
+    let segs = feed(&mut engine, &[0.9, 0.9, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(segs.len(), 1);
+    assert!(segs[0].verify);
     assert_eq!(
         drain(&mut rx),
         vec!["SpeechProbable", "SpeechStarted", "SpeechEnded"]
@@ -792,11 +805,11 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
     let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
     engine.min_mean_probability = 0.6;
 
-    // Barely over the start threshold all the way: passes the gate, but its
-    // mean (0.55) is below the floor.
-    let segs = feed(&mut engine, &[0.55, 0.55, 0.55, 0.0, 0.0, 0.0]);
+    // Its mean (0.3) is far below the floor (0.6): dropped unheard. Just
+    // below it, the model would decide (see the next test).
+    let mut segs = feed(&mut engine, &[0.55, 0.55, 0.55, 0.0, 0.0, 0.0]);
     assert_eq!(segs.len(), 1);
-    assert!((segs[0].mean_probability - 0.55).abs() < 1e-6);
+    segs[0].mean_probability = 0.3;
     engine
         .process_segment(segs.into_iter().next().unwrap())
         .await
@@ -805,6 +818,56 @@ async fn test_unlikely_segment_is_dropped_before_transcription() {
     assert!(
         drain(&mut rx).contains(&"SegmentDiscarded { reason: \"not speech-like enough\" }".into()),
         "a dropped segment is reported, not silent"
+    );
+}
+
+/// A segment scoring just below `min_mean_probability` is transcribed, and
+/// kept only if the model's no-speech check hears speech.
+async fn borderline_segment(language: &str) -> (String, Vec<String>) {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Open."))
+        .expect(1)
+        .mount(&whisper)
+        .await;
+    Mock::given(path("/v1/models"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data": [{"id": "asr"}]})),
+        )
+        .mount(&whisper)
+        .await;
+    Mock::given(path("/v1/chat/completions"))
+        .respond_with(chat_reply(&format!("language {language}<asr_text>Open.")))
+        .expect(1)
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.min_mean_probability = 0.6;
+    let segs = feed(&mut engine, &[0.55, 0.55, 0.55, 0.0, 0.0, 0.0]);
+    assert!((segs[0].mean_probability - 0.55).abs() < 1e-6);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    (engine.accumulated_text.clone(), drain(&mut rx))
+}
+
+#[tokio::test]
+async fn test_borderline_segment_is_kept_when_the_model_hears_speech() {
+    let (text, _) = borderline_segment("English").await;
+    assert!(text.contains("Open"), "{text:?}");
+}
+
+#[tokio::test]
+async fn test_borderline_segment_is_dropped_when_the_model_hears_none() {
+    let (text, events) = borderline_segment("None").await;
+    assert!(text.is_empty(), "{text:?}");
+    assert!(
+        events.iter().any(|e| e.starts_with("SegmentDiscarded")),
+        "{events:?}"
     );
 }
 

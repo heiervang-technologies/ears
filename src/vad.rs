@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 use thiserror::Error;
-use tracing::debug;
+use tracing::{debug, info};
 use voice_activity_detector::VoiceActivityDetector;
 
 /// Silero VAD frame size: 512 samples at 16kHz (32ms)
@@ -91,6 +91,13 @@ impl VadConfig {
 /// a soft consonant or breath inside the first word must not throw the
 /// onset away (about 96 ms).
 const CANDIDATE_DIP_FRAMES: usize = 3;
+/// A rejected candidate with at least this many frames over the start
+/// threshold (~64 ms)...
+const RESCUE_MIN_STRONG_FRAMES: usize = 2;
+/// ...and a peak this clear is kept as a short segment anyway: a one-word
+/// command said quietly or from a distance often looks like this. It is
+/// only typed if the ASR model also hears speech in it.
+const RESCUE_MIN_PEAK: f32 = 0.5;
 
 impl Default for VadConfig {
     fn default() -> Self {
@@ -134,6 +141,8 @@ pub struct SileroVad {
     last_mean_probability: f32,
     /// Probability of the last frame.
     last_probability: f32,
+    /// Mean probability of a just-rejected candidate worth rescuing.
+    rescued: Option<f32>,
     health: Option<crate::health::PipelineHealth>,
 }
 
@@ -161,6 +170,7 @@ impl SileroVad {
             trail_frames: 0,
             last_mean_probability: 0.0,
             last_probability: 0.0,
+            rescued: None,
             health: None,
         })
     }
@@ -223,10 +233,22 @@ impl SileroVad {
                 if self.dip_frames > CANDIDATE_DIP_FRAMES {
                     rejected = true;
                     rejected_peak = self.candidate_peak;
-                    debug!(
-                        "Speech candidate rejected after {} frames (peak {:.3})",
-                        self.speech_frames, self.candidate_peak
+                    let rescue = self.strong_frames >= RESCUE_MIN_STRONG_FRAMES
+                        && self.candidate_peak >= RESCUE_MIN_PEAK;
+                    info!(
+                        "Speech candidate {} after {} frames ({} strong, peak {:.3})",
+                        if rescue {
+                            "kept as a short word"
+                        } else {
+                            "rejected"
+                        },
+                        self.speech_frames,
+                        self.strong_frames,
+                        self.candidate_peak
                     );
+                    if rescue {
+                        self.rescued = Some(self.voiced_sum / self.voiced_frames.max(1) as f32);
+                    }
                     self.speech_frames = 0;
                     self.strong_frames = 0;
                     self.dip_frames = 0;
@@ -305,6 +327,12 @@ impl SileroVad {
 
     /// Mean speech probability over the voiced span of the last segment that
     /// ended: low for coughs, clicks and music that barely passed the gate.
+    /// The mean probability of a candidate that was just rejected but is
+    /// worth transcribing as a short word (taken once).
+    pub fn take_rescued(&mut self) -> Option<f32> {
+        self.rescued.take()
+    }
+
     pub fn last_mean_probability(&self) -> f32 {
         self.last_mean_probability
     }
@@ -360,6 +388,9 @@ pub struct SpeechSegment {
     /// Mean speech probability over the voiced span (see
     /// [`SileroVad::last_mean_probability`]).
     pub mean_probability: f32,
+    /// Only type it if the ASR model also hears speech in it: a short word
+    /// the detector gave up on, kept from the replay buffer.
+    pub verify: bool,
 }
 
 /// VAD segment detector that tracks speech segments
@@ -444,10 +475,14 @@ impl VadSegmentDetector {
 
         // Process in exact 512-sample frames
         while self.reframe_buffer.len() >= frame_size {
-            let mut frame: Vec<f32> = self.reframe_buffer.drain(..frame_size).collect();
+            let frame: Vec<f32> = self.reframe_buffer.drain(..frame_size).collect();
             let raw_rms = crate::agc::rms(&frame);
-            self.gain.apply(&mut frame);
-            let result = self.vad.process_frame(&frame)?;
+            // Only the detector hears the gain. The segment keeps the raw
+            // audio: a gain learned on quiet speech would clip the start of
+            // loud speech, and segments are normalized as a whole later.
+            let mut gained = frame.clone();
+            self.gain.apply(&mut gained);
+            let result = self.vad.process_frame(&gained)?;
             if self.vad.last_probability() >= self.vad.config.speech_threshold {
                 self.gain.observe_speech(raw_rms);
             } else if !self.vad.is_speaking()
@@ -515,10 +550,23 @@ impl VadSegmentDetector {
                             end_ms: self.total_processed_ms,
                             samples: segment_samples,
                             mean_probability: self.vad.last_mean_probability(),
+                            verify: false,
                         });
                     }
                     // During silence, accumulate into the pre-speech ring buffer
                     self.push_to_pre_speech_buffer(frame);
+                    if let Some(mean) = self.vad.take_rescued() {
+                        // The candidate's frames went to the replay buffer.
+                        let samples: Vec<f32> = self.pre_speech_buffer.drain(..).collect();
+                        let ms = (samples.len() as u64 * 1000) / self.sample_rate as u64;
+                        segment_complete = Some(SpeechSegment {
+                            start_ms: (self.total_processed_ms + ms_per_frame).saturating_sub(ms),
+                            end_ms: self.total_processed_ms + ms_per_frame,
+                            samples,
+                            mean_probability: mean,
+                            verify: true,
+                        });
+                    }
                 }
             }
 
@@ -838,6 +886,29 @@ mod tests {
             .iter()
             .filter_map(|&p| det.inject_probability(p))
             .collect()
+    }
+
+    #[test]
+    fn seq_a_clear_short_word_the_detector_gives_up_on_is_kept_for_checking() {
+        let mut det = VadSegmentDetector::new(VadConfig {
+            speech_threshold: 0.4, // end 0.25
+            min_speech_duration_ms: 160,
+            pre_speech_buffer_ms: 500,
+            ..VadConfig::default()
+        })
+        .unwrap();
+        // Quiet "open": three clear frames among weak ones, never confirmed
+        // (fewer than half strong), then silence.
+        let word = [0.7, 0.3, 0.3, 0.7, 0.3, 0.3, 0.7];
+        let segs = drive(&mut det, &[&word[..], &[0.1; 4]].concat());
+        assert_eq!(segs.len(), 1, "kept as a short word");
+        assert!(segs[0].verify, "only typed if the ASR model hears speech");
+        assert!(!segs[0].samples.is_empty());
+        assert!((segs[0].mean_probability - 3.3 / 7.0).abs() < 1e-5);
+
+        // The same shape with no clear frame stays rejected.
+        let faint = [0.45, 0.3, 0.3, 0.45, 0.3, 0.3, 0.45];
+        assert!(drive(&mut det, &[&faint[..], &[0.1; 4]].concat()).is_empty());
     }
 
     #[test]

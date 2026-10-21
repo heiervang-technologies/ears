@@ -109,6 +109,9 @@ pub enum StreamingEvent {
 
 /// How many utterances "scratch that" can delete in a row.
 const UNDO_DEPTH: usize = 20;
+/// Segments scoring from this fraction of `min_mean_probability` up to it are
+/// transcribed and kept only if the ASR model hears speech (0.4 -> 0.24).
+pub const BORDERLINE_FRACTION: f32 = 0.6;
 
 /// Longest utterance "scratch that" deletes; longer ones are refused rather
 /// than holding Backspace for seconds.
@@ -369,7 +372,11 @@ impl StreamingEngine {
     /// dropped before confirmation).
     fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
         if let Some(segment) = outcome {
-            // Complete speech segment detected
+            // Complete speech segment detected. A short word kept from a
+            // rejected candidate was never announced as started.
+            if !self.was_speaking {
+                self.send_event(StreamingEvent::SpeechStarted);
+            }
             self.was_speaking = false;
             self.was_probably_speaking = false;
             self.send_event(StreamingEvent::SpeechEnded);
@@ -410,8 +417,15 @@ impl StreamingEngine {
         &mut self,
         mut segment: SpeechSegment,
     ) -> Result<(), StreamingEngineError> {
-        let dropped =
-            !segment.samples.is_empty() && segment.mean_probability < self.min_mean_probability;
+        // Below the minimum but not far below, the ASR model decides: quiet,
+        // distant or one-word speech often scores here. Far below, it is
+        // dropped unheard.
+        let borderline = segment.mean_probability < self.min_mean_probability
+            && segment.mean_probability >= self.min_mean_probability * BORDERLINE_FRACTION;
+        let verify = segment.verify || borderline;
+        let dropped = !segment.samples.is_empty()
+            && segment.mean_probability < self.min_mean_probability
+            && !(verify && self.guided_grammar.is_none());
         if let Some(ref health) = self.health {
             health.segment(segment.mean_probability, dropped);
         }
@@ -449,6 +463,15 @@ impl StreamingEngine {
         }
 
         let start_time = Instant::now();
+        if verify {
+            info!(
+                "Unsure segment {}-{} ms (mean probability {:.3}{}): keeping it only if the model hears speech",
+                segment.start_ms,
+                segment.end_ms,
+                segment.mean_probability,
+                if segment.verify { ", short word" } else { "" }
+            );
+        }
 
         debug!(
             "Processing speech segment: {} - {} ms ({} samples)",
@@ -500,7 +523,7 @@ impl StreamingEngine {
         // With final_correction off, the live stream's final is the
         // committed text: no second decode, and nothing jumps at the end.
         let live_final = match streamed_id {
-            Some(id) if !self.final_correction && self.guided_grammar.is_none() => {
+            Some(id) if !self.final_correction && self.guided_grammar.is_none() && !verify => {
                 self.ghost_stream_final(id).await
             }
             _ => None,
@@ -512,7 +535,7 @@ impl StreamingEngine {
             }
             None => {
                 self.whisper_client
-                    .transcribe_with_grammar(&segment_file, self.guided_grammar.as_deref())
+                    .transcribe_checked(&segment_file, self.guided_grammar.as_deref(), verify)
                     .await
             }
         };

@@ -9,10 +9,17 @@
 //! --channels 1 --format s16` writes). Prints one line per second of audio:
 //! a bar of per-frame speech probability and the gain at its end (` ` < 0.1 < `.` < 0.25 < `:` <
 //! threshold <= `#`), then each segment the VAD would hand to the
-//! transcriber, and whether `min_mean_probability` would drop it.
+//! transcriber, and whether `min_mean_probability` would drop it or leave
+//! it to the model's no-speech check.
 use ears::{VadConfig, VadSegmentDetector};
 
 fn main() -> anyhow::Result<()> {
+    // RUST_LOG=ears::vad=info also shows candidates that were rejected or
+    // kept as short words.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .without_time()
+        .init();
     let path = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow::anyhow!("usage: vad_replay FILE.wav"))?;
@@ -66,8 +73,13 @@ fn main() -> anyhow::Result<()> {
             line.clear();
         }
         if let Some(s) = segment {
-            let verdict = if s.samples.is_empty() || s.mean_probability >= min_mean {
+            let borderline = min_mean * ears::streaming_engine::BORDERLINE_FRACTION;
+            let verdict = if s.verify {
+                "short word: typed if the model hears speech"
+            } else if s.samples.is_empty() || s.mean_probability >= min_mean {
                 "transcribed"
+            } else if s.mean_probability >= borderline {
+                "unsure: typed if the model hears speech"
             } else {
                 "DROPPED"
             };
