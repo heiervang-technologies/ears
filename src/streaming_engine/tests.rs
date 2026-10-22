@@ -1336,3 +1336,150 @@ async fn test_ears_off_and_on_switch_one_way_and_are_never_typed() {
     run_one(&mut engine, &mut rx).await;
     assert!(!engine.is_standby());
 }
+
+/// `[commands.run]` with one prefix entry, "hey friend", whose program
+/// writes its arguments to `out`.
+fn recording_run_commands(out: &std::path::Path, enabled: bool) -> crate::commands::VoiceCommands {
+    let script = format!("printf '%s\\n' \"$@\" > {}", out.display());
+    let toml = format!(
+        "enabled = {enabled}\n[run.friend-wake]\ncommand = [\"sh\", \"-c\", {script:?}, \"sh\", \"wake\"]\n"
+    );
+    toml::from_str(&toml).unwrap()
+}
+
+/// Lines `out` gets once the detached program has written it.
+async fn ran_with(out: &std::path::Path) -> Vec<String> {
+    for _ in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(out) {
+            if text.ends_with('\n') {
+                return text.lines().map(String::from).collect();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the run command never ran");
+}
+
+#[tokio::test]
+async fn test_run_command_with_typing_off_runs_and_is_only_published() {
+    let (mut engine, mut rx, _server, dir) = command_engine("Hey, friend, how are you?").await;
+    let out = dir.path().join("argv");
+    // Commands off as in a stock config: run commands still work.
+    engine.set_commands(recording_run_commands(&out, false));
+    let events = run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["wake", "--say", "how are you?"]);
+    assert!(engine.accumulated_text.is_empty(), "never typed");
+    assert!(
+        events.contains(
+            &"VoiceCommand { name: \"friend-wake\", text: \"Hey, friend, how are you?\" }".into()
+        ),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("SegmentCompleted") || e.starts_with("TranscriptUpdate")),
+        "never delivered as text: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_run_phrase_inside_a_sentence_is_dictation() {
+    let (mut engine, mut rx, _server, dir) = command_engine("My friend said hey friend.").await;
+    let out = dir.path().join("argv");
+    engine.set_commands(recording_run_commands(&out, true));
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(events.iter().any(|e| e.starts_with("SegmentCompleted")));
+    assert!(!events.iter().any(|e| e.starts_with("VoiceCommand")));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!out.exists(), "nothing ran");
+}
+
+#[tokio::test]
+async fn test_run_command_works_in_standby_without_resuming() {
+    let (mut engine, mut rx, _server, dir) = command_engine("Hey friend.").await;
+    let out = dir.path().join("argv");
+    engine.set_commands(recording_run_commands(&out, true));
+    engine.standby = true;
+    let events = run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["wake"]);
+    assert!(engine.is_standby(), "standby is kept");
+    assert_eq!(
+        events,
+        ["VoiceCommand { name: \"friend-wake\", text: \"Hey friend.\" }"],
+        "only the command is published in standby"
+    );
+}
+
+#[tokio::test]
+async fn test_run_command_with_typing_on_flashes_accept_and_types_nothing() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Hey friend."))
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine_at(dir.path(), &whisper.uri());
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    engine.set_event_sender(tx);
+    let out = dir.path().join("argv");
+    let mut commands = recording_run_commands(&out, false);
+    commands.accept_ms = 1;
+    engine.set_commands(commands);
+    let events = run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["wake"]);
+    let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+    assert!(
+        sent.contains(&"F 11 Hey friend.".into()),
+        "accept colour: {sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|l| l.starts_with('C')),
+        "nothing committed: {sent:?}"
+    );
+    assert!(engine.accumulated_text.is_empty());
+    assert!(
+        events.contains(&"VoiceCommand { name: \"friend-wake\", text: \"Hey friend.\" }".into()),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn test_run_command_partial_is_frozen_or_withheld_from_the_claimant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(Default::default());
+    feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+    let ghost = engine.ghost.as_mut().unwrap();
+    let current = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::plain(current, Ok("Hey friend, how".into())))
+        .unwrap();
+    engine.ghost_poll_partials();
+    assert_eq!(
+        next_cmd(&lines),
+        "F 15 Hey friend, how",
+        "drawn as a command"
+    );
+
+    // Claimed: the claimant gets partials, but not a run command's words.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    engine.set_event_sender(tx);
+    engine.typing_mode = TypingMode::None;
+    engine.set_claimed(true);
+    let ghost = engine.ghost.as_mut().unwrap();
+    for text in ["Hey friend", "Hello there"] {
+        ghost
+            .partial_tx
+            .send(Partial::plain(current, Ok(text.into())))
+            .unwrap();
+    }
+    engine.ghost_poll_partials();
+    assert_eq!(
+        drain(&mut rx),
+        ["Partial { text: \"Hello there\" }"],
+        "run command partial withheld"
+    );
+}

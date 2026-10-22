@@ -517,7 +517,7 @@ impl StreamingEngine {
         let filters = self.text_filters.clone();
         let language = self.language.clone();
         let bash = self.guided_grammar.is_some();
-        let commands = (!bash && self.commands.enabled).then(|| self.commands.clone());
+        let commands = (!bash).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
         self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
@@ -568,15 +568,17 @@ impl StreamingEngine {
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
+            let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             if muted {
-                published.push(text); // the claimant draws it, not fcitx
+                // The claimant draws it, not fcitx. A run command's words are
+                // never text, not even partially.
+                if !matches!(parsed, Some(crate::commands::Command::Run { .. })) {
+                    published.push(text);
+                }
                 continue;
             }
             let shown = ghost.spaced(&text);
-            let command = commands
-                .as_ref()
-                .and_then(|c| c.parse(&text))
-                .is_some_and(|c| c.presses_key());
+            let command = parsed.is_some_and(|c| c.presses_key());
             // A command word so far is drawn whole in the accept (frozen)
             // colour, so you see it will press its key, not be typed.
             let frozen_bytes = if command {

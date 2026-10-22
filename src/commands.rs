@@ -5,6 +5,11 @@
 //! sentence ("it's over now") is ordinary text. VAD already cuts speech at
 //! pauses, so the pause is the boundary. To type a command word as text,
 //! prefix it with the literal word: "literal over" types "over".
+//!
+//! Run commands (`[commands.run.<name>]`) start a program instead of pressing
+//! a key: "hey friend" runs `friend wake`. They have their own switch, are
+//! heard in standby too, and one marked `prefix` also matches an utterance
+//! that starts with its phrase, passing the rest of it to the program.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -55,6 +60,137 @@ pub struct VoiceCommands {
     /// 0: press at once.
     #[serde(default = "default_accept_ms")]
     pub accept_ms: u64,
+    /// Phrases that run a program (`[commands.run.<name>]`), merged over
+    /// the built-in ones. Independent of `enabled`.
+    #[serde(default)]
+    pub run: RunCommands,
+}
+
+/// `[commands.run]`: programs started by a spoken phrase.
+///
+/// Holds only what the config file says, so saving the config does not
+/// write the built-ins into it; [`RunCommands::resolved`] merges them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunCommands {
+    /// Recognize run commands at all (default: true), even when
+    /// `[commands] enabled` is false.
+    #[serde(default = "default_run_enabled")]
+    pub enabled: bool,
+    /// Entries by name. One named like a built-in overrides only the fields
+    /// it sets; `enabled = false` removes it.
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, RunEntry>,
+}
+
+/// One `[commands.run.<name>]` table, as written in the config.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunEntry {
+    /// False removes the entry (a built-in included).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Phrases that run it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phrases: Option<Vec<String>>,
+    /// Program and arguments, e.g. `["friend", "wake"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// Also match an utterance that starts with a phrase, appending the
+    /// rest of it to the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<bool>,
+    /// Flag put before the rest, e.g. "--say". Empty: the rest alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_flag: Option<String>,
+}
+
+/// A resolved run command: built-in and config merged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCommand {
+    pub name: String,
+    pub phrases: Vec<String>,
+    pub command: Vec<String>,
+    pub prefix: bool,
+    pub rest_flag: Option<String>,
+}
+
+fn default_run_enabled() -> bool {
+    true
+}
+
+impl Default for RunCommands {
+    fn default() -> Self {
+        Self {
+            enabled: default_run_enabled(),
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+/// Built-in run commands: summon and dismiss the friend desktop companion.
+pub fn builtin_run_commands() -> Vec<RunCommand> {
+    let strings = |list: &[&str]| list.iter().map(|s| s.to_string()).collect();
+    vec![
+        RunCommand {
+            name: "friend-wake".into(),
+            phrases: strings(&["hey friend", "hi friend", "okay friend", "ok friend"]),
+            command: strings(&["friend", "wake"]),
+            prefix: true,
+            rest_flag: Some("--say".into()),
+        },
+        RunCommand {
+            name: "friend-dismiss".into(),
+            phrases: strings(&["bye friend", "goodbye friend", "bye bye friend"]),
+            command: strings(&["friend", "dismiss"]),
+            prefix: false,
+            rest_flag: None,
+        },
+    ]
+}
+
+impl RunCommands {
+    /// The run commands in effect: the built-ins with config entries merged
+    /// field by field over them, minus disabled ones and ones without
+    /// phrases or a program. Empty when `enabled` is false.
+    pub fn resolved(&self) -> Vec<RunCommand> {
+        if !self.enabled {
+            return Vec::new();
+        }
+        let mut all = builtin_run_commands();
+        for (name, entry) in &self.entries {
+            let i = match all.iter().position(|r| &r.name == name) {
+                Some(i) => i,
+                None => {
+                    all.push(RunCommand {
+                        name: name.clone(),
+                        phrases: Vec::new(),
+                        command: Vec::new(),
+                        prefix: false,
+                        rest_flag: None,
+                    });
+                    all.len() - 1
+                }
+            };
+            if entry.enabled == Some(false) {
+                all.remove(i);
+                continue;
+            }
+            let run = &mut all[i];
+            if let Some(phrases) = &entry.phrases {
+                run.phrases = phrases.clone();
+            }
+            if let Some(command) = &entry.command {
+                run.command = command.clone();
+            }
+            if let Some(prefix) = entry.prefix {
+                run.prefix = prefix;
+            }
+            if let Some(flag) = &entry.rest_flag {
+                run.rest_flag = Some(flag.clone()).filter(|f| !f.is_empty());
+            }
+        }
+        all.retain(|r| !r.command.is_empty() && r.phrases.iter().any(|p| !normalize(p).is_empty()));
+        all
+    }
 }
 
 fn default_enter() -> Vec<String> {
@@ -115,6 +251,7 @@ impl Default for VoiceCommands {
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
+            run: RunCommands::default(),
         }
     }
 }
@@ -136,6 +273,13 @@ pub enum Command {
     Keys(String),
     /// Type this text instead of interpreting it.
     Literal(String),
+    /// Start a program from `[commands.run]`.
+    Run {
+        /// The entry's name, e.g. "friend-wake".
+        name: String,
+        /// Program and arguments, the rest of a prefix match included.
+        argv: Vec<String>,
+    },
 }
 
 impl Command {
@@ -149,20 +293,23 @@ impl Command {
             Command::Backtrack => "backtrack",
             Command::Keys(_) => "keys",
             Command::Literal(_) => "literal",
+            Command::Run { .. } => "run",
         }
     }
 
     /// Name with its key combination, for logs and events: "enter",
-    /// "keys:ctrl+b".
+    /// "keys:ctrl+b". A run command is its entry's name: "friend-wake".
     pub fn label(&self) -> String {
         match self {
             Command::Keys(combo) => format!("keys:{combo}"),
+            Command::Run { name, .. } => name.clone(),
             Command::Back(n) => format!("back:{n}"),
             other => other.name().to_string(),
         }
     }
 
-    /// Whether the command presses a key (rather than typing text).
+    /// Whether the command presses a key or runs a program (rather than
+    /// typing text).
     pub fn presses_key(&self) -> bool {
         !matches!(self, Command::Literal(_))
     }
@@ -186,15 +333,52 @@ pub fn normalize(text: &str) -> String {
 }
 
 impl VoiceCommands {
-    /// The command this whole utterance is, if any.
+    /// The command this whole utterance is, if any. Run commands are
+    /// recognized even when `enabled` is false.
     pub fn parse(&self, transcript: &str) -> Option<Command> {
-        if !self.enabled {
-            return None;
-        }
         let said = normalize(transcript);
         if said.is_empty() {
             return None;
         }
+        if self.enabled {
+            if let Some(command) = self.parse_keys(transcript, &said) {
+                return Some(command);
+            }
+        }
+        self.parse_run(transcript, &said)
+    }
+
+    /// The run command this utterance is, if any: a whole phrase, or for a
+    /// `prefix` entry, a phrase at the start followed by more words.
+    fn parse_run(&self, transcript: &str, said: &str) -> Option<Command> {
+        for run in self.run.resolved() {
+            for phrase in run.phrases.iter().map(|p| normalize(p)) {
+                if phrase.is_empty() {
+                    continue;
+                }
+                let mut argv = run.command.clone();
+                if said == phrase {
+                    return Some(Command::Run {
+                        name: run.name,
+                        argv,
+                    });
+                }
+                if !run.prefix || !said.starts_with(&format!("{phrase} ")) {
+                    continue;
+                }
+                argv.extend(run.rest_flag.clone());
+                argv.push(rest_after(transcript, &phrase, said));
+                return Some(Command::Run {
+                    name: run.name,
+                    argv,
+                });
+            }
+        }
+        None
+    }
+
+    /// Commands behind `enabled`: keys, deletes and literal.
+    fn parse_keys(&self, transcript: &str, said: &str) -> Option<Command> {
         let is = |phrases: &[String]| phrases.iter().any(|p| normalize(p) == said);
         if is(&self.enter) {
             return Some(Command::Enter);
@@ -240,6 +424,52 @@ impl VoiceCommands {
         }
         None
     }
+}
+
+/// Start a run command's program detached: in a session of its own, with
+/// no stdin, stdout or stderr, reaped by a thread so the engine never waits
+/// for it. Returns its pid.
+pub fn spawn_detached(argv: &[String]) -> std::io::Result<u32> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty command"))?;
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and touches no parent state.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    std::thread::spawn(move || child.wait());
+    Ok(pid)
+}
+
+/// What `transcript` says after `phrase` (normalized, and known to start
+/// `said`), as heard: "Hey, friend, how are you?" after "hey friend" is
+/// "how are you?". Normalized if the words do not split there.
+fn rest_after(transcript: &str, phrase: &str, said: &str) -> String {
+    let words: Vec<&str> = transcript.split_whitespace().collect();
+    for k in 1..words.len() {
+        let head = normalize(&words[..k].join(" "));
+        if head == phrase {
+            return words[k..].join(" ");
+        }
+        if head.len() > phrase.len() {
+            break;
+        }
+    }
+    said[phrase.len()..].trim().to_string()
 }
 
 /// A spoken count from 1 to [`BACK_MAX_WORDS`]: digits, number words, and
@@ -435,5 +665,138 @@ mod tests {
         );
         assert_eq!(c.parse("Literal."), None, "nothing to type");
         assert_eq!(c.parse("Literally over."), None);
+    }
+
+    fn run(name: &str, argv: &[&str]) -> Option<Command> {
+        Some(Command::Run {
+            name: name.into(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    #[test]
+    fn friend_phrases_run_by_default_even_with_commands_off() {
+        let c = VoiceCommands::default();
+        assert!(!c.enabled);
+        assert_eq!(
+            c.parse("Hey friend."),
+            run("friend-wake", &["friend", "wake"])
+        );
+        assert_eq!(
+            c.parse("Hey, friend!"),
+            run("friend-wake", &["friend", "wake"])
+        );
+        assert_eq!(
+            c.parse("OK friend"),
+            run("friend-wake", &["friend", "wake"])
+        );
+        assert_eq!(
+            c.parse("Okay, friend."),
+            run("friend-wake", &["friend", "wake"])
+        );
+        assert_eq!(
+            c.parse("Bye-bye, friend."),
+            run("friend-dismiss", &["friend", "dismiss"])
+        );
+        assert_eq!(
+            c.parse("Goodbye friend"),
+            run("friend-dismiss", &["friend", "dismiss"])
+        );
+        assert_eq!(c.parse("Enter."), None, "keys stay behind enabled");
+        assert!(c.parse("Hey friend.").unwrap().presses_key());
+        assert_eq!(c.parse("Hey friend.").unwrap().label(), "friend-wake");
+    }
+
+    #[test]
+    fn prefix_passes_the_rest_as_heard() {
+        let c = VoiceCommands::default();
+        assert_eq!(
+            c.parse("Hey, friend, how are you?"),
+            run("friend-wake", &["friend", "wake", "--say", "how are you?"])
+        );
+        assert_eq!(
+            c.parse("hi friend what's the weather"),
+            run(
+                "friend-wake",
+                &["friend", "wake", "--say", "what's the weather"]
+            )
+        );
+        assert_eq!(
+            c.parse("Hey friend..."),
+            run("friend-wake", &["friend", "wake"])
+        );
+        assert_eq!(
+            c.parse("My friend said hey friend."),
+            None,
+            "phrase must lead"
+        );
+        assert_eq!(c.parse("Hey friendly neighbour."), None, "whole words only");
+        assert_eq!(
+            c.parse("Bye friend, see you."),
+            None,
+            "dismiss is no prefix"
+        );
+    }
+
+    #[test]
+    fn run_entries_merge_over_the_builtins() {
+        let toml = r#"
+            [run.friend-wake]
+            phrases = ["yo friend"]
+            rest_flag = ""
+
+            [run.friend-dismiss]
+            enabled = false
+
+            [run.music]
+            phrases = ["play music"]
+            command = ["playerctl", "play"]
+        "#;
+        let c: VoiceCommands = toml::from_str(toml).unwrap();
+        assert_eq!(c.parse("Hey friend."), None, "phrases replaced");
+        assert_eq!(
+            c.parse("Yo friend, hello"),
+            run("friend-wake", &["friend", "wake", "hello"]),
+            "command and prefix kept, flag dropped"
+        );
+        assert_eq!(c.parse("Bye friend."), None, "built-in removed");
+        assert_eq!(c.parse("Play music!"), run("music", &["playerctl", "play"]));
+        assert_eq!(c.parse("Play music now"), None, "no prefix by default");
+
+        let back = toml::to_string(&c).unwrap();
+        assert!(
+            !back.contains("\"bye friend\""),
+            "built-ins are not saved: {back}"
+        );
+        assert_eq!(toml::from_str::<VoiceCommands>(&back).unwrap(), c);
+    }
+
+    #[test]
+    fn run_switch_turns_them_all_off() {
+        let c: VoiceCommands = toml::from_str("enabled = true\n[run]\nenabled = false\n").unwrap();
+        assert!(c.run.resolved().is_empty());
+        assert_eq!(c.parse("Hey friend."), None);
+        assert_eq!(c.parse("Enter."), Some(Command::Enter));
+        let c: VoiceCommands = toml::from_str("[run.broken]\nphrases = [\"x y\"]\n").unwrap();
+        assert_eq!(c.parse("x y"), None, "no program, no command");
+    }
+
+    #[test]
+    fn key_commands_win_and_literal_escapes_a_run_phrase() {
+        let mut c = over();
+        c.enter.push("hey friend".into());
+        assert_eq!(c.parse("Hey friend."), Some(Command::Enter));
+        let c = over();
+        assert_eq!(
+            c.parse("Literal hey friend."),
+            Some(Command::Literal("hey friend.".into()))
+        );
+    }
+
+    #[test]
+    fn detached_spawn_reports_a_missing_program() {
+        let err = spawn_detached(&["ears-test-no-such-program".into()]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(spawn_detached(&[]).is_err());
     }
 }
