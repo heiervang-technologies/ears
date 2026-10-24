@@ -3,7 +3,7 @@
 //
 //   off        grey, no glow: nothing is recorded
 //   listening  cyan, glowing with the mic level: what you say is typed
-//   standby    violet, glowing with the mic level: the mic is open, but
+//   standby    orange, glowing with the mic level: the mic is open, but
 //              only the wake phrase is acted on
 //
 // Run: qs -p contrib/ears-led/shell.qml  (ears-led-feed must sit next to it)
@@ -20,7 +20,7 @@ ShellRoot {
     property real level: 0
 
     readonly property color tone: state === "listening" ? "#22d3ee"
-                                : state === "standby" ? "#8b7bd8"
+                                : state === "standby" ? "#ff9e1f"
                                 : "#6b7280"
     readonly property bool open: state !== "off"
 
