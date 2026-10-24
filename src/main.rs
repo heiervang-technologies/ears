@@ -1171,7 +1171,7 @@ async fn stop_and_transcribe(
             // Bash mode bypasses text filters — the grammar already guarantees
             // valid shell syntax and the filters would mangle it.
             let filtered_text = if config.bash_mode {
-                text.clone()
+                ears::bash::clean(&text)
             } else {
                 config.text_filters.apply(&text, language.as_deref())
             };

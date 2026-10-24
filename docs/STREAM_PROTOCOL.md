@@ -38,10 +38,12 @@ Text frames carry one JSON object each. Binary frames carry audio.
 
 ```json
 {"type": "ready", "protocol": 1, "model": "Qwen/Qwen3-ASR-1.7B",
- "sample_rate": 16000, "max_audio_ms": 90000}
+ "sample_rate": 16000, "max_audio_ms": 90000, "grammar": true}
 ```
 Sent once, first, after the upgrade. `max_audio_ms` is the longest utterance
-the server will decode (bounded by the model's context).
+the server will decode (bounded by the model's context). `grammar: true`
+means `start` may carry a grammar; servers without it ignore that field, so
+a client must not rely on one there.
 
 ```json
 {"type": "partial", "utterance": 7, "seq": 12, "text": "Okay, so here is the",
@@ -90,6 +92,15 @@ Begins utterance `utterance` (client-chosen, increasing). All fields but
 - `rollback_words`: default 3.
 - `min_step_ms`: decode only once at least this much new audio arrived since
   the last decode (default 150).
+- `grammar`: GBNF (xgrammar) grammar constraining every decode of the
+  utterance; at most 64 KiB, must define `root`, which covers the model's
+  whole output including the `language <Name><asr_text>` header. Decodes
+  that continue settled text use a fixed entry rule chosen by scanning the
+  settled text forward: `cont` after a complete word, `cont_dq` / `cont_sq`
+  inside an open `"` / `'` string. A grammar without the needed rule leaves
+  that decode unconstrained. Each variant compiles once and is cached, so
+  constrained decodes cost what plain ones do. ears sends
+  `grammars/bash.gbnf` (bash mode).
 
 A `start` while another utterance is active cancels the active one (no
 `final` for it).

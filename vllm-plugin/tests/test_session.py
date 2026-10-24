@@ -21,9 +21,9 @@ class FakeDecoder:
         self.gates: list[asyncio.Event] = []
         self.cancelled = 0
 
-    async def __call__(self, windows, prefix_text, max_tokens, *, context):
+    async def __call__(self, windows, prefix_text, max_tokens, *, context, **extra):
         call = {"windows": list(windows), "prefix": prefix_text,
-                "max_tokens": max_tokens, "context": context}
+                "max_tokens": max_tokens, "context": context, **extra}
         self.calls.append(call)
         try:
             if self.block:

@@ -36,7 +36,8 @@ def fake_vllm(monkeypatch):
     mod("vllm.renderers")
     mod("vllm.renderers.inputs")
     mod("vllm.renderers.inputs.preprocess", parse_model_prompt=parse_model_prompt)
-    mod("vllm.sampling_params", SamplingParams=SamplingParams)
+    mod("vllm.sampling_params", SamplingParams=SamplingParams,
+        StructuredOutputsParams=lambda **kw: SimpleNamespace(**kw))
     return calls
 
 
@@ -82,7 +83,15 @@ def test_decode_renders_tokens_prompt_and_generates(fake_vllm):
     assert text.count("<|audio_pad|>") == 2
     assert text.endswith("assistant\nlanguage English<asr_text>")
     assert len(prompt["multi_modal_data"]["audio"]) == 2
-    assert fake_vllm["sampling"] == {"temperature": 0.0, "max_tokens": 110}
+    assert fake_vllm["sampling"] == {"temperature": 0.0, "max_tokens": 110,
+                                     "structured_outputs": None}
+
+
+def test_decode_passes_grammar_as_structured_output(fake_vllm):
+    client, _ = engine(expanded_len=1000)
+    asyncio.run(VllmDecoder(client)([np.zeros(1600, np.float32)], "", 64, context="",
+                                    grammar='root ::= "ls"'))
+    assert fake_vllm["sampling"]["structured_outputs"].grammar == 'root ::= "ls"'
 
 
 def test_max_tokens_clamped_to_context(fake_vllm):

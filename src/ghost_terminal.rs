@@ -27,7 +27,7 @@ pub(crate) struct Pane {
     pub rows: usize,
 }
 
-fn output(program: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn output(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
     let out = crate::desktop::output_bounded(cmd, Duration::from_millis(100)).ok()?;
@@ -80,7 +80,7 @@ fn wrap_enabled(config: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn parent_pid(pid: u32) -> Option<u32> {
+pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat.rsplit_once(") ")?
         .1

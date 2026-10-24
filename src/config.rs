@@ -70,6 +70,10 @@ fn default_progressive_typing() -> bool {
     false
 }
 
+fn default_bash_terminal() -> bool {
+    true
+}
+
 fn default_cue_volume() -> u8 {
     100
 }
@@ -226,6 +230,12 @@ pub struct Config {
     /// the built-in bash grammar ([`Config::BASH_GRAMMAR`]) is used. Default: None.
     #[serde(default)]
     pub guided_grammar: Option<String>,
+    /// VAD mode: decode under the bash grammar whenever speech starts while
+    /// an Alacritty window at a shell prompt (bash, zsh, fish) is focused,
+    /// and as plain dictation everywhere else. `bash_mode` overrides it
+    /// (always on). Default: true.
+    #[serde(default = "default_bash_terminal")]
+    pub bash_terminal: bool,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -320,6 +330,7 @@ impl Config {
             auto_correction: None,
             bash_mode: false,
             guided_grammar: None,
+            bash_terminal: default_bash_terminal(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -474,6 +485,7 @@ impl Config {
             auto_correction: None,
             bash_mode: false,
             guided_grammar: None,
+            bash_terminal: default_bash_terminal(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -673,6 +685,16 @@ impl Config {
                 .clone()
                 .unwrap_or_else(|| Self::BASH_GRAMMAR.to_string()),
         )
+    }
+
+    /// Grammar for speech aimed at a shell prompt ([`Config::bash_terminal`]):
+    /// the custom `guided_grammar` if set, else the built-in bash grammar.
+    pub fn shell_grammar(&self) -> Option<String> {
+        self.bash_terminal.then(|| {
+            self.guided_grammar
+                .clone()
+                .unwrap_or_else(|| Self::BASH_GRAMMAR.to_string())
+        })
     }
 
     /// Resolve effective auto-correction setting with backward compatibility.

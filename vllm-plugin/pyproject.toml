@@ -22,5 +22,8 @@ ears_stream = "ears_vllm_stream:EarsStreamPlugin"
 [tool.setuptools]
 packages = ["ears_vllm_stream"]
 
+[tool.setuptools.package-data]
+ears_vllm_stream = ["grammars/*.gbnf"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -216,7 +216,7 @@ struct PreviewGhost<'a> {
 impl PreviewGhost<'_> {
     fn show(&mut self, text: String, frozen_bytes: usize) {
         let (text, frozen_bytes) = if self.config.bash_mode {
-            (text, 0)
+            (ears::bash::clean(&text), 0)
         } else {
             ears::freeze::filtered(
                 &text,
@@ -280,6 +280,7 @@ async fn stream_ghost_preview(
         context: config.prompt.clone().filter(|c| !c.trim().is_empty()),
         rollback_words: config.live_rollback_words,
         min_step_ms: config.min_step_ms(),
+        grammar: None,
     };
     // One utterance per segment; a long recording rolls over to the next
     // before it outgrows the server's context.
