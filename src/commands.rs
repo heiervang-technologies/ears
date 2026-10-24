@@ -517,7 +517,11 @@ impl VoiceCommands {
     /// `prefix` entry, a phrase at the start followed by more words.
     fn parse_run(&self, transcript: &str, said: &str) -> Option<Command> {
         for run in self.run.resolved() {
-            if run.while_running.as_deref().is_some_and(|f| !process_running(f)) {
+            if run
+                .while_running
+                .as_deref()
+                .is_some_and(|f| !process_running(f))
+            {
                 continue;
             }
             for phrase in run.phrases.iter().map(|p| normalize(p)) {
@@ -1058,8 +1062,16 @@ mod tests {
         );
         assert_eq!(on.parse("My friend called."), None, "the name must lead");
         assert_eq!(on.parse("Friendly fire."), None, "whole words only");
-        assert_eq!(with(&stale).parse("Friend."), None, "crashed: not on screen");
-        assert_eq!(with(&dir.join("gone.pid")).parse("Friend."), None, "not on screen");
+        assert_eq!(
+            with(&stale).parse("Friend."),
+            None,
+            "crashed: not on screen"
+        );
+        assert_eq!(
+            with(&dir.join("gone.pid")).parse("Friend."),
+            None,
+            "not on screen"
+        );
         let always: VoiceCommands =
             toml::from_str("[run.friend-name]\nwhile_running = \"\"\n").unwrap();
         assert_eq!(
