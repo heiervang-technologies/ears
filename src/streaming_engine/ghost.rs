@@ -664,14 +664,18 @@ impl StreamingEngine {
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
+            let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             // Subtitles follow speech even with typing off, never in standby.
             if let (Some(subtitles), false) = (self.subtitles.as_mut(), standby) {
-                subtitles.partial(&text, frozen_bytes);
+                let command = parsed.is_some()
+                    || crate::colour_mode::Colour::parse(&text).is_some()
+                    || crate::command_mode::ENTER_PHRASES
+                        .contains(&crate::commands::normalize(&text).as_str());
+                subtitles.partial(&text, frozen_bytes, command);
             }
             if muted && !claimed {
                 continue; // typing switched off: show nothing in the target
             }
-            let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             if muted {
                 // The claimant draws it, not fcitx. A run command's words are
                 // never text, not even partially.
