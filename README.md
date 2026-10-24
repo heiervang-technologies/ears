@@ -503,7 +503,8 @@ that colour for `accept_ms` before its key is pressed. If you keep talking it
 turns back into ordinary ghost text. The ghost is cleared rather than
 committed, the "done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
 `SegmentCompleted`, so a command is never forwarded to an agent as text.
-Commands are off in bash mode and when typing is off.
+Commands are off in bash mode and when typing is off (except run commands,
+below).
 
 Pick words you would never say alone as content. Rare real words work best:
 in tests on Qwen3-ASR, "Transmit", "Execute", "Over" and "Enter" were always
@@ -512,11 +513,61 @@ recognized, while "Send" once came back as "Send it" and an invented word
 "go": they are real answers to agents, and "Okay." is also what the model
 writes for silence.
 
+#### Run commands
+
+A phrase can also start a program. Three are built in, for the
+[friend](https://github.com/heiervang-technologies/friend) desktop companion:
+
+| Name | Phrases | Runs |
+|------|---------|------|
+| `friend-wake` | "hey friend", "hi friend", "okay friend", "ok friend" | `friend wake` |
+| `friend-name` | "friend", only while friend is on screen | `friend wake --take` |
+| `friend-dismiss` | "bye friend", "goodbye friend", "bye bye friend" | `friend dismiss` |
+
+`friend-wake` and `friend-name` are prefix commands: "Hey friend, how are
+you?" runs `friend wake --say "how are you?"`. The phrase has to lead the
+utterance; "My friend said hey friend" is ordinary text. `friend-name` is
+heard only while friend's window runs (its pid file,
+`$XDG_RUNTIME_DIR/haios-mascot.pid`, names a live process), so with friend
+on screen an utterance starting with "friend" goes to friend, not into the
+focused window. Add your own, or change or
+remove the built-ins:
+
+```toml
+[commands.run]
+enabled = true                    # all run commands (default: true)
+
+[commands.run.music]
+phrases = ["play music"]          # matched like any command
+command = ["playerctl", "play"]   # program and arguments, no shell
+prefix = false                    # true: "play music <rest>" also runs, rest appended
+rest_flag = ""                    # with prefix: put before the rest, e.g. "--say"
+while_running = ""                # pid file: heard only while that process lives
+
+[commands.run.friend-wake]
+phrases = ["yo friend"]           # overrides only the fields you set
+
+[commands.run.friend-dismiss]
+enabled = false                   # removes a built-in
+```
+
+Run commands have their own switch and work even with `[commands]
+enabled = false`, in every VAD mode: with typing on the phrase turns the
+accept colour and is never typed; with typing off (talking-stick routing,
+`ears typing off`, an input claim) nothing is typed and a claimant's
+`Partial`s leave it out; in standby they are heard too, and standby stays
+on. Each time the socket gets a `VoiceCommand` with the entry's name
+(`friend-wake`) and what was heard, never a `SegmentCompleted`. The program
+starts detached, in its own session with no stdin or output, and ears never
+waits for it; one that cannot be started is logged and skipped. "Literal hey
+friend" types the words, and a key command with the same phrase wins. Run
+commands are off in bash mode.
 
 #### Standby
 
 Saying a `standby` phrase on its own ("Ears VAD.") puts VAD in standby: it
-keeps listening but types nothing, runs no other command, plays no cues,
+keeps listening but types nothing, runs no other command (run commands
+excepted), plays no cues,
 ducks nothing and publishes nothing on the socket. The same phrase resumes
 typing. "Ears on." and "Ears off." switch one way only; said in the mode
 they ask for, they just repeat its tone. Utterances heard in standby are transcribed by your server only to

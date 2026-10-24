@@ -8,3 +8,17 @@ language = "en"
 # Context biasing: comma-separated entity names, acronyms, or domain terms.
 # Helps the model correctly spell proper nouns it would otherwise approximate.
 # prompt = "vLLM, Safetensors, Soumith Chintala, PyTorch, Anthropic"
+
+# Spoken phrases that run a program, in every VAD mode (typing on, typing
+# off, standby). Built in: "hey friend" runs `friend wake` ("hey friend, how
+# are you" runs `friend wake --say "how are you"`), "bye friend" runs
+# `friend dismiss`. Work even with `[commands] enabled = false`.
+# [commands.run]
+# enabled = true                  # false: no run commands at all
+#
+# [commands.run.friend-dismiss]
+# enabled = false                 # drop one built-in
+#
+# [commands.run.music]
+# phrases = ["play music"]
+# command = ["playerctl", "play"]
