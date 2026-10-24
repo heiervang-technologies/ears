@@ -639,11 +639,14 @@ impl StreamingEngine {
             return Ok(());
         }
 
-        if !self.standby
-            && self.command_paths.is_some()
+        // Also from standby: "command" is a way back in, like a wake phrase.
+        if self.command_paths.is_some()
             && crate::command_mode::ENTER_PHRASES
                 .contains(&crate::commands::normalize(&transcript).as_str())
         {
+            if self.standby {
+                self.apply_wake(crate::wake::Wake::On, &transcript);
+            }
             self.enter_command_mode(&transcript).await;
             return Ok(());
         }

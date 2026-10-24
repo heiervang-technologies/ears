@@ -30,8 +30,9 @@ pub const TEACH: &str = "command.teach";
 /// Last routing decision, for displays.
 pub const LAST: &str = "command-last.json";
 
-/// Spoken alone in dictation, these switch command mode on.
-pub const ENTER_PHRASES: &[&str] = &["command", "command mode"];
+/// Spoken alone, in dictation or standby, these switch command mode on.
+/// "commands": how the ASR model often hears a lone "command".
+pub const ENTER_PHRASES: &[&str] = &["command", "commands", "command mode"];
 
 /// Voice anchors kept per action; the oldest automatic ones go first.
 const MAX_VOICE_ANCHORS: usize = 24;
