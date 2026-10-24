@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Feed for the ears LED: one JSON line per update on stdout.
+
+{"state": "off" | "listening" | "standby", "level": 0..1}
+
+The state comes from ears' runtime files ($XDG_RUNTIME_DIR/ears/vad.pid and
+vad.standby). While VAD runs the mic is open (standby listens for the wake
+phrase), so the level is read from the same device ears records from, at
+20 updates a second. While VAD is off nothing is recorded, and the state is
+checked twice a second.
+"""
+import json
+import math
+import os
+import struct
+import subprocess
+import sys
+import time
+import tomllib
+
+RUN = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "ears")
+CONFIG = os.path.expanduser("~/.config/ears/config.toml")
+RATE = 16000
+CHUNK = RATE // 20  # 50 ms
+FLOOR_DB = -70.0
+SPAN_DB = 30.0  # from the room's noise floor to full glow
+
+
+def state():
+    try:
+        pid = int(open(os.path.join(RUN, "vad.pid")).read().split()[0])
+        os.kill(pid, 0)
+    except (OSError, ValueError, IndexError):
+        return "off"
+    return "standby" if os.path.exists(os.path.join(RUN, "vad.standby")) else "listening"
+
+
+def device():
+    try:
+        with open(CONFIG, "rb") as f:
+            return tomllib.load(f).get("device")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+
+def emit(s, level=0.0):
+    print(json.dumps({"state": s, "level": round(level, 3)}), flush=True)
+
+
+def record():
+    cmd = ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16",
+           "--properties", "node.dont-reconnect=true", "-"]
+    dev = device()
+    if dev:
+        cmd[1:1] = ["--target", dev]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def main():
+    last = None
+    while True:
+        s = state()
+        if s == "off":
+            if s != last:
+                emit(s)
+            last = s
+            time.sleep(0.5)
+            continue
+        rec = record()
+        try:
+            checked = time.monotonic()
+            noise = None
+            while True:
+                data = rec.stdout.read(CHUNK * 2)
+                if len(data) < CHUNK * 2:
+                    break
+                samples = struct.unpack(f"<{CHUNK}h", data)
+                rms = math.sqrt(sum(x * x for x in samples) / CHUNK) / 32768
+                db = 20 * math.log10(rms) if rms > 0 else FLOOR_DB
+                # The room's noise floor: follows quiet quickly, loud slowly,
+                # so the glow is speech above it and not the fan.
+                if noise is None or db < noise:
+                    noise = db if noise is None else noise + (db - noise) * 0.3
+                else:
+                    noise += 0.03
+                level = min(1.0, max(0.0, (db - noise - 4) / SPAN_DB))
+                if time.monotonic() - checked > 0.5:
+                    checked = time.monotonic()
+                    s = state()
+                    if s == "off":
+                        break
+                emit(s, level)
+                last = s
+        finally:
+            rec.kill()
+            rec.wait()
+        time.sleep(0.2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        sys.exit(0)
