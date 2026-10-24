@@ -1550,3 +1550,26 @@ async fn test_run_command_with_resume_runs_and_leaves_standby() {
         "{events:?}"
     );
 }
+
+#[tokio::test]
+async fn test_resume_run_command_outranks_a_wake_phrase() {
+    // "ears on" is a built-in wake phrase; a resume run command on it
+    // still runs, and ears is on afterwards.
+    let (mut engine, mut rx, _server, dir) = command_engine("Ears on.").await;
+    let out = dir.path().join("argv");
+    let script = format!("printf '%s\\n' \"$@\" > {}", out.display());
+    let toml = format!(
+        "enabled = true\n[run.regular]\nphrases = [\"ears on\"]\nresume = true\n\
+         command = [\"sh\", \"-c\", {script:?}, \"sh\", \"cursor\"]\n"
+    );
+    engine.set_commands(toml::from_str(&toml).unwrap());
+    engine.standby = true;
+    run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["cursor"]);
+    assert!(!engine.is_standby());
+    // Said while typing, it runs too, and typing stays on.
+    std::fs::remove_file(&out).unwrap();
+    run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["cursor"]);
+    assert!(!engine.is_standby());
+}
