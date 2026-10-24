@@ -15,22 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script path are allowed. The canonical copy moved into the vLLM plugin
   package; `grammars/bash.gbnf` links to it.
 
-### Added
-
-- Bash at a shell prompt: in VAD mode, an utterance that starts while an
-  Alacritty window at a bash/zsh/fish prompt is focused is decoded under the
-  bash grammar, with ghost text; anything else stays dictation
-  (`bash_terminal`, default on). Spoken symbols ("dash la", "dot dot") become
-  shell text and a trailing sentence period is dropped.
-- Stream protocol: `start.grammar` constrains an utterance's decodes; the
-  plugin forward-scans the settled text to pick a fixed continuation rule
-  (`cont`, `cont_dq`, `cont_sq`), so each grammar compiles once. `ready`
-  advertises it with `grammar: true`.
-
-- `vad-health.json` reports transcription server reachability as `asr`
-  (`state` ok/degraded/down/unknown, `path`, `last_ok_ms`, `last_error`),
-  kept current by a `/health` probe while the live stream is not up.
-
 ### Fixed
 
 - Live stream to a server on another machine: Nagle is off, a keepalive
@@ -52,6 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A ghost too long for its tmux pane row wraps over the pane's rows below
   (patched Alacritty with `colors.preedit.wrap`) instead of opening the
   fcitx popup (#184).
+
+### Added
+
+- Command mode: "command" on its own switches VAD to routing raw speech to
+  actions by embedding (EmbeddingGemma 2, nearest-neighbour vote over text and
+  voice anchors, z-scored per kind), with no transcription. Actions live in
+  `~/.config/ears/actions.toml` (written on first use); `ears teach ACTION`
+  records your phrasing as an anchor, clear firings add theirs, "wrong" takes
+  the last back. `vad.command` marks the mode for the ears light (violet).
+- Bash at a shell prompt: in VAD mode, an utterance that starts while an
+  Alacritty window at a bash/zsh/fish prompt is focused is decoded under the
+  bash grammar, with ghost text; anything else stays dictation
+  (`bash_terminal`, default on). Spoken symbols ("dash la", "dot dot") become
+  shell text and a trailing sentence period is dropped.
+- Stream protocol: `start.grammar` constrains an utterance's decodes; the
+  plugin forward-scans the settled text to pick a fixed continuation rule
+  (`cont`, `cont_dq`, `cont_sq`), so each grammar compiles once. `ready`
+  advertises it with `grammar: true`.
+- `vad-health.json` reports transcription server reachability as `asr`
+  (`state` ok/degraded/down/unknown, `path`, `last_ok_ms`, `last_error`),
+  kept current by a `/health` probe while the live stream is not up.
 
 ## [1.2.0] - 2026-09-28
 

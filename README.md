@@ -324,6 +324,29 @@ support), else partials decode per tick through the chat endpoint. Voice
 commands and wake phrases are not recognised inside a bash utterance; standby
 never uses the grammar, so the wake phrase still works.
 
+### Command mode (VAD)
+
+Say "command" on its own and VAD switches to command mode: the ears light
+turns violet and nothing is transcribed or typed. Each utterance's raw audio is
+embedded with EmbeddingGemma 2 (the `embeddinggemma2` llama-server) and routed
+to the nearest action in `~/.config/ears/actions.toml`, which ships with keys
+(enter, escape, tab, arrows) and media controls and takes any number of
+`keys`/`run` actions. Say "command" again to go back to dictation.
+
+It learns your phrasing few-shot, without training:
+
+```bash
+ears teach              # list actions and their anchors
+ears teach next-track   # the next command-mode utterance becomes an anchor
+```
+
+An action that fires clearly also keeps the recording that fired it; say
+"wrong" to take the last one back. Similarities are z-scored per anchor kind
+(text, voice) before the nearest-neighbour vote, because speech against
+recordings of the same voice looks close whatever was said. An action fires
+only on a clear winner (`floor`, `margin`); otherwise nothing happens. Design:
+the wiki page "Embedding-Driven Voice Control".
+
 ### VAD Mode (headless)
 
 ```bash

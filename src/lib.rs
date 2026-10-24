@@ -6,6 +6,7 @@
 // Audio device discovery
 pub mod agc;
 pub mod audio;
+pub mod command_mode;
 pub mod commands;
 
 // Iteration 1: Configuration
