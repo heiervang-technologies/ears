@@ -1,0 +1,697 @@
+#!/usr/bin/env python3
+"""hover-page: steer the visible page in the hover browser by name (voice-friendly).
+
+  hover-page click TARGET            click the best-matching element
+  hover-page focus TARGET            focus the best-matching text field
+  hover-page type TARGET TEXT        put TEXT into the best-matching field
+             [--submit]              ...then press Enter / submit its form
+  hover-page type --split WORDS...   same, but the first 1-5 WORDS name the field:
+                                     the split whose field matches best wins
+  hover-page scroll up|down|top|bottom [N|a bit|a lot]
+  hover-page back|forward|reload
+  hover-page list [TARGET]           print the top candidates and scores
+
+Options (any position):
+  --dry          print what would be hit, change nothing
+  --embed        blend in EmbeddingGemma similarity (k8s service, see README)
+  --notify       send a desktop notification when nothing matched
+  --timing       print per-phase latency to stderr
+  --json         (list) machine-readable output
+  --port N       BiDi port (default $HOVER_BIDI_PORT or 9333)
+  --tab TEXT     act on the first tab whose URL contains TEXT (default: the
+                 selected tab; BiDi context ids do not survive a session)
+
+Exit status: 0 acted, 1 nothing matched well enough, 2 error.
+Needs hover started with --remote-debugging-port 9333 --remote-allow-system-access.
+"""
+import base64, difflib, functools, json, math, os, re, socket, struct, sys, time
+
+PORT = int(os.environ.get("HOVER_BIDI_PORT", "9333"))
+EMBED_URL = os.environ.get("HOVER_PAGE_EMBED_URL", "http://localhost:30201/v1/embeddings")
+EMBED_MODEL = os.environ.get("HOVER_PAGE_EMBED_MODEL", "embeddinggemma-2")
+THRESHOLD = 0.55
+SANDBOX = "hover-page"
+
+# ---------------------------------------------------------------- matching --
+
+STOP = {"the", "a", "an", "on", "onto", "to", "this", "that", "my", "it", "please", "of"}
+# Words that name a kind of element rather than its label.
+ROLE_WORDS = {
+    "button": "button", "buttons": "button", "btn": "button",
+    "link": "link", "links": "link", "hyperlink": "link",
+    "field": "field", "box": "field", "bar": "field", "input": "field",
+    "textbox": "field", "area": "field", "entry": "field",
+    "tab": "tab", "chip": "tab",
+    "checkbox": "checkbox", "check": "checkbox", "tick": "checkbox",
+    "menu": "menu", "hamburger": "menu", "burger": "menu", "sidebar": "menu",
+    "icon": "icon", "logo": "icon",
+}
+# Label words that are usually filler when spoken ("the rust video").
+SOFT = {"video", "page", "item", "option", "thing", "one", "text", "section", "label"}
+MENU_RX = re.compile(r"\b(menu|guide|navigation|nav|sidebar|hamburger|drawer|more actions)\b")
+HAMBURGER_LABELS = {"menu", "main menu", "open menu", "show menu", "site menu", "guide",
+                    "navigation", "open navigation", "toggle navigation", "open sidebar"}
+# Matched against whole id/class tokens: "ytd-mini-guide-entry" is a link, not the menu.
+HAMBURGER_HINT_RX = re.compile(
+    r"(?:^|\s)(?:[\w-]*-)?(?:hamburger|burger|navbar-toggler|guide-button|"
+    r"(?:nav|sidebar|drawer|menu)-?(?:toggle|button|btn|trigger))(?:-[\w-]*)?(?=\s|$)")
+NAME_WEIGHT = {"labelledby": 1.0, "aria": 1.0, "label": 1.0, "text": 1.0, "value": 0.95,
+               "title": 0.95, "placeholder": 0.95, "alt": 0.9, "name": 0.7, "id": 0.6}
+EDITABLE_ROLES = {"textbox", "searchbox", "combobox"}
+
+
+def tokens(s, camel=False):
+    if camel:  # ids and name attributes: guideButton -> guide button
+        s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s or "")
+    return [t for t in re.split(r"[^0-9a-z]+", (s or "").lower()) if t]
+
+
+def parse_query(q):
+    """Split a spoken target into label tokens and role classes."""
+    toks = [t for t in tokens(q) if t not in STOP]
+    roles = {ROLE_WORDS[t] for t in toks if t in ROLE_WORDS}
+    if "text" in toks and ("box" in toks or "field" in toks):
+        roles.add("field")
+    content = [t for t in toks if t not in ROLE_WORDS]
+    return toks, content, roles
+
+
+@functools.lru_cache(maxsize=65536)
+def tok_sim(a, b):
+    if a == b:
+        return 1.0
+    if min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a)):
+        return 0.9
+    if a.isdigit() or b.isdigit() or abs(len(a) - len(b)) > max(len(a), len(b)) / 2:
+        return 0.0
+    m = difflib.SequenceMatcher(None, a, b)
+    if m.quick_ratio() < 0.75:
+        return 0.0
+    r = m.ratio()
+    return r if r >= 0.75 else 0.0
+
+
+def text_sim(qtoks, name, camel=False):
+    """Fuzzy similarity of spoken tokens to one accessible name, 0..1.
+
+    Tolerates ASR splitting or joining words ("fire ship", "log in", "e mail")."""
+    if not qtoks:
+        return 0.0
+    nt = tokens(name, camel)
+    if not nt:
+        return 0.0
+    if qtoks == nt or "".join(qtoks) == "".join(nt):
+        return 1.0
+    n = len(nt)
+    ext = nt + [nt[i] + nt[i + 1] for i in range(n - 1)]  # name words, then joined pairs
+    spans = [(i,) for i in range(n)] + [(i, i + 1) for i in range(n - 1)]
+
+    def hit(t, pool):
+        best, bj = 0.0, None
+        for j in range(pool):
+            s = tok_sim(t, ext[j])
+            if s > best:
+                best, bj = s, j
+                if s == 1.0:
+                    break
+        return best, bj
+
+    def combine(hits, weights):
+        recall = sum(w * h for w, (h, _) in zip(weights, hits)) / sum(weights)
+        used = {i for _, j in hits if j is not None for i in spans[j]}
+        return recall, len(used) / n
+
+    weights = [0.3 if t in SOFT else 1.0 for t in qtoks]
+    best = combine([hit(t, n) for t in qtoks], weights)
+    if best[0] < 1 and (n > 1 or len(qtoks) > 1):
+        joined = [hit(t, len(ext)) for t in qtoks]
+        tries = [combine(joined, weights)]
+        for i in range(len(qtoks) - 1):  # "low fi" -> "lowfi"
+            hits = joined[:i] + [hit(qtoks[i] + qtoks[i + 1], len(ext))] + joined[i + 2:]
+            tries.append(combine(hits, weights[:i] + [max(weights[i:i + 2])] + weights[i + 2:]))
+        best = max([best] + tries)
+    recall, precision = best
+    if recall == 0:
+        return 0.0
+    ratio = difflib.SequenceMatcher(None, " ".join(qtoks), " ".join(nt)).ratio()
+    return 0.6 * recall + 0.2 * precision + 0.2 * ratio
+
+
+def is_menuish(c):
+    labels = " ".join(t for _, t in c["names"]).lower()
+    return bool(MENU_RX.search(labels) or HAMBURGER_HINT_RX.search(c.get("hints", ""))
+                or ((c.get("popup") or c.get("toggle")) and c["role"] in ("button", "clickable")))
+
+
+def hamburger_score(c):
+    """How much this looks like THE page menu (for a bare "menu" / "hamburger")."""
+    if c["role"] not in ("button", "clickable", "link", "checkbox"):
+        return 0.0
+    labels = {t.lower() for _, t in c["names"]}
+    icon_toggle = c.get("toggle") and not any(src == "text" for src, _ in c["names"])
+    if labels & HAMBURGER_LABELS or HAMBURGER_HINT_RX.search(c.get("hints", "")) or icon_toggle:
+        s = 0.9
+    elif is_menuish(c):
+        s = 0.7
+    else:
+        return 0.0
+    return s + (0.05 if c.get("y", 999) < 120 and c.get("x", 999) < 400 else 0.0)
+
+
+def is_searchy(c):
+    labels = " ".join(t for _, t in c["names"]).lower()
+    return c["role"] == "searchbox" or c.get("type") == "search" or \
+        "search" in c.get("hints", "") or "search" in labels
+
+
+def score(query, c, verb="click"):
+    """Score one candidate (dict from the page collector) against a spoken target."""
+    toks, content, roles = parse_query(query)
+    editable = c.get("editable", False)
+    best, bonus = 0.0, 0.0
+    if not content and "menu" in roles:  # "menu", "hamburger menu"
+        best = hamburger_score(c)
+        roles = roles - {"menu"}
+    else:
+        names = c["names"] + ([("type", "submit")] if c.get("type") == "submit" else [])
+        seen = set()
+        for src, text in sorted(names, key=lambda n: -NAME_WEIGHT.get(n[0], 0.8)):
+            camel = src in ("id", "name")
+            if (text, camel) in seen:  # aria-label, text and title often agree
+                continue
+            seen.add((text, camel))
+            s = text_sim(content, text, camel)
+            if toks != content:
+                s = max(s, text_sim(toks, text, camel) * 0.95)
+            best = max(best, NAME_WEIGHT.get(src, 0.8) * s)
+        if not content and "field" in roles and editable:  # "text box"
+            best = max(best, 0.6)
+    if "button" in roles:
+        bonus += 0.15 if c["role"] in ("button", "clickable") else -0.05
+    if "link" in roles:
+        bonus += 0.15 if c["role"] == "link" else -0.05
+    if "field" in roles:
+        bonus += 0.2 if editable else -0.1
+    if "tab" in roles and c["role"] == "tab":
+        bonus += 0.15
+    if "checkbox" in roles:
+        bonus += 0.2 if c["role"] in ("checkbox", "switch") else -0.05
+    if "menu" in roles and is_menuish(c):
+        bonus += 0.25
+    if "icon" in roles and not any(src == "text" for src, _ in c["names"]):
+        bonus += 0.1
+    if "search" in content and editable and is_searchy(c):
+        bonus += 0.3 if "field" in roles else 0.05
+    if verb in ("focus", "type") and c["role"] == "searchbox":
+        bonus += 0.03
+    bonus += 0.05 if c.get("inView") else -0.1
+    area = max(c.get("w", 0), 0) * max(c.get("h", 0), 0)
+    bonus += min(0.03, 0.03 * area / 20000)
+    if c.get("weak"):
+        bonus -= 0.1
+    if c.get("faint"):
+        bonus -= 0.05
+    return round(best + bonus, 4) if best > 0 else 0.0
+
+
+def eligible(c, verb):
+    if verb in ("focus", "type"):
+        return c.get("editable", False)
+    return True
+
+
+def rank(query, cands, verb="click", embed=False, timing=None):
+    pool = [c for c in cands if eligible(c, verb)]
+    scored = sorted(((score(query, c, verb), c) for c in pool), key=lambda x: -x[0])
+    if embed and scored:
+        scored = embed_rerank(query, scored, timing)
+    return scored
+
+
+def best_name(c):
+    order = ["labelledby", "aria", "label", "text", "value", "title", "placeholder", "alt", "name", "id"]
+    for src in order:
+        for s, t in c["names"]:
+            if s == src and t.strip():
+                return t.strip()[:80]
+    return c["tag"]
+
+
+# --------------------------------------------------------------- embedding --
+
+def embeddings(texts):
+    import urllib.request
+    req = urllib.request.Request(EMBED_URL, data=json.dumps(
+        {"model": EMBED_MODEL, "input": texts}).encode(), headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=2) as r:
+        data = json.load(r)["data"]
+    return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
+
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)) or 1)
+
+
+def embed_rerank(query, scored, timing=None, top=40):
+    t0 = time.perf_counter()
+    head, tail = scored[:top], scored[top:]
+    texts = [f"{c['role']}: {best_name(c)}" for _, c in head]
+    try:
+        vecs = embeddings([query] + texts)
+    except (OSError, ValueError, KeyError) as e:  # service down: fuzzy alone
+        print(f"hover-page: embeddings unavailable ({e}), using fuzzy only", file=sys.stderr)
+        return scored
+    out = []
+    for (s, c), v in zip(head, vecs[1:]):
+        sim = min(1.0, max(0.0, (cosine(vecs[0], v) - 0.2) / 0.6))
+        out.append((round(0.6 * s + 0.4 * sim, 4), c))
+    if timing is not None:
+        timing["embed"] = time.perf_counter() - t0
+    return sorted(out, key=lambda x: -x[0]) + [(s * 0.6, c) for s, c in tail]
+
+
+# ------------------------------------------------------------------- page JS --
+
+COLLECT_JS = r"""
+const SEL = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],' +
+  '[role=menuitem],[role=tab],[role=searchbox],[role=combobox],[role=textbox],' +
+  '[role=checkbox],[role=radio],[role=switch],[role=option],[onclick],' +
+  '[contenteditable=""],[contenteditable=true],[aria-label]';
+const INTERACTIVE = /^(a|button|input|select|textarea|summary)$/;
+const vw = innerWidth, vh = innerHeight, els = [], out = [], REACH = 4;
+let far = 0;
+const txt = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+function roleOf(el, tag) {
+  const r = el.getAttribute('role');
+  if (r) return r.split(' ')[0];
+  if (tag === 'a') return 'link';
+  if (tag === 'button' || tag === 'summary') return 'button';
+  if (tag === 'select') return 'combobox';
+  if (tag === 'textarea') return 'textbox';
+  if (tag === 'input') {
+    const t = (el.type || 'text').toLowerCase();
+    if (t === 'search') return 'searchbox';
+    if (['checkbox', 'radio'].includes(t)) return t;
+    if (['submit', 'button', 'reset', 'image'].includes(t)) return 'button';
+    return 'textbox';
+  }
+  if (el.isContentEditable) return 'textbox';
+  return el.hasAttribute('onclick') ? 'clickable' : 'generic';
+}
+function visit(el) {
+  if (!el.matches(SEL)) return;
+  const tag = el.localName;
+  if (tag === 'input' && el.type === 'hidden') return;
+  const r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
+  // far below or above the view: nobody says "click" at what they cannot see
+  if (r.bottom < -REACH * vh || r.top > (REACH + 1) * vh) { far++; return; }
+  if (el.disabled || el.closest('[aria-hidden=true],[inert]')) return;
+  if (el.checkVisibility && !el.checkVisibility({visibilityProperty: true})) return;
+  const role = roleOf(el, tag);
+  const editable = ['textbox', 'searchbox'].includes(role) ||
+    (role === 'combobox' && tag === 'input') || el.isContentEditable;
+  const names = [];
+  const add = (src, s) => { s = txt(s); if (s && !names.some(n => n[1] === s)) names.push([src, s]); };
+  const lb = el.getAttribute('aria-labelledby');
+  if (lb) add('labelledby', lb.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' '));
+  add('aria', el.getAttribute('aria-label'));
+  if (el.labels) for (const l of el.labels) add('label', l.innerText);
+  if (!['input', 'select', 'textarea'].includes(tag)) add('text', el.innerText);
+  if (tag === 'input' && ['submit', 'button', 'reset'].includes(el.type)) add('value', el.value);
+  add('title', el.getAttribute('title'));
+  add('placeholder', el.getAttribute('placeholder'));
+  add('alt', el.getAttribute('alt') || el.querySelector?.('img[alt]')?.getAttribute('alt'));
+  add('name', el.getAttribute('name'));
+  add('id', el.id);
+  const cls = typeof el.className === 'string' ? el.className : '';
+  out.push({
+    i: els.length, tag, role, type: tag === 'input' ? (el.type || 'text') : '', names, editable,
+    hints: (el.id + ' ' + cls + ' ' + (el.getAttribute('name') || '')).toLowerCase().slice(0, 200),
+    popup: el.hasAttribute('aria-haspopup'),
+    toggle: el.hasAttribute('aria-expanded') && el.hasAttribute('aria-controls'),
+    weak: !INTERACTIVE.test(tag) && role === 'generic',
+    // opacity 0 is often the real target laid over its label (the checkbox hack)
+    faint: getComputedStyle(el).opacity === '0',
+    x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
+    inView: r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw,
+    key: el.getAttribute('data-t'),
+  });
+  els.push(el);
+}
+(function walk(root) {
+  for (const el of root.querySelectorAll('*')) {
+    visit(el);
+    if (el.shadowRoot) walk(el.shadowRoot);
+  }
+})(document);
+document[Symbol.for('hover-page')] = els;
+return {url: location.href, title: document.title, cands: out, far};
+"""
+
+ACT_JS = r"""
+const el = (document[Symbol.for('hover-page')] || [])[ARGS.i];
+if (!el || !el.isConnected) return {error: 'element went away (page changed?)'};
+el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+const s = el.style, saved = [s.outline, s.outlineOffset];
+s.outline = '3px solid #ff2bd6'; s.outlineOffset = '2px';
+setTimeout(() => { s.outline = saved[0]; s.outlineOffset = saved[1]; }, 600);
+const field = el.matches('input,textarea,select') || el.isContentEditable;
+if (ARGS.verb === 'click') {
+  if (field) el.focus();
+  el.click();
+  return {done: 'clicked'};
+}
+el.focus();
+if (ARGS.verb === 'focus') return {done: 'focused'};
+// type
+if (el.isContentEditable) {
+  document.getSelection().selectAllChildren(el);
+  document.execCommand('insertText', false, ARGS.text);
+} else {
+  const proto = el.localName === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ARGS.text);
+  el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: ARGS.text}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+}
+if (!ARGS.submit) return {done: 'typed'};
+const init = {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true};
+const handled = !el.dispatchEvent(new KeyboardEvent('keydown', init));
+el.dispatchEvent(new KeyboardEvent('keypress', init));
+el.dispatchEvent(new KeyboardEvent('keyup', init));
+if (!handled && el.form) {
+  el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+  return {done: 'typed+submitted form'};
+}
+return {done: handled ? 'typed+enter (page handled it)' : 'typed+enter'};
+"""
+
+SCROLL_JS = r"""
+function scroller() {
+  let el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+  while (el && el !== document.body && el !== document.documentElement) {
+    const o = getComputedStyle(el).overflowY;
+    if (/(auto|scroll|overlay)/.test(o) && el.scrollHeight > el.clientHeight + 10) return el;
+    el = el.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+const sc = scroller(), page = sc.clientHeight || innerHeight, before = sc.scrollTop;
+const top = ARGS.dir === 'top' ? 0 : ARGS.dir === 'bottom' ? sc.scrollHeight :
+  before + (ARGS.dir === 'up' ? -1 : 1) * ARGS.pages * 0.8 * page;
+// smooth scrolling only animates in a visible tab
+if (!ARGS.dry) sc.scrollTo({top, behavior: document.visibilityState === 'visible' ? 'smooth' : 'instant'});
+return {target: sc === document.scrollingElement ? 'page' : (sc.id ? '#' + sc.id : sc.localName),
+        from: Math.round(before), to: Math.round(Math.max(0, Math.min(top, sc.scrollHeight - page)))};
+"""
+
+NAV_JS = {"back": "history.back()", "forward": "history.forward()", "reload": "location.reload()"}
+
+SELECTED_TAB_JS = """
+const {NavigableManager} = ChromeUtils.importESModule('chrome://remote/content/shared/NavigableManager.sys.mjs');
+const w = Services.wm.getMostRecentBrowserWindow();
+return NavigableManager.getIdForBrowser(w.gBrowser.selectedBrowser);
+"""
+
+# -------------------------------------------------------------------- BiDi --
+
+
+class WebSocket:
+    """Just enough RFC 6455 for BiDi on localhost: text frames, no extensions.
+
+    The websockets package costs ~80 ms to import, twice the rest of a command."""
+
+    def __init__(self, url, timeout=10):
+        m = re.match(r"ws://([^/:]+):(\d+)(/.*)", url)
+        host, port, path = m.group(1), int(m.group(2)), m.group(3)
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n"
+                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                           "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        self.buf = b""
+        while b"\r\n\r\n" not in self.buf:
+            self._fill()
+        head, self.buf = self.buf.split(b"\r\n\r\n", 1)
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            raise OSError(f"websocket upgrade refused: {head.splitlines()[0].decode(errors='replace')}")
+
+    def _fill(self):
+        chunk = self.sock.recv(1 << 16)
+        if not chunk:
+            raise OSError("connection closed")
+        self.buf += chunk
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            self._fill()
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def _frame(self, op, data):
+        n = len(data)
+        head = bytes([0x80 | op]) + (bytes([0x80 | n]) if n < 126 else
+                                     struct.pack("!BH", 0x80 | 126, n) if n < 1 << 16 else
+                                     struct.pack("!BQ", 0x80 | 127, n))
+        mask = os.urandom(4)
+        key = (mask * (n // 4 + 1))[:n]
+        body = (int.from_bytes(data, "big") ^ int.from_bytes(key, "big")).to_bytes(n, "big")
+        self.sock.sendall(head + mask + body)
+
+    def send(self, text):
+        self._frame(0x1, text.encode())
+
+    def recv(self):
+        parts = []
+        while True:
+            b0, b1 = self._read(2)
+            n = b1 & 0x7F
+            if n == 126:
+                n = struct.unpack("!H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack("!Q", self._read(8))[0]
+            data = self._read(n)  # server frames are unmasked
+            op = b0 & 0x0F
+            if op == 0x9:
+                self._frame(0xA, data)
+            elif op == 0x8:
+                raise OSError("connection closed by hover")
+            elif op in (0x0, 0x1, 0x2):
+                parts.append(data)
+                if b0 & 0x80:
+                    return b"".join(parts).decode()
+
+    def close(self):
+        try:
+            self._frame(0x8, b"")
+        except OSError:
+            pass
+        self.sock.close()
+
+
+class Bidi:
+    def __init__(self, ws):
+        self.ws, self.n = ws, 0
+
+    @classmethod
+    def connect(cls, port=PORT):
+        b = cls(WebSocket(f"ws://127.0.0.1:{port}/session"))
+        b.call("session.new", {"capabilities": {}})
+        return b
+
+    def close(self):
+        try:
+            self.call("session.end", {})
+        finally:
+            self.ws.close()
+
+    def call(self, method, params):
+        self.n += 1
+        self.ws.send(json.dumps({"id": self.n, "method": method, "params": params}))
+        while True:
+            msg = json.loads(self.ws.recv())
+            if msg.get("id") == self.n:
+                if msg.get("type") == "error":
+                    raise RuntimeError(f"{msg['error']}: {msg.get('message')}")
+                return msg["result"]
+
+    def run(self, context, body, args=None, sandbox=SANDBOX, activate=False):
+        target = {"context": context}
+        if sandbox:
+            target["sandbox"] = sandbox
+        res = self.call("script.evaluate", {
+            "expression": f"((ARGS) => JSON.stringify((() => {{ {body}\n }})()))({json.dumps(args or {})})",
+            "target": target, "awaitPromise": False, "resultOwnership": "none",
+            "userActivation": activate})
+        if res.get("type") == "exception":
+            raise RuntimeError(res["exceptionDetails"]["text"])
+        v = res["result"].get("value")
+        return json.loads(v) if isinstance(v, str) else v
+
+    def tab_by_url(self, text):
+        tree = self.call("browsingContext.getTree", {"maxDepth": 0})
+        for c in tree["contexts"]:
+            if text in c["url"]:
+                return c["context"]
+        raise RuntimeError(f"no tab with {text!r} in its URL")
+
+    def selected_context(self):
+        """BiDi context id of the tab the user is looking at."""
+        try:
+            tree = self.call("browsingContext.getTree", {"moz:scope": "chrome", "maxDepth": 0})
+            chrome = next(c["context"] for c in tree["contexts"]
+                          if c["url"] == "chrome://browser/content/browser.xhtml")
+            return self.run(chrome, SELECTED_TAB_JS, sandbox=None)
+        except (StopIteration, RuntimeError):
+            pass
+        # no system access: first content tab that reports itself visible
+        tree = self.call("browsingContext.getTree", {"maxDepth": 0})
+        for c in tree["contexts"]:
+            if c["url"].startswith("chrome://"):
+                continue
+            if self.run(c["context"], "return document.visibilityState") == "visible":
+                return c["context"]
+        raise RuntimeError("no visible tab found")
+
+
+# --------------------------------------------------------------------- CLI --
+
+def parse_args(argv):
+    opts = {"dry": False, "embed": False, "notify": False, "timing": False, "json": False,
+            "submit": False, "split": False, "port": PORT, "tab": None}
+    pos, it = [], iter(argv)
+    for a in it:
+        if a in ("-h", "--help"):
+            opts["help"] = True
+        elif a in ("--port", "--tab"):
+            opts[a[2:]] = next(it, None)
+        elif a.startswith("--") and a[2:] in opts:
+            opts[a[2:]] = True
+        else:
+            pos.append(a)
+    opts["port"] = int(opts["port"])
+    return pos, opts
+
+
+def scroll_amount(words):
+    w = " ".join(words).lower()
+    if not w:
+        return 1.0
+    if re.search(r"\b(lot|lots|much|way)\b", w):
+        return 3.0
+    if re.search(r"\b(bit|little|tad|touch)\b", w):
+        return 0.35
+    m = re.search(r"\d+(\.\d+)?", w)
+    return float(m.group()) if m else 1.0
+
+
+def describe(c):
+    return f'{c["role"]} "{best_name(c)}"'
+
+
+def run(pos, o, timing):
+    verb, rest = pos[0], pos[1:]
+    t0 = time.perf_counter()
+    b = Bidi.connect(o["port"])
+    try:
+        ctx = b.tab_by_url(o["tab"]) if o["tab"] else b.selected_context()
+        timing["connect+tab"] = time.perf_counter() - t0
+        if verb in NAV_JS:
+            if o["dry"]:
+                return 0, f"would go {verb}"
+            b.run(ctx, NAV_JS[verb], activate=True)
+            return 0, f"went {verb}" if verb != "reload" else "reloaded"
+        if verb == "scroll":
+            if not rest or rest[0] not in ("up", "down", "top", "bottom"):
+                return 2, "scroll needs up|down|top|bottom"
+            r = b.run(ctx, SCROLL_JS, {"dir": rest[0], "pages": scroll_amount(rest[1:]),
+                                       "dry": o["dry"]}, activate=True)
+            return 0, f"{'would scroll' if o['dry'] else 'scrolled'} {r['target']} {rest[0]} {r['from']} -> {r['to']}"
+        text = None
+        if verb == "type":
+            words = " ".join(rest).split() if o["split"] else rest
+            if len(words) < 2:
+                return 2, "type needs TARGET TEXT"
+            splits = [(" ".join(words[:i]), " ".join(words[i:]))
+                      for i in range(1, min(5, len(words) - 1) + 1)] if o["split"] \
+                else [(rest[0], " ".join(rest[1:]))]
+        else:
+            splits = [(" ".join(rest), None)]
+        t1 = time.perf_counter()
+        page = b.run(ctx, COLLECT_JS)
+        timing["collect"] = time.perf_counter() - t1
+        t2 = time.perf_counter()
+        ranked, target = [], ""
+        for tgt, txt in splits:  # one split unless --split
+            r = rank(tgt, page["cands"], "click" if verb == "list" else verb,
+                     embed=o["embed"], timing=timing)
+            if not ranked or (r and r[0][0] > ranked[0][0]):
+                ranked, target, text = r, tgt, txt
+        timing["rank"] = time.perf_counter() - t2 - timing.get("embed", 0)
+        if verb == "list":
+            return 0, format_list(target, page, ranked, o["json"])
+        if not target.strip() or not ranked or ranked[0][0] < THRESHOLD:
+            near = f' (best: {describe(ranked[0][1])} {ranked[0][0]:.2f})' if ranked and ranked[0][0] else ""
+            return 1, f'no match for "{target}"{near}'
+        s, c = ranked[0]
+        what = f"{describe(c)} score {s:.2f}"
+        if o["dry"]:
+            return 0, f"would {verb} {what}" + (f' with "{text}"' if text is not None else "")
+        t3 = time.perf_counter()
+        r = b.run(ctx, ACT_JS, {"i": c["i"], "verb": verb, "text": text,
+                                      "submit": o["submit"]}, activate=True)
+        timing["act"] = time.perf_counter() - t3
+        if "error" in r:
+            return 2, r["error"]
+        return 0, f"{r['done']} {what}"
+    finally:
+        b.close()
+
+
+def format_list(target, page, ranked, as_json):
+    if as_json:
+        return json.dumps({"url": page["url"], "title": page["title"],
+                           "cands": [dict(c, score=s) for s, c in ranked]}, ensure_ascii=False)
+    lines = [f"{page['title']} <{page['url']}> {len(page['cands'])} candidates"
+             f" ({page.get('far', 0)} more out of reach)"]
+    shown = ranked if target.strip() else [(0, c) for _, c in ranked]
+    for s, c in shown[:25 if target.strip() else 200]:
+        flag = "" if c["inView"] else " (offscreen)"
+        lines.append(f"{s:5.2f}  {describe(c)}{flag}")
+    return "\n".join(lines)
+
+
+def notify(msg):
+    import subprocess
+    subprocess.Popen(["notify-send", "-t", "2500", "-a", "hover-page",
+                      "-h", "string:x-canonical-private-synchronous:voice-cmd", "hover-page", msg],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def main(argv):
+    pos, o = parse_args(argv)
+    verbs = {"click", "focus", "type", "scroll", "list", *NAV_JS}
+    if o.get("help") or not pos or pos[0] not in verbs:
+        print(__doc__, file=sys.stdout if o.get("help") else sys.stderr)
+        return 0 if o.get("help") else 2
+    timing = {}
+    t0 = time.perf_counter()
+    try:
+        code, msg = run(pos, o, timing)
+    except OSError as e:
+        code, msg = 2, f"hover is not listening on port {o['port']} ({e})"
+    except Exception as e:  # BiDi/JS failures: report on one line
+        code, msg = 2, f"error: {e}"
+    timing["total"] = time.perf_counter() - t0
+    print(msg if code == 0 else f"hover-page: {msg}", file=sys.stdout if code == 0 else sys.stderr)
+    if o["timing"]:
+        print(" ".join(f"{k}={v * 1000:.0f}ms" for k, v in timing.items()), file=sys.stderr)
+    if o["notify"] and code != 0:
+        notify(msg)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
