@@ -539,17 +539,22 @@ writes for silence.
 
 #### Run commands
 
-A phrase can also start a program. Two are built in, for the
+A phrase can also start a program. Three are built in, for the
 [friend](https://github.com/heiervang-technologies/friend) desktop companion:
 
 | Name | Phrases | Runs |
 |------|---------|------|
 | `friend-wake` | "hey friend", "hi friend", "okay friend", "ok friend" | `friend wake` |
+| `friend-name` | "friend", only while friend is on screen | `friend wake --take` |
 | `friend-dismiss` | "bye friend", "goodbye friend", "bye bye friend" | `friend dismiss` |
 
-`friend-wake` is a prefix command: "Hey friend, how are you?" runs
-`friend wake --say "how are you?"`. The phrase has to lead the utterance;
-"My friend said hey friend" is ordinary text. Add your own, or change or
+`friend-wake` and `friend-name` are prefix commands: "Hey friend, how are
+you?" runs `friend wake --say "how are you?"`. The phrase has to lead the
+utterance; "My friend said hey friend" is ordinary text. `friend-name` is
+heard only while friend's window runs (its pid file,
+`$XDG_RUNTIME_DIR/haios-mascot.pid`, names a live process), so with friend
+on screen an utterance starting with "friend" goes to friend, not into the
+focused window. Add your own, or change or
 remove the built-ins:
 
 ```toml
@@ -561,6 +566,7 @@ phrases = ["play music"]          # matched like any command
 command = ["playerctl", "play"]   # program and arguments, no shell
 prefix = false                    # true: "play music <rest>" also runs, rest appended
 rest_flag = ""                    # with prefix: put before the rest, e.g. "--say"
+while_running = ""                # pid file: heard only while that process lives
 
 [commands.run.friend-wake]
 phrases = ["yo friend"]           # overrides only the fields you set
