@@ -467,16 +467,18 @@ In VAD mode a whole utterance can be a command instead of text:
 ```toml
 [commands]
 enabled = true
-enter = ["enter", "over"] # "Enter." or "Over." on its own presses Enter (default: ["enter"])
+enter = ["over"]          # "Enter." or "Over." on its own presses Enter (adds to the built-in "enter")
 new_line = ["new line"]   # Shift+Enter: a new line without sending
 undo = ["scratch that"]   # delete the last dictated utterance
 back = ["back"]           # "Back 3." / "Back three." deletes the last 3 words (1-10)
 backtrack = ["backtrack", "back track"]  # delete the last dictated sentence
 standby = ["ears vad", "ears v a d"]     # switch between typing and standby (below)
 wake = ["ears on"]                        # resume typing from standby
-sleep = ["ears off"]                      # stand by
+sleep = ["fuck off clanker"]              # stand by (as well as the built-in "ears off")
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
+
+# Phrase lists add to the built-in phrases; they never remove one.
 
 [commands.keys]           # any phrase to any key combination
 background = "ctrl+b"     # "Background." on its own presses Ctrl+B
