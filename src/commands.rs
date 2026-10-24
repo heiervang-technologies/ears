@@ -58,6 +58,87 @@ pub struct VoiceCommands {
     /// 0: press at once.
     #[serde(default = "default_accept_ms")]
     pub accept_ms: u64,
+    /// Steering: a command (argv) that is offered each utterance that is not
+    /// one of the commands above, with the utterance as its last argument,
+    /// e.g. `["voice-cmd", "handle"]`. Exit status 0 means it acted on it
+    /// (clicked, switched workspace...), and the utterance is not typed.
+    /// Empty: off.
+    #[serde(default)]
+    pub steer: Vec<String>,
+    /// How long steering may take before the utterance is typed anyway, in
+    /// milliseconds.
+    #[serde(default = "default_steer_timeout_ms")]
+    pub steer_timeout_ms: u64,
+    /// Type only when a text field has focus (asked from the ears fcitx5
+    /// addon). Speech elsewhere goes to steering, or nowhere. When the addon
+    /// can't be asked, typing goes ahead as before.
+    #[serde(default)]
+    pub text_fields_only: bool,
+    /// Window classes that always get typing, for apps that never tell the
+    /// input method about their text fields.
+    #[serde(default)]
+    pub type_anyway: Vec<String>,
+}
+
+/// What to do with an utterance that is not an ears command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// Type it.
+    Type,
+    /// Nowhere to type it: drop it.
+    Drop,
+}
+
+impl VoiceCommands {
+    /// Whether to type an utterance that steering did not take, given
+    /// whether a text field has focus (None: unknown) and the focused
+    /// window's class.
+    pub fn route(&self, text_field: Option<bool>, class: Option<&str>) -> Route {
+        let exempt = class.is_some_and(|class| {
+            self.type_anyway
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(class))
+        });
+        if self.text_fields_only && text_field == Some(false) && !exempt {
+            Route::Drop
+        } else {
+            Route::Type
+        }
+    }
+
+    /// Offer `heard` to the steering command. True when it acted.
+    pub async fn steer(&self, heard: &str) -> bool {
+        let Some((program, args)) = self.steer.split_first() else {
+            return false;
+        };
+        let child = tokio::process::Command::new(program)
+            .args(args)
+            .arg(heard)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::warn!(%error, program, "Steering command did not start");
+                return false;
+            }
+        };
+        let limit = std::time::Duration::from_millis(self.steer_timeout_ms);
+        match tokio::time::timeout(limit, child.wait()).await {
+            Ok(Ok(status)) => status.success(),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "Steering command failed");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("Steering command took over {:?}; typing instead", limit);
+                false
+            }
+        }
+    }
 }
 
 /// The built-in phrases followed by the configured ones not already there.
@@ -130,6 +211,10 @@ fn default_literal() -> Vec<String> {
     vec!["literal".into()]
 }
 
+fn default_steer_timeout_ms() -> u64 {
+    800
+}
+
 fn default_accept_ms() -> u64 {
     200
 }
@@ -149,6 +234,10 @@ impl Default for VoiceCommands {
             literal: default_literal(),
             keys: BTreeMap::new(),
             accept_ms: default_accept_ms(),
+            steer: Vec::new(),
+            steer_timeout_ms: default_steer_timeout_ms(),
+            text_fields_only: false,
+            type_anyway: Vec::new(),
         }
     }
 }
@@ -355,6 +444,53 @@ pub fn keycodes(combo: &str) -> Option<Vec<u16>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speech_outside_text_fields_is_dropped_only_when_asked() {
+        let mut commands = VoiceCommands {
+            type_anyway: vec!["Steam".into()],
+            ..Default::default()
+        };
+        assert_eq!(commands.route(Some(false), Some("hover")), Route::Type);
+        commands.text_fields_only = true;
+        assert_eq!(commands.route(Some(false), Some("hover")), Route::Drop);
+        assert_eq!(commands.route(Some(true), Some("hover")), Route::Type);
+        assert_eq!(
+            commands.route(None, Some("hover")),
+            Route::Type,
+            "unknown: type"
+        );
+        assert_eq!(commands.route(Some(false), Some("steam")), Route::Type);
+    }
+
+    #[tokio::test]
+    async fn steering_takes_an_utterance_when_its_command_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("heard");
+        let script = dir.path().join("steer");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$1\" > {}\n[ \"$1\" = 'click search' ]\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut commands = VoiceCommands {
+            steer: vec![script.display().to_string()],
+            ..Default::default()
+        };
+        assert!(commands.steer("click search").await);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "click search");
+        assert!(!commands.steer("hello there").await);
+        commands.steer = vec!["sleep".into()];
+        commands.steer_timeout_ms = 50;
+        assert!(!commands.steer("5").await, "a slow command loses to typing");
+        commands.steer = vec!["/nonexistent/steer".into()];
+        assert!(!commands.steer("x").await);
+    }
 
     #[test]
     fn configured_phrases_add_to_the_built_in_ones() {

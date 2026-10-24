@@ -477,6 +477,10 @@ wake = ["ears on"]                        # resume typing from standby
 sleep = ["fuck off clanker"]              # stand by (as well as the built-in "ears off")
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
+steer = ["voice-cmd", "handle"]  # offered every other utterance first (below)
+steer_timeout_ms = 800    # slower steering loses, and the words are typed
+text_fields_only = true   # type only when a text field has focus (below)
+type_anyway = ["steam"]   # window classes that always get typing
 
 # Phrase lists add to the built-in phrases; they never remove one.
 
@@ -484,6 +488,15 @@ accept_ms = 200           # how long the accepted command shows (0: off)
 background = "ctrl+b"     # "Background." on its own presses Ctrl+B
 "go back" = "alt+left"
 ```
+
+**Steering and text fields.** With `steer` set, every utterance that is not
+one of the commands above is first given to that program, as its last
+argument. If it exits 0 it acted on the words (clicked a button, switched
+workspace), and nothing is typed. With `text_fields_only`, ears types only
+when the ears fcitx5 addon reports a focused text field; speech anywhere
+else is either steering or dropped, with the discard cue. Apps that never
+tell the input method about their fields can be listed in `type_anyway`.
+If the addon can't be asked, ears types as before.
 
 "Scratch that." deletes the last utterance ears typed, with Backspace;
 say it again to delete the one before (up to 20). It only works in the
