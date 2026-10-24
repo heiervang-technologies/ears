@@ -318,6 +318,7 @@ impl StreamingEngine {
         health.set_typing_paused(self.typing_suspended);
         self.vad_detector.set_health(health.clone());
         self.health = Some(health);
+        self.ghost_report_stream();
     }
 
     /// Set event sender for receiving streaming events
@@ -330,6 +331,7 @@ impl StreamingEngine {
     /// # Arguments
     /// * `samples` - Audio samples (mono, f32, -1.0 to 1.0, 16kHz)
     pub async fn process_audio(&mut self, samples: &[f32]) -> Result<(), StreamingEngineError> {
+        self.ghost_report_stream();
         let _stage = self
             .health
             .as_ref()
@@ -534,9 +536,24 @@ impl StreamingEngine {
                 Ok(text)
             }
             None => {
-                self.whisper_client
+                let result = self
+                    .whisper_client
                     .transcribe_checked(&segment_file, self.guided_grammar.as_deref(), verify)
-                    .await
+                    .await;
+                if let Some(health) = &self.health {
+                    use crate::whisper::WhisperError as E;
+                    match &result {
+                        Ok(_) | Err(E::EmptyTranscription) => {
+                            health.asr_ok(crate::health::AsrPath::Http)
+                        }
+                        Err(
+                            e
+                            @ (E::ConnectionError(_) | E::HttpError(_) | E::TranscriptionError(_)),
+                        ) => health.asr_failed(&e.to_string()),
+                        Err(_) => {}
+                    }
+                }
+                result
             }
         };
         let transcript = match transcript {

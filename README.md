@@ -724,6 +724,32 @@ cross the `ears mic-check` thresholds, `mic_warning` is set to `mic silent`,
 `mic clipping`, `speech too quiet` or `noisy background`, and `debug.log`
 records the change. Run `ears mic-check` for the full picture.
 
+`asr` says whether the transcription server can be reached, so a desktop
+indicator can tell "the mic is fine but the server is gone" apart from a
+deaf microphone:
+
+```json
+"asr": {"state": "ok", "path": "stream", "last_ok_ms": 44969948, "last_error": null}
+```
+
+- `state`: `ok` (the live stream is up, or the server answers and no stream
+  is in use), `degraded` (the live stream is down or missing but plain HTTP
+  requests work), `down` (the last contact failed and none succeeded since),
+  `unknown` (no contact yet).
+- `path`: how the server was last reached, `stream` or `http`; null while
+  down or unknown.
+- `last_ok_ms`: last successful contact; `last_error`: why the last contact
+  failed, cleared by the next success.
+
+Transcriptions, stream connects and, while the live stream is not up, a
+`GET /health` probe every 10 s (2 s timeout) feed it, so it stays current
+while nobody speaks. `debug.log` records `transcription server unreachable`
+when it goes down.
+
+All `*_ms` times in the snapshot, `updated_monotonic_ms` included, are
+CLOCK_MONOTONIC milliseconds: the same clock as Python's `time.monotonic()`,
+so `time.monotonic() * 1000 - updated_monotonic_ms` is the snapshot's age.
+
 For detailed periodic measurements, start Ears with:
 
 ```bash

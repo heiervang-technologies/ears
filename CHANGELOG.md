@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `vad-health.json` reports transcription server reachability as `asr`
+  (`state` ok/degraded/down/unknown, `path`, `last_ok_ms`, `last_error`),
+  kept current by a `/health` probe while the live stream is not up.
+
+### Fixed
+
+- Live stream to a server on another machine: Nagle is off, a keepalive
+  ping notices a server that vanished without closing (reboot, dropped
+  Wi-Fi) within 10 s instead of after TCP's many-minute timeout, a missing
+  `final` after a silent wait reconnects instead of trusting the socket,
+  and a server without the stream endpoint is asked again after 5 minutes
+  instead of never.
+
 - Run commands: `[commands.run.<name>]` maps spoken phrases to a program,
   started detached, in every VAD mode including standby and with typing off,
   and independent of `[commands] enabled`. Built in: "hey friend" runs

@@ -535,7 +535,10 @@ async fn test_ghost_without_stream_endpoint_decodes_per_tick() {
     let (mut engine, lines) = ghost_engine(dir.path());
     engine.set_continuous(Some(spec_at(&server.uri())));
     tick_until(&mut engine, |e| {
-        matches!(e.ghost.as_ref().unwrap().stream, StreamLink::Unsupported)
+        matches!(
+            e.ghost.as_ref().unwrap().stream,
+            StreamLink::Unsupported { .. }
+        )
     })
     .await;
     feed(&mut engine, &[0.9; 24]);
@@ -1572,4 +1575,62 @@ async fn test_resume_run_command_outranks_a_wake_phrase() {
     run_one(&mut engine, &mut rx).await;
     assert_eq!(ran_with(&out).await, ["cursor"]);
     assert!(!engine.is_standby());
+}
+
+#[tokio::test]
+async fn test_silent_stream_is_reconnected_after_a_missing_final() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
+    let monitor = crate::health::HealthMonitor::start(dir.path()).unwrap();
+    let health = monitor.health();
+    engine.set_health(health.clone());
+    ghost_tick(&mut engine).await;
+    assert_eq!(health.asr_stream_status(), crate::health::StreamStatus::Up);
+    speak_and_finish(&mut engine, &server, None).await;
+    // Nothing came back for the whole wait: the socket is not trusted.
+    assert!(!stream_up(&engine));
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "C from the full transcription."
+    );
+    tick_until(&mut engine, stream_up).await;
+    assert_eq!(health.asr_stream_status(), crate::health::StreamStatus::Up);
+    assert_eq!(
+        health.snapshot().asr.state,
+        crate::health::AsrState::Ok,
+        "the full transcription and the new stream both reached the server"
+    );
+}
+
+#[tokio::test]
+async fn test_server_without_stream_endpoint_is_asked_again_later() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/chat/completions"))
+        .respond_with(chat_reply("over http"))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _lines) = ghost_engine(dir.path());
+    engine.set_continuous(Some(spec_at(&server.uri())));
+    let unsupported = |e: &StreamingEngine| {
+        matches!(
+            e.ghost.as_ref().unwrap().stream,
+            StreamLink::Unsupported { .. }
+        )
+    };
+    tick_until(&mut engine, unsupported).await;
+    // Not before the retry time...
+    ghost_tick(&mut engine).await;
+    assert!(unsupported(&engine));
+    // ...but once it has passed, the stream is tried again.
+    engine.ghost.as_mut().unwrap().stream = StreamLink::Unsupported {
+        retry_at: Instant::now(),
+    };
+    engine.ghost_stream_link();
+    assert!(matches!(
+        engine.ghost.as_ref().unwrap().stream,
+        StreamLink::Connecting(_)
+    ));
+    tick_until(&mut engine, unsupported).await;
 }

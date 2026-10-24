@@ -26,8 +26,13 @@ const GHOST_MAX_CONTINUOUS_SAMPLES: usize = 16_000 * 90;
 /// A lost stream connection is tried again after this, at the earliest.
 const STREAM_RETRY: Duration = Duration::from_secs(5);
 
+/// A server without the stream endpoint is asked again after this: the
+/// endpoint may come back with the next server restart.
+const STREAM_UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
+
 /// How long to wait for the stream's `final` before transcribing the
-/// segment in full instead.
+/// segment in full instead. A server that also sent nothing else meanwhile
+/// is presumed gone, and the stream is reconnected.
 const STREAM_FINAL_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// A finished partial transcription.
@@ -78,8 +83,31 @@ pub(super) enum StreamLink {
         >,
     ),
     Up(crate::stream_client::StreamSession),
-    /// The server has no stream: per-tick HTTP from now on.
-    Unsupported,
+    /// The server has no stream: per-tick HTTP until `retry_at`.
+    Unsupported {
+        retry_at: Instant,
+    },
+}
+
+impl StreamLink {
+    fn unsupported() -> Self {
+        Self::Unsupported {
+            retry_at: Instant::now() + STREAM_UNSUPPORTED_RETRY,
+        }
+    }
+
+    /// What `vad-health.json` reports for this link.
+    pub(super) fn status(&self) -> crate::health::StreamStatus {
+        use crate::health::StreamStatus;
+        match self {
+            StreamLink::Up(session) if session.is_open() => StreamStatus::Up,
+            StreamLink::Connecting(_) => StreamStatus::Connecting,
+            StreamLink::Down { retry_at: None } => StreamStatus::Connecting,
+            StreamLink::Up(_) | StreamLink::Down { .. } | StreamLink::Unsupported { .. } => {
+                StreamStatus::Down
+            }
+        }
+    }
 }
 
 /// The stream utterance carrying a ghost utterance.
@@ -91,6 +119,20 @@ pub(super) struct Streamed {
     pub(super) utterance: u64,
     /// Samples of the segment sent so far.
     pub(super) sent: usize,
+}
+
+/// Start connecting the stream in the background. None without a runtime
+/// (sync tests): the link stays as it is.
+fn connect(spec: &crate::continuous::ContinuousSpec) -> Option<StreamLink> {
+    let runtime = tokio::runtime::Handle::try_current().ok()?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let url = spec.server_url.clone();
+    let key = spec.api_key.clone();
+    runtime.spawn(async move {
+        let session = crate::stream_client::StreamSession::connect(&url, key.as_deref()).await;
+        let _ = tx.send(session);
+    });
+    Some(StreamLink::Connecting(rx))
 }
 
 /// Ghost completion bookkeeping.
@@ -283,6 +325,11 @@ impl StreamingEngine {
     /// Advance the stream connection. Never waits on the network: connecting
     /// runs as its own task and is picked up here once it is done.
     pub(super) fn ghost_stream_link(&mut self) {
+        self.ghost_stream_advance();
+        self.ghost_report_stream();
+    }
+
+    fn ghost_stream_advance(&mut self) {
         use crate::continuous::ContinuousError;
         let Some(spec) = self.continuous.as_ref() else {
             return;
@@ -297,14 +344,23 @@ impl StreamingEngine {
                         "Ghost partials over the ears stream ({})",
                         session.ready().model.as_deref().unwrap_or("unknown model")
                     );
+                    if let Some(health) = &self.health {
+                        health.asr_ok(crate::health::AsrPath::Stream);
+                    }
                     StreamLink::Up(session)
                 }
                 Ok(Err(ContinuousError::Unsupported(e))) => {
-                    info!("No ears stream on the server, decoding per tick: {}", e);
-                    StreamLink::Unsupported
+                    info!(
+                        "No ears stream on the server, decoding per tick for {:?}: {}",
+                        STREAM_UNSUPPORTED_RETRY, e
+                    );
+                    StreamLink::unsupported()
                 }
                 Ok(Err(e)) => {
                     debug!("Ears stream not connected: {}", e);
+                    if let Some(health) = &self.health {
+                        health.asr_failed(&format!("stream: {e}"));
+                    }
                     StreamLink::Down {
                         retry_at: Some(Instant::now() + STREAM_RETRY),
                     }
@@ -314,24 +370,36 @@ impl StreamingEngine {
                     retry_at: Some(Instant::now() + STREAM_RETRY),
                 },
             },
-            StreamLink::Down { retry_at } if retry_at.is_none_or(|t| Instant::now() >= t) => {
-                // No runtime (sync tests): stay down.
-                let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-                    return;
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let url = spec.server_url.clone();
-                let key = spec.api_key.clone();
-                runtime.spawn(async move {
-                    let session =
-                        crate::stream_client::StreamSession::connect(&url, key.as_deref()).await;
-                    let _ = tx.send(session);
-                });
-                StreamLink::Connecting(rx)
+            StreamLink::Down {
+                retry_at: Some(retry_at),
             }
-            _ => return,
+            | StreamLink::Unsupported { retry_at }
+                if Instant::now() < *retry_at =>
+            {
+                return
+            }
+            StreamLink::Down { .. } | StreamLink::Unsupported { .. } => match connect(spec) {
+                Some(link) => link,
+                None => return,
+            },
+            StreamLink::Up(_) => return,
         };
         ghost.stream = next;
+    }
+
+    /// Tell `vad-health.json` what the stream connection is doing.
+    pub(super) fn ghost_report_stream(&self) {
+        use crate::health::StreamStatus;
+        let Some(health) = &self.health else {
+            return;
+        };
+        let status = match (&self.ghost, &self.continuous) {
+            (Some(ghost), Some(_)) if self.guided_grammar.is_none() => ghost.stream.status(),
+            _ => StreamStatus::Unused,
+        };
+        if health.asr_stream_status() != status {
+            health.asr_stream(status);
+        }
     }
 
     /// Turn what the stream pushed into partials for the current utterance.
@@ -364,7 +432,7 @@ impl StreamingEngine {
                 StreamEvent::Final { .. } => {}
                 StreamEvent::Error { code, message, .. } if code == "unsupported" => {
                     info!("Ears stream unsupported, decoding per tick: {}", message);
-                    lost = Some(StreamLink::Unsupported);
+                    lost = Some(StreamLink::unsupported());
                     break;
                 }
                 StreamEvent::Error {
@@ -423,7 +491,7 @@ impl StreamingEngine {
         let session = match &ghost.stream {
             StreamLink::Up(session) => session,
             StreamLink::Connecting(_) => return true, // settled within 2 s
-            StreamLink::Down { .. } | StreamLink::Unsupported => {
+            StreamLink::Down { .. } | StreamLink::Unsupported { .. } => {
                 ghost.per_tick = Some(ghost.utterance);
                 return false;
             }
@@ -498,6 +566,19 @@ impl StreamingEngine {
                 Ok(Some(_)) => continue, // stale partials or other utterances
                 Err(_) => {
                     debug!("No stream final for utterance {} in time", id);
+                    // A server that said nothing at all meanwhile (no
+                    // partial, no pong) may be gone without closing the
+                    // socket: reconnect now rather than keep trusting it.
+                    // A healthy one just accepts the new connection.
+                    if session.silent_for() >= STREAM_FINAL_TIMEOUT {
+                        warn!(
+                            "Ears stream silent for {:?}; reconnecting",
+                            session.silent_for()
+                        );
+                        ghost.stream = StreamLink::Down { retry_at: None };
+                    } else {
+                        session.probe();
+                    }
                     return None;
                 }
             }
