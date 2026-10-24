@@ -603,6 +603,29 @@ impl StreamingEngine {
             }
             None => transcript,
         };
+        if self.typing_mode != TypingMode::None && !self.typing_suspended && !guided_command {
+            if self.commands.steer(&transcript).await {
+                info!("Steered: {}", transcript);
+                self.ghost_accept(&transcript).await;
+                self.send_event(StreamingEvent::VoiceCommand {
+                    name: "steer".into(),
+                    text: transcript,
+                });
+                return Ok(());
+            }
+            if self.commands.text_fields_only {
+                let field = self.text_field_focused();
+                let class = crate::ghost::hyprland_active_class();
+                if self.commands.route(field, class.as_deref()) == crate::commands::Route::Drop {
+                    self.ghost_clear();
+                    self.discard(&format!(
+                        "no text field in {}",
+                        class.as_deref().unwrap_or("the focused window")
+                    ));
+                    return Ok(());
+                }
+            }
+        }
         let accumulated_before = self.accumulated_text.len();
         let accumulated_chars_before = self.accumulated_text.chars().count();
         let newly_committed = self.commit_transcript(&transcript);
@@ -752,6 +775,18 @@ impl StreamingEngine {
     }
 
     /// Report a segment that typed nothing.
+    /// Whether a text field has keyboard focus, from the ears fcitx5 addon.
+    /// None when the addon can't be asked.
+    fn text_field_focused(&mut self) -> Option<bool> {
+        let shown = match self.ghost.as_mut() {
+            Some(ghost) => ghost.client.probe(),
+            None => crate::ghost::GhostClient::new(crate::ghost::default_socket_path()).probe(),
+        };
+        shown
+            .ok()
+            .map(|shown| shown != crate::ghost::GhostDisplay::None)
+    }
+
     fn discard(&self, reason: &str) {
         info!("Segment discarded: {}", reason);
         self.send_event(StreamingEvent::SegmentDiscarded {
