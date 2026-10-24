@@ -1,0 +1,125 @@
+# voice-cmd plugin: steer the page in the hover browser by voice (hover-page).
+# Install: cp hover-page.toml ~/.config/voice-commands/ and hover-page onto PATH
+# (voice-cmd adds ~/.local/bin). See README.md.
+#
+# voice-cmd matches a phrase against the WHOLE utterance after it lowercases it,
+# turns punctuation into spaces, strips filler ("please", "okay", "now", ...) and
+# turns "one".."ten" into digits. Targets are capped at a few words so a
+# dictated sentence that merely starts with "click" or "search" passes through.
+#
+# Collisions: this directory loads before voice-cmd's own commands/, and on equal
+# score the first loaded command wins. Every phrase here therefore excludes what
+# hover.toml / hyprland.toml already say ("open the sidebar", "go to workspace 3",
+# "focus left"); tests/test_phrases.py checks they still win.
+
+# ------------------------------------------------------------------ menu --
+
+[[command]]
+name = "page.menu"
+app = "hover"
+phrases = [
+  "(?:open|show|toggle)(?: the)?(?: main| site| navigation| hamburger| side)? menu",
+  "(?:the )?(?:main |site )?(?:hamburger|burger)(?: menu)?",
+  "(?:the )?(?:main )?menu(?: button)?",
+]
+run = ["hover-page", "--notify", "click", "menu"]
+
+[[command]]
+name = "page.open-menu"
+app = "hover"
+phrases = ["open(?: the)? (?!(?:main|site|navigation|hamburger|side) menu$)([\\w']+(?: [\\w']+){0,2}) menu"]
+run = ["hover-page", "--notify", "click", "{1} menu"]
+
+# ----------------------------------------------------------------- click --
+
+[[command]]
+name = "page.click"
+app = "hover"
+phrases = [
+  "(?:click|tap)(?: on)? ([\\w']+(?: [\\w']+){0,5})",
+  "press(?: on)? (?!(?:enter|escape|tab|space|backspace|delete|up|down|left|right)$)([\\w']+(?: [\\w']+){0,5})",
+  "go to (?!(?:the )?(?:workspace \\d+|top|bottom)$)([\\w']+(?: [\\w']+){0,4})",
+]
+run = ["hover-page", "--notify", "click", "{1}"]
+
+[[command]]
+name = "page.focus"
+app = "hover"
+phrases = ["focus(?: on)? (?!(?:left|right|up|down)$)([\\w']+(?: [\\w']+){0,4})"]
+run = ["hover-page", "--notify", "focus", "{1}"]
+
+# ------------------------------------------------------------------ type --
+
+# "type into first name markus": no punctuation survives normalization, so
+# hover-page tries each split and keeps the one whose field matches best.
+# Listed before page.type-into-field: "type in search rust in action".
+[[command]]
+name = "page.type-in"
+app = "hover"
+phrases = ["type (?:in|into)(?: the)? ([\\w']+(?: [\\w']+){1,15})"]
+run = ["hover-page", "--notify", "type", "--split", "{1}"]
+
+# "type rust in action into the search box", "type hi in the comment box";
+# a bare "in" is too common in dictation ("type checking in rust is great").
+[[command]]
+name = "page.type-into-field"
+app = "hover"
+phrases = [
+  "type ([\\w']+(?: [\\w']+){0,11}) into(?: the)? ([\\w']+(?: [\\w']+){0,3})",
+  "type ([\\w']+(?: [\\w']+){0,11}) in the ((?:[\\w']+ ){0,2}(?:field|box|bar|input))",
+]
+run = ["hover-page", "--notify", "type", "{2}", "{1}"]
+
+[[command]]
+name = "page.search"
+app = "hover"
+phrases = [
+  "search (?:youtube|the page|this page|this site|the site|here) for ([\\w']+(?: [\\w']+){0,7})",
+  "search for ([\\w']+(?: [\\w']+){0,7})",
+  "search (?!for )([\\w']+(?: [\\w']+){0,5})",
+]
+run = ["hover-page", "--notify", "type", "--submit", "search", "{1}"]
+
+# ---------------------------------------------------------------- scroll --
+
+[[command]]
+name = "page.scroll"
+app = "hover"
+phrases = ["scroll (up|down)(?: (\\d+|a lot|lots|a bit|a little|a tad|more))?(?: pages?| screens?| times)?"]
+run = ["hover-page", "scroll", "{1}", "{2}"]
+
+[[command]]
+name = "page.page-updown"
+app = "hover"
+phrases = ["page (up|down)"]
+run = ["hover-page", "scroll", "{1}"]
+
+[[command]]
+name = "page.scroll-ends"
+app = "hover"
+phrases = [
+  "(?:scroll|go|jump) to(?: the)? (top|bottom)(?: of(?: the)? page)?",
+  "(?:scroll )?(top|bottom) of(?: the)? page",
+]
+run = ["hover-page", "scroll", "{1}"]
+
+# ------------------------------------------------------------ navigation --
+# Bare "back N" is ears' delete-words command; ears matches it before voice-cmd.
+
+[[command]]
+name = "page.back"
+app = "hover"
+phrases = ["(?:go |navigate )?back(?: a page)?"]
+run = ["hover-page", "back"]
+
+[[command]]
+name = "page.forward"
+app = "hover"
+phrases = ["(?:go |navigate )?forward(?: a page)?"]
+run = ["hover-page", "forward"]
+
+[[command]]
+name = "page.reload"
+app = "hover"
+phrases = ["(?:reload|refresh)(?: (?:the|this))?(?: page)?"]
+run = ["hover-page", "reload"]

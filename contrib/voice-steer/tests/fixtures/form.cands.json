@@ -1,0 +1,358 @@
+[
+{
+"i": 0,
+"tag": "input",
+"role": "textbox",
+"type": "text",
+"names": [
+[
+"label",
+"First name"
+],
+[
+"name",
+"first_name"
+],
+[
+"id",
+"fname"
+]
+],
+"editable": true,
+"hints": "fname  first_name",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 80,
+"y": 8,
+"w": 180,
+"h": 22,
+"inView": true,
+"key": "first-name"
+},
+{
+"i": 1,
+"tag": "input",
+"role": "textbox",
+"type": "text",
+"names": [
+[
+"label",
+"Last name"
+],
+[
+"name",
+"last_name"
+],
+[
+"id",
+"lname"
+]
+],
+"editable": true,
+"hints": "lname  last_name",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 78,
+"y": 30,
+"w": 180,
+"h": 22,
+"inView": true,
+"key": "last-name"
+},
+{
+"i": 2,
+"tag": "input",
+"role": "textbox",
+"type": "email",
+"names": [
+[
+"labelledby",
+"Email address"
+],
+[
+"name",
+"email"
+]
+],
+"editable": true,
+"hints": "  email",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 102,
+"y": 52,
+"w": 180,
+"h": 22,
+"inView": true,
+"key": "email"
+},
+{
+"i": 3,
+"tag": "input",
+"role": "textbox",
+"type": "password",
+"names": [
+[
+"placeholder",
+"Password"
+],
+[
+"name",
+"pw"
+]
+],
+"editable": true,
+"hints": "  pw",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 8,
+"y": 74,
+"w": 180,
+"h": 22,
+"inView": true,
+"key": "password"
+},
+{
+"i": 4,
+"tag": "select",
+"role": "combobox",
+"type": "",
+"names": [
+[
+"label",
+"Country"
+],
+[
+"name",
+"country"
+]
+],
+"editable": false,
+"hints": "  country",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 64,
+"y": 96,
+"w": 78,
+"h": 22,
+"inView": true,
+"key": "country"
+},
+{
+"i": 5,
+"tag": "input",
+"role": "checkbox",
+"type": "checkbox",
+"names": [
+[
+"label",
+"I agree to the terms of service"
+],
+[
+"name",
+"tos"
+]
+],
+"editable": false,
+"hints": "  tos",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 12,
+"y": 121,
+"w": 14,
+"h": 14,
+"inView": true,
+"key": "tos"
+},
+{
+"i": 6,
+"tag": "input",
+"role": "checkbox",
+"type": "checkbox",
+"names": [
+[
+"label",
+"Send me the newsletter"
+],
+[
+"name",
+"news"
+]
+],
+"editable": false,
+"hints": "  news",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 12,
+"y": 141,
+"w": 14,
+"h": 14,
+"inView": true,
+"key": "newsletter"
+},
+{
+"i": 7,
+"tag": "textarea",
+"role": "textbox",
+"type": "",
+"names": [
+[
+"placeholder",
+"Tell us about yourself"
+],
+[
+"name",
+"bio"
+]
+],
+"editable": true,
+"hints": "  bio",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 8,
+"y": 158,
+"w": 164,
+"h": 40,
+"inView": true,
+"key": "bio"
+},
+{
+"i": 8,
+"tag": "div",
+"role": "textbox",
+"type": "",
+"names": [
+[
+"aria",
+"Comment"
+]
+],
+"editable": true,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 8,
+"y": 198,
+"w": 1151,
+"h": 22,
+"inView": true,
+"key": "comment"
+},
+{
+"i": 9,
+"tag": "input",
+"role": "button",
+"type": "submit",
+"names": [
+[
+"value",
+"Sign up"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 8,
+"y": 220,
+"w": 57,
+"h": 22,
+"inView": true,
+"key": "submit"
+},
+{
+"i": 10,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"text",
+"Clear form"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 69,
+"y": 220,
+"w": 74,
+"h": 22,
+"inView": true,
+"key": "reset"
+},
+{
+"i": 11,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Already have an account? Log in"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 147,
+"y": 221,
+"w": 212,
+"h": 19,
+"inView": true,
+"key": "login"
+},
+{
+"i": 12,
+"tag": "div",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Close dialog"
+],
+[
+"text",
+"×"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 8,
+"y": 242,
+"w": 1151,
+"h": 19,
+"inView": true,
+"key": "close"
+}
+]

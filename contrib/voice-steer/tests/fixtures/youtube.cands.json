@@ -1,0 +1,710 @@
+[
+{
+"i": 0,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Guide"
+],
+[
+"id",
+"guide-button"
+]
+],
+"editable": false,
+"hints": "guide-button  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 16,
+"y": 12,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "guide"
+},
+{
+"i": 1,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"title",
+"YouTube Home"
+],
+[
+"id",
+"logo"
+]
+],
+"editable": false,
+"hints": "logo  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 56,
+"y": 24,
+"w": 24,
+"h": 19,
+"inView": true,
+"key": "logo"
+},
+{
+"i": 2,
+"tag": "input",
+"role": "combobox",
+"type": "text",
+"names": [
+[
+"placeholder",
+"Search"
+],
+[
+"name",
+"search_query"
+]
+],
+"editable": true,
+"hints": " ytsearchboxcomponentinput search_query",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 88,
+"y": 6,
+"w": 180,
+"h": 22,
+"inView": true,
+"key": "search-input"
+},
+{
+"i": 3,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Search"
+]
+],
+"editable": false,
+"hints": " ytsearchboxcomponentsearchbutton ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 273,
+"y": -5,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "search-button"
+},
+{
+"i": 4,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Search with your voice"
+],
+[
+"id",
+"voice-search-button"
+]
+],
+"editable": false,
+"hints": "voice-search-button  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 88,
+"y": 28,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "voice-search"
+},
+{
+"i": 5,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Create"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 317,
+"y": 12,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "create"
+},
+{
+"i": 6,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Notifications"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 357,
+"y": 12,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "notifications"
+},
+{
+"i": 7,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Account menu"
+],
+[
+"alt",
+"Avatar image"
+],
+[
+"id",
+"avatar-btn"
+]
+],
+"editable": false,
+"hints": "avatar-btn  ",
+"popup": true,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 398,
+"y": 23,
+"w": 90,
+"h": 22,
+"inView": true,
+"key": "account"
+},
+{
+"i": 8,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Home"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 56,
+"w": 43,
+"h": 19,
+"inView": true,
+"key": "nav-home"
+},
+{
+"i": 9,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Shorts"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 75,
+"w": 46,
+"h": 19,
+"inView": true,
+"key": "nav-shorts"
+},
+{
+"i": 10,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Subscriptions"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 94,
+"w": 96,
+"h": 19,
+"inView": true,
+"key": "nav-subscriptions"
+},
+{
+"i": 11,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"You"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 113,
+"w": 27,
+"h": 19,
+"inView": true,
+"key": "nav-you"
+},
+{
+"i": 12,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"History"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 132,
+"w": 50,
+"h": 19,
+"inView": true,
+"key": "nav-history"
+},
+{
+"i": 13,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Playlists"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 151,
+"w": 59,
+"h": 19,
+"inView": true,
+"key": "nav-playlists"
+},
+{
+"i": 14,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Watch later"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 170,
+"w": 80,
+"h": 19,
+"inView": true,
+"key": "nav-watch-later"
+},
+{
+"i": 15,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Liked videos"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 0,
+"y": 189,
+"w": 89,
+"h": 19,
+"inView": true,
+"key": "nav-liked"
+},
+{
+"i": 16,
+"tag": "yt-chip",
+"role": "tab",
+"type": "",
+"names": [
+[
+"text",
+"All"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 250,
+"y": 56,
+"w": 18,
+"h": 19,
+"inView": true,
+"key": "chip-all"
+},
+{
+"i": 17,
+"tag": "yt-chip",
+"role": "tab",
+"type": "",
+"names": [
+[
+"text",
+"Music"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 272,
+"y": 56,
+"w": 42,
+"h": 19,
+"inView": true,
+"key": "chip-music"
+},
+{
+"i": 18,
+"tag": "yt-chip",
+"role": "tab",
+"type": "",
+"names": [
+[
+"text",
+"Podcasts"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 318,
+"y": 56,
+"w": 66,
+"h": 19,
+"inView": true,
+"key": "chip-podcasts"
+},
+{
+"i": 19,
+"tag": "yt-chip",
+"role": "tab",
+"type": "",
+"names": [
+[
+"text",
+"Live"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 389,
+"y": 56,
+"w": 29,
+"h": 19,
+"inView": true,
+"key": "chip-live"
+},
+{
+"i": 20,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Rust in 100 Seconds"
+],
+[
+"id",
+"video-title"
+]
+],
+"editable": false,
+"hints": "video-title  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 258,
+"y": 83,
+"w": 148,
+"h": 19,
+"inView": true,
+"key": "video-rust"
+},
+{
+"i": 21,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Fireship"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 258,
+"y": 102,
+"w": 57,
+"h": 19,
+"inView": true,
+"key": "channel-fireship"
+},
+{
+"i": 22,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Lofi hip hop radio - beats to relax/study to"
+],
+[
+"id",
+"video-title"
+]
+],
+"editable": false,
+"hints": "video-title  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 578,
+"y": 83,
+"w": 294,
+"h": 19,
+"inView": true,
+"key": "video-lofi"
+},
+{
+"i": 23,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Lofi Girl"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 578,
+"y": 102,
+"w": 55,
+"h": 19,
+"inView": true,
+"key": "channel-lofi"
+},
+{
+"i": 24,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"How Linux works: the kernel explained"
+],
+[
+"id",
+"video-title"
+]
+],
+"editable": false,
+"hints": "video-title  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 258,
+"y": 299,
+"w": 273,
+"h": 19,
+"inView": true,
+"key": "video-linux"
+},
+{
+"i": 25,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Linux Academy"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 258,
+"y": 318,
+"w": 109,
+"h": 19,
+"inView": true,
+"key": "channel-linux"
+},
+{
+"i": 26,
+"tag": "button",
+"role": "button",
+"type": "",
+"names": [
+[
+"aria",
+"Action menu"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 578,
+"y": 306,
+"w": 36,
+"h": 33,
+"inView": true,
+"key": "action-menu"
+},
+{
+"i": 27,
+"tag": "a",
+"role": "link",
+"type": "",
+"names": [
+[
+"text",
+"Show more"
+]
+],
+"editable": false,
+"hints": "  ",
+"popup": false,
+"toggle": false,
+"weak": false,
+"faint": false,
+"x": 250,
+"y": 3514,
+"w": 81,
+"h": 19,
+"inView": false,
+"key": "offscreen-more"
+}
+]
