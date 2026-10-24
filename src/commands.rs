@@ -9,7 +9,9 @@
 //! Run commands (`[commands.run.<name>]`) start a program instead of pressing
 //! a key: "hey friend" runs `friend wake`. They have their own switch, are
 //! heard in standby too, and one marked `prefix` also matches an utterance
-//! that starts with its phrase, passing the rest of it to the program.
+//! that starts with its phrase, passing the rest of it to the program. One
+//! with `while_running` is heard only while the process in that pid file
+//! lives: "friend" alone wakes friend only while friend is on screen.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -101,6 +103,10 @@ pub struct RunEntry {
     /// Flag put before the rest, e.g. "--say". Empty: the rest alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rest_flag: Option<String>,
+    /// Pid file: heard only while that process runs. `~/` and
+    /// `$XDG_RUNTIME_DIR` are expanded. Empty: always heard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub while_running: Option<String>,
 }
 
 /// A resolved run command: built-in and config merged.
@@ -111,6 +117,7 @@ pub struct RunCommand {
     pub command: Vec<String>,
     pub prefix: bool,
     pub rest_flag: Option<String>,
+    pub while_running: Option<String>,
 }
 
 fn default_run_enabled() -> bool {
@@ -136,6 +143,17 @@ pub fn builtin_run_commands() -> Vec<RunCommand> {
             command: strings(&["friend", "wake"]),
             prefix: true,
             rest_flag: Some("--say".into()),
+            while_running: None,
+        },
+        // Addressed by name while on screen: friend listens even if another
+        // agent holds the talking stick (`--take`).
+        RunCommand {
+            name: "friend-name".into(),
+            phrases: strings(&["friend"]),
+            command: strings(&["friend", "wake", "--take"]),
+            prefix: true,
+            rest_flag: Some("--say".into()),
+            while_running: Some("$XDG_RUNTIME_DIR/haios-mascot.pid".into()),
         },
         RunCommand {
             name: "friend-dismiss".into(),
@@ -143,6 +161,7 @@ pub fn builtin_run_commands() -> Vec<RunCommand> {
             command: strings(&["friend", "dismiss"]),
             prefix: false,
             rest_flag: None,
+            while_running: None,
         },
     ]
 }
@@ -166,6 +185,7 @@ impl RunCommands {
                         command: Vec::new(),
                         prefix: false,
                         rest_flag: None,
+                        while_running: None,
                     });
                     all.len() - 1
                 }
@@ -186,6 +206,9 @@ impl RunCommands {
             }
             if let Some(flag) = &entry.rest_flag {
                 run.rest_flag = Some(flag.clone()).filter(|f| !f.is_empty());
+            }
+            if let Some(pidfile) = &entry.while_running {
+                run.while_running = Some(pidfile.clone()).filter(|f| !f.is_empty());
             }
         }
         all.retain(|r| !r.command.is_empty() && r.phrases.iter().any(|p| !normalize(p).is_empty()));
@@ -352,6 +375,9 @@ impl VoiceCommands {
     /// `prefix` entry, a phrase at the start followed by more words.
     fn parse_run(&self, transcript: &str, said: &str) -> Option<Command> {
         for run in self.run.resolved() {
+            if run.while_running.as_deref().is_some_and(|f| !process_running(f)) {
+                continue;
+            }
             for phrase in run.phrases.iter().map(|p| normalize(p)) {
                 if phrase.is_empty() {
                     continue;
@@ -453,6 +479,23 @@ pub fn spawn_detached(argv: &[String]) -> std::io::Result<u32> {
     let pid = child.id();
     std::thread::spawn(move || child.wait());
     Ok(pid)
+}
+
+/// Whether the process whose pid is in `pidfile` is alive. A missing or
+/// stale file (the process crashed) is not running.
+fn process_running(pidfile: &str) -> bool {
+    let path = if let Some(rest) = pidfile.strip_prefix("~/") {
+        std::env::var("HOME").map(|h| format!("{h}/{rest}"))
+    } else if let Some(rest) = pidfile.strip_prefix("$XDG_RUNTIME_DIR") {
+        std::env::var("XDG_RUNTIME_DIR").map(|d| format!("{d}{rest}"))
+    } else {
+        Ok(pidfile.to_string())
+    };
+    let Ok(path) = path else { return false };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .is_some_and(|pid| pid > 0 && std::path::Path::new(&format!("/proc/{pid}")).exists())
 }
 
 /// What `transcript` says after `phrase` (normalized, and known to start
@@ -769,6 +812,52 @@ mod tests {
             "built-ins are not saved: {back}"
         );
         assert_eq!(toml::from_str::<VoiceCommands>(&back).unwrap(), c);
+    }
+
+    #[test]
+    fn friend_by_name_only_while_its_process_runs() {
+        let dir = std::env::temp_dir().join(format!("ears-while-running-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let alive = dir.join("alive.pid");
+        let stale = dir.join("stale.pid");
+        std::fs::write(&alive, std::process::id().to_string()).unwrap();
+        std::fs::write(&stale, "999999999").unwrap();
+        let with = |pidfile: &std::path::Path| -> VoiceCommands {
+            toml::from_str(&format!(
+                "[run.friend-name]\nwhile_running = {:?}\n",
+                pidfile.to_str().unwrap()
+            ))
+            .unwrap()
+        };
+        let on = with(&alive);
+        assert_eq!(
+            on.parse("Friend."),
+            run("friend-name", &["friend", "wake", "--take"])
+        );
+        assert_eq!(
+            on.parse("Friend, what time is it?"),
+            run(
+                "friend-name",
+                &["friend", "wake", "--take", "--say", "what time is it?"]
+            )
+        );
+        assert_eq!(
+            on.parse("Hey friend."),
+            run("friend-wake", &["friend", "wake"]),
+            "hey friend stays the summon"
+        );
+        assert_eq!(on.parse("My friend called."), None, "the name must lead");
+        assert_eq!(on.parse("Friendly fire."), None, "whole words only");
+        assert_eq!(with(&stale).parse("Friend."), None, "crashed: not on screen");
+        assert_eq!(with(&dir.join("gone.pid")).parse("Friend."), None, "not on screen");
+        let always: VoiceCommands =
+            toml::from_str("[run.friend-name]\nwhile_running = \"\"\n").unwrap();
+        assert_eq!(
+            always.parse("Friend."),
+            run("friend-name", &["friend", "wake", "--take"]),
+            "empty: always heard"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
