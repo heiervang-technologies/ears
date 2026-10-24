@@ -1,5 +1,5 @@
-// The ears LED: a small light at the bottom centre of every screen that
-// shows whether ears VAD has the mic open, and glows with your voice.
+// The ears LED: the bottom edge of every screen lights up to
+// show whether ears VAD has the mic open, and glows with your voice.
 //
 //   off        grey, no glow: nothing is recorded
 //   listening  cyan, glowing with the mic level: what you say is typed
@@ -47,8 +47,9 @@ ShellRoot {
             required property var modelData
             screen: modelData
             anchors.bottom: true
-            implicitWidth: 220
-            implicitHeight: 30
+            anchors.left: true
+            anchors.right: true
+            implicitHeight: 28
             color: "transparent"
             exclusionMode: ExclusionMode.Ignore
             WlrLayershell.layer: WlrLayer.Overlay
@@ -56,39 +57,32 @@ ShellRoot {
             WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
             mask: Region {}
 
-            Item {
-                id: led
-                anchors.horizontalCenter: parent.horizontalCenter
+            // Glow: rises from the edge, brighter as you speak.
+            property real glow: root.open ? 0.25 + 0.75 * root.level : 0
+            Behavior on glow { NumberAnimation { duration: 90 } }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                anchors.bottomMargin: 5
-                width: root.open ? 64 : 40
-                height: 4
-                Behavior on width { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-
-                // Glow: soft rings around the light, brighter as you speak.
-                property real glow: root.open ? 0.22 + 0.78 * root.level : 0
-                Behavior on glow { NumberAnimation { duration: 90 } }
-
-                Repeater {
-                    model: [18, 14, 11, 8, 5, 3]
-                    Rectangle {
-                        required property int modelData
-                        anchors.centerIn: parent
-                        width: led.width + modelData * 2
-                        height: led.height + modelData * 2
-                        radius: height / 2
-                        color: root.tone
-                        opacity: led.glow * (0.06 + 0.25 / modelData)
-                        visible: opacity > 0.01
-                    }
+                height: parent.height
+                opacity: parent.glow
+                visible: opacity > 0.01
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: "transparent" }
+                    GradientStop { position: 0.7; color: Qt.alpha(root.tone, 0.18) }
+                    GradientStop { position: 1.0; color: Qt.alpha(root.tone, 0.55) }
                 }
-                Rectangle {
-                    anchors.fill: parent
-                    radius: height / 2
-                    color: root.tone
-                    opacity: root.open ? 0.75 + 0.25 * root.level : 0.55
-                    Behavior on color { ColorAnimation { duration: 250 } }
-                }
+            }
+            // The light itself: the whole bottom edge.
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: root.open ? 3 : 2
+                color: root.tone
+                opacity: root.open ? 0.7 + 0.3 * root.level : 0.5
+                Behavior on color { ColorAnimation { duration: 250 } }
             }
         }
     }
