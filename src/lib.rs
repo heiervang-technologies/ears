@@ -19,6 +19,7 @@ pub mod pcm;
 pub mod process;
 pub mod prompt;
 pub mod state;
+pub mod subtitles;
 
 // Iteration 4: Whisper integration
 pub mod whisper;

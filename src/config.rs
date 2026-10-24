@@ -236,6 +236,10 @@ pub struct Config {
     /// (always on). Default: true.
     #[serde(default = "default_bash_terminal")]
     pub bash_terminal: bool,
+    /// VAD: turn live subtitles on at start (`ears subtitles on|off` switches
+    /// them while running; see [`crate::subtitles`]). Default: false.
+    #[serde(default)]
+    pub subtitles: bool,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -331,6 +335,7 @@ impl Config {
             bash_mode: false,
             guided_grammar: None,
             bash_terminal: default_bash_terminal(),
+            subtitles: false,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -486,6 +491,7 @@ impl Config {
             bash_mode: false,
             guided_grammar: None,
             bash_terminal: default_bash_terminal(),
+            subtitles: false,
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),

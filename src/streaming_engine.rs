@@ -218,6 +218,8 @@ pub struct StreamingEngine {
     /// Command mode while it is on: utterances route to actions by
     /// embedding instead of being transcribed.
     command_mode: Option<crate::command_mode::CommandMode>,
+    /// Live subtitles for an overlay; None until VAD sets a runtime dir.
+    subtitles: Option<crate::subtitles::Subtitles>,
 
     /// Active guided grammar (bash mode). When set, transcription is routed to
     /// the constrained chat-completions path and text filters are bypassed.
@@ -321,6 +323,7 @@ impl StreamingEngine {
             shell_probe: crate::shell_focus::focused_shell,
             command_paths: None,
             command_mode: None,
+            subtitles: None,
             typing_suspended: false,
             ghost: None,
             continuous: None,
@@ -681,6 +684,10 @@ impl StreamingEngine {
         }
 
         info!("Transcribed: {}", transcript);
+        // What was said, commands included: viewers see why a key was pressed.
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.finished(&transcript);
+        }
 
         let guided_command = self.guided_grammar.is_some();
         let transcript = match self.commands.parse(&transcript) {
@@ -937,8 +944,11 @@ impl StreamingEngine {
             .map(|shown| shown != crate::ghost::GhostDisplay::None)
     }
 
-    fn discard(&self, reason: &str) {
+    fn discard(&mut self, reason: &str) {
         info!("Segment discarded: {}", reason);
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.clear();
+        }
         self.send_event(StreamingEvent::SegmentDiscarded {
             reason: reason.to_string(),
         });
@@ -1529,6 +1539,17 @@ impl StreamingEngine {
     pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
         let _ = std::fs::remove_file(state_dir.join(crate::command_mode::MARKER));
         self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
+    }
+
+    /// Write live subtitles to `state_dir` while they are on
+    /// ([`crate::subtitles`]); `on` turns them on now (config `subtitles`).
+    pub fn set_subtitles_dir(&mut self, state_dir: &std::path::Path, on: bool) {
+        if on {
+            if let Err(e) = crate::subtitles::set(state_dir, true) {
+                warn!("Cannot turn subtitles on: {}", e);
+            }
+        }
+        self.subtitles = Some(crate::subtitles::Subtitles::new(state_dir));
     }
 
     /// Whether command mode is on.
