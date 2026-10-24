@@ -1530,3 +1530,23 @@ fn test_run_command_partial_is_frozen_or_withheld_from_the_claimant() {
         "run command partial withheld"
     );
 }
+
+#[tokio::test]
+async fn test_run_command_with_resume_runs_and_leaves_standby() {
+    let (mut engine, mut rx, _server, dir) = command_engine("Centurion.").await;
+    let out = dir.path().join("argv");
+    let script = format!("printf '%s\\n' \"$@\" > {}", out.display());
+    let toml = format!(
+        "enabled = true\n[run.centurion]\nphrases = [\"centurion\"]\nresume = true\n\
+         command = [\"sh\", \"-c\", {script:?}, \"sh\", \"stick\", \"centurion\"]\n"
+    );
+    engine.set_commands(toml::from_str(&toml).unwrap());
+    engine.standby = true;
+    let events = run_one(&mut engine, &mut rx).await;
+    assert_eq!(ran_with(&out).await, ["stick", "centurion"]);
+    assert!(!engine.is_standby(), "resume = true leaves standby");
+    assert!(
+        events.contains(&"VoiceCommand { name: \"resume\", text: \"Centurion.\" }".into()),
+        "{events:?}"
+    );
+}

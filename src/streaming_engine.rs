@@ -607,6 +607,9 @@ impl StreamingEngine {
                 self.commands.parse(&transcript)
             {
                 self.run_command(&command, &transcript).await;
+                if self.run_resumes(&command) {
+                    self.apply_wake(crate::wake::Wake::On, &transcript);
+                }
                 return Ok(());
             }
             // Not typed, published or logged: standby hears everything.
@@ -747,6 +750,18 @@ impl StreamingEngine {
     }
 
     /// Execute a spoken command in place of typing the utterance.
+    /// Whether a run command also leaves standby (`resume = true`).
+    fn run_resumes(&self, command: &crate::commands::Command) -> bool {
+        let crate::commands::Command::Run { name, .. } = command else {
+            return false;
+        };
+        self.commands
+            .run
+            .resolved()
+            .iter()
+            .any(|r| &r.name == name && r.resume)
+    }
+
     async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
         use crate::commands::Command;
         if let Command::Run { argv, .. } = command {

@@ -200,6 +200,10 @@ pub struct RunEntry {
     /// `$XDG_RUNTIME_DIR` are expanded. Empty: always heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub while_running: Option<String>,
+    /// Also leave standby, like a wake phrase: "centurion" wakes ears and
+    /// hands the talking stick to the centurion agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<bool>,
 }
 
 /// A resolved run command: built-in and config merged.
@@ -211,6 +215,7 @@ pub struct RunCommand {
     pub prefix: bool,
     pub rest_flag: Option<String>,
     pub while_running: Option<String>,
+    pub resume: bool,
 }
 
 fn default_run_enabled() -> bool {
@@ -269,6 +274,7 @@ pub fn builtin_run_commands() -> Vec<RunCommand> {
             prefix: true,
             rest_flag: Some("--say".into()),
             while_running: None,
+            resume: false,
         },
         // Addressed by name while on screen: friend listens even if another
         // agent holds the talking stick (`--take`).
@@ -279,6 +285,7 @@ pub fn builtin_run_commands() -> Vec<RunCommand> {
             prefix: true,
             rest_flag: Some("--say".into()),
             while_running: Some("$XDG_RUNTIME_DIR/haios-mascot.pid".into()),
+            resume: false,
         },
         RunCommand {
             name: "friend-dismiss".into(),
@@ -287,6 +294,7 @@ pub fn builtin_run_commands() -> Vec<RunCommand> {
             prefix: false,
             rest_flag: None,
             while_running: None,
+            resume: false,
         },
     ]
 }
@@ -311,6 +319,7 @@ impl RunCommands {
                         prefix: false,
                         rest_flag: None,
                         while_running: None,
+                        resume: false,
                     });
                     all.len() - 1
                 }
@@ -334,6 +343,9 @@ impl RunCommands {
             }
             if let Some(pidfile) = &entry.while_running {
                 run.while_running = Some(pidfile.clone()).filter(|f| !f.is_empty());
+            }
+            if let Some(resume) = entry.resume {
+                run.resume = resume;
             }
         }
         all.retain(|r| !r.command.is_empty() && r.phrases.iter().any(|p| !normalize(p).is_empty()));
