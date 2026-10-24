@@ -224,7 +224,7 @@ fn handle_subtitles(config: &ears::Config, state: Option<&str>) -> Result<()> {
         Some(other) => anyhow::bail!("expected on or off, not {other:?}"),
     };
     if state.is_some() {
-        ears::subtitles::set(&config.state_dir, on)?;
+        ears::subtitles::set(&config.state_dir, on, &config.subtitle_modes)?;
     }
     println!("Subtitles {}", if on { "on" } else { "off" });
     Ok(())

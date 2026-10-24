@@ -674,6 +674,7 @@ impl StreamingEngine {
             }
         }
         if let Some(wake) = self.wake.check_transcript(&transcript) {
+            self.subtitle_command(&transcript);
             self.apply_wake(wake, &transcript);
             return Ok(());
         }
@@ -682,19 +683,20 @@ impl StreamingEngine {
             if let Some(command @ crate::commands::Command::Run { .. }) =
                 self.commands.parse(&transcript)
             {
+                self.subtitle_command(&transcript);
                 self.run_command(&command, &transcript).await;
                 return Ok(());
             }
             // Not typed, published or logged: standby hears everything.
+            // Only captioned when subtitles are asked for in standby.
+            self.subtitle_finished(&transcript);
             debug!("Standby: utterance ignored");
             return Ok(());
         }
 
         info!("Transcribed: {}", transcript);
         // What was said, commands included: viewers see why a key was pressed.
-        if let Some(subtitles) = self.subtitles.as_mut() {
-            subtitles.finished(&transcript);
-        }
+        self.subtitle_finished(&transcript);
 
         let guided_command = self.guided_grammar.is_some();
         let transcript = match self.commands.parse(&transcript) {
@@ -875,8 +877,8 @@ impl StreamingEngine {
         let outcome = match command {
             Command::Enter | Command::SignOff => run_blocking(TextInput::send_enter),
             Command::NewLine => run_blocking(TextInput::send_new_line),
-            Command::Keys(combo) => match crate::commands::keycodes(combo) {
-                Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
+            Command::Keys(combo) => match crate::commands::key_sequence(combo) {
+                Some(sequence) => run_blocking(move || TextInput::send_key_sequence(&sequence)),
                 None => return,
             },
             Command::Literal(_)
@@ -1552,19 +1554,47 @@ impl StreamingEngine {
 
     /// Write live subtitles to `state_dir` while they are on
     /// ([`crate::subtitles`]); `on` turns them on now (config `subtitles`).
-    pub fn set_subtitles_dir(&mut self, state_dir: &std::path::Path, on: bool) {
+    pub fn set_subtitles_dir(
+        &mut self,
+        state_dir: &std::path::Path,
+        on: bool,
+        modes: &[crate::subtitles::Mode],
+    ) {
+        // A marker left on keeps on, with the configured modes.
+        let on = on || state_dir.join(crate::subtitles::MARKER).exists();
         if on {
-            if let Err(e) = crate::subtitles::set(state_dir, true) {
+            if let Err(e) = crate::subtitles::set(state_dir, true, modes) {
                 warn!("Cannot turn subtitles on: {}", e);
             }
         }
-        self.subtitles = Some(crate::subtitles::Subtitles::new(state_dir));
+        self.subtitles = Some(crate::subtitles::Subtitles::new(state_dir, modes));
+    }
+
+    /// The mode subtitles are written for.
+    fn subtitle_mode(&self) -> crate::subtitles::Mode {
+        use crate::subtitles::Mode;
+        if self.standby {
+            Mode::Standby
+        } else if self.command_mode.is_some() {
+            Mode::Command
+        } else {
+            Mode::Dictation
+        }
     }
 
     /// Show what was acted on as a command, highlighted.
     fn subtitle_command(&mut self, heard: &str) {
+        let mode = self.subtitle_mode();
         if let Some(subtitles) = self.subtitles.as_mut() {
-            subtitles.command(heard);
+            subtitles.command(mode, heard);
+        }
+    }
+
+    /// Show a committed transcript.
+    fn subtitle_finished(&mut self, heard: &str) {
+        let mode = self.subtitle_mode();
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.finished(mode, heard);
         }
     }
 

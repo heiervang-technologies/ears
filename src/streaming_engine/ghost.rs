@@ -671,7 +671,12 @@ impl StreamingEngine {
                     || crate::colour_mode::Colour::parse(&text).is_some()
                     || crate::command_mode::ENTER_PHRASES
                         .contains(&crate::commands::normalize(&text).as_str());
-                subtitles.partial(&text, frozen_bytes, command);
+                subtitles.partial(
+                    crate::subtitles::Mode::Dictation,
+                    &text,
+                    frozen_bytes,
+                    command,
+                );
             }
             if muted && !claimed {
                 continue; // typing switched off: show nothing in the target

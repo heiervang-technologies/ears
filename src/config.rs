@@ -74,6 +74,10 @@ fn default_bash_terminal() -> bool {
     true
 }
 
+fn default_subtitle_modes() -> Vec<crate::subtitles::Mode> {
+    crate::subtitles::Mode::ALL.to_vec()
+}
+
 fn default_cue_volume() -> u8 {
     100
 }
@@ -240,6 +244,10 @@ pub struct Config {
     /// them while running; see [`crate::subtitles`]). Default: false.
     #[serde(default)]
     pub subtitles: bool,
+    /// Modes subtitles show in: "standby" (orange), "dictation" (cyan,
+    /// yellow), "command" (violet). Default: all three.
+    #[serde(default = "default_subtitle_modes")]
+    pub subtitle_modes: Vec<crate::subtitles::Mode>,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -336,6 +344,7 @@ impl Config {
             guided_grammar: None,
             bash_terminal: default_bash_terminal(),
             subtitles: false,
+            subtitle_modes: default_subtitle_modes(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -492,6 +501,7 @@ impl Config {
             guided_grammar: None,
             bash_terminal: default_bash_terminal(),
             subtitles: false,
+            subtitle_modes: default_subtitle_modes(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
