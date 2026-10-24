@@ -481,6 +481,7 @@ steer = ["voice-cmd", "handle"]  # offered every other utterance first (below)
 steer_timeout_ms = 800    # slower steering loses, and the words are typed
 text_fields_only = true   # type only when a text field has focus (below)
 type_anyway = ["steam"]   # window classes that always get typing
+sleep_on_language = ["sv"]  # stand by on hearing Swedish (below)
 
 # Phrase lists add to the built-in phrases; they never remove one.
 
@@ -497,6 +498,13 @@ when the ears fcitx5 addon reports a focused text field; speech anywhere
 else is either steering or dropped, with the discard cue. Apps that never
 tell the input method about their fields can be listed in `type_anyway`.
 If the addon can't be asked, ears types as before.
+
+**Background speech.** Speech in a language you never dictate in is most
+likely a TV, a video or someone else's call. With `sleep_on_language`, an
+utterance in one of those languages is not typed and puts VAD in standby,
+with the standby cue; a wake phrase brings it back. Only Swedish (`"sv"`)
+is recognized so far, from words and letters Norwegian, Danish and English
+don't use; it takes two of them, so a stray word in a sentence doesn't.
 
 "Scratch that." deletes the last utterance ears typed, with Backspace;
 say it again to delete the one before (up to 20). It only works in the
