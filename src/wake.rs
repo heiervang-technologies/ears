@@ -3,7 +3,8 @@
 //! In standby VAD keeps listening but types nothing and runs no other
 //! command; only wake phrases are acted on: one that toggles standby
 //! ("ears vad"), one that resumes typing ("ears on") and one that enters
-//! standby ("ears off"). Deciding whether an utterance is a wake phrase
+//! standby ("ears off"). Run commands (`[commands.run]`, "hey friend") are
+//! the exception: they run in standby without leaving it. Deciding whether an utterance is a wake phrase
 //! sits behind [`WakeDetector`] so the detector can be swapped:
 //!
 //! - [`PhraseWake`] (default) matches the transcript against phrases like
