@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>YouTube-like</title>
+<style>
+ body{margin:0;font-family:sans-serif} header{display:flex;gap:8px;align-items:center;height:56px;padding:0 16px}
+ #guide{width:240px;float:left} main{margin-left:250px} .thumb{display:inline-block;width:300px;height:200px;margin:8px}
+ .icon{width:24px;height:24px;display:inline-block;background:#888}
+</style></head>
+<body>
+<header id="masthead">
+  <div id="start">
+    <button id="guide-button" aria-label="Guide" aria-pressed="false" data-t="guide"><span class="icon"></span></button>
+    <a id="logo" href="#home" title="YouTube Home" data-t="logo"><span class="icon"></span></a>
+  </div>
+  <div id="center">
+    <form class="ytSearchboxComponentSearchForm" action="#results" data-t="form">
+      <input class="ytSearchboxComponentInput" name="search_query" placeholder="Search" role="combobox" aria-autocomplete="list" autocomplete="off" data-t="search-input">
+      <button class="ytSearchboxComponentSearchButton" aria-label="Search" title="Search" data-t="search-button"><span class="icon"></span></button>
+    </form>
+    <button id="voice-search-button" aria-label="Search with your voice" data-t="voice-search"><span class="icon"></span></button>
+  </div>
+  <div id="end">
+    <button aria-label="Create" data-t="create"><span class="icon"></span></button>
+    <button aria-label="Notifications" data-t="notifications"><span class="icon"></span></button>
+    <button id="avatar-btn" aria-label="Account menu" aria-haspopup="true" data-t="account"><img alt="Avatar image" width="32" height="32"></button>
+  </div>
+</header>
+<nav id="guide">
+  <a href="#home" data-t="nav-home">Home</a><br>
+  <a href="#shorts" data-t="nav-shorts">Shorts</a><br>
+  <a href="#subs" data-t="nav-subscriptions">Subscriptions</a><br>
+  <a href="#you" data-t="nav-you">You</a><br>
+  <a href="#history" data-t="nav-history">History</a><br>
+  <a href="#playlists" data-t="nav-playlists">Playlists</a><br>
+  <a href="#watchlater" data-t="nav-watch-later">Watch later</a><br>
+  <a href="#liked" data-t="nav-liked">Liked videos</a>
+</nav>
+<main>
+  <div role="tablist">
+    <yt-chip role="tab" aria-selected="true" data-t="chip-all">All</yt-chip>
+    <yt-chip role="tab" data-t="chip-music">Music</yt-chip>
+    <yt-chip role="tab" data-t="chip-podcasts">Podcasts</yt-chip>
+    <yt-chip role="tab" data-t="chip-live">Live</yt-chip>
+  </div>
+  <div class="thumb"><a href="#v1" id="video-title" title="Rust in 100 Seconds" data-t="video-rust">Rust in 100 Seconds</a><br><a href="#c1" data-t="channel-fireship">Fireship</a></div>
+  <div class="thumb"><a href="#v2" id="video-title" title="Lofi hip hop radio - beats to relax/study to" data-t="video-lofi">Lofi hip hop radio - beats to relax/study to</a><br><a href="#c2" data-t="channel-lofi">Lofi Girl</a></div>
+  <div class="thumb"><a href="#v3" id="video-title" title="How Linux works: the kernel explained" data-t="video-linux">How Linux works: the kernel explained</a><br><a href="#c3" data-t="channel-linux">Linux Academy</a></div>
+  <div class="thumb"><button aria-label="Action menu" data-t="action-menu"><span class="icon"></span></button></div>
+  <div style="height:3000px"></div>
+  <a href="#more" data-t="offscreen-more">Show more</a>
+</main>
+</body></html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Form</title></head>
+<body>
+<form id="signup" action="#done" onsubmit="event.preventDefault(); document.title='submitted:' + new FormData(this).get('email')">
+  <label for="fname">First name</label> <input id="fname" name="first_name" data-t="first-name"><br>
+  <label for="lname">Last name</label> <input id="lname" name="last_name" data-t="last-name"><br>
+  <span id="email-label">Email address</span> <input type="email" name="email" aria-labelledby="email-label" data-t="email"><br>
+  <input type="password" name="pw" placeholder="Password" data-t="password"><br>
+  <label>Country <select name="country" data-t="country"><option>Norway</option><option>Sweden</option></select></label><br>
+  <label><input type="checkbox" name="tos" data-t="tos"> I agree to the terms of service</label><br>
+  <label><input type="checkbox" name="news" data-t="newsletter"> Send me the newsletter</label><br>
+  <textarea name="bio" placeholder="Tell us about yourself" data-t="bio"></textarea><br>
+  <div contenteditable="true" role="textbox" aria-label="Comment" data-t="comment" style="border:1px solid;min-height:20px"></div>
+  <input type="submit" value="Sign up" data-t="submit">
+  <button type="reset" data-t="reset">Clear form</button>
+  <a href="#login" data-t="login">Already have an account? Log in</a>
+  <div role="button" tabindex="0" aria-label="Close dialog" data-t="close">&times;</div>
+  <input type="hidden" name="csrf" value="x" data-t="hidden">
+  <button style="display:none" data-t="invisible">Sign up hidden</button>
+</form>
+</body></html>
