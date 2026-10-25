@@ -615,6 +615,9 @@ impl StreamingEngine {
             Some(crate::commands::Command::Literal(rest)) => rest,
             Some(command) => {
                 self.run_command(&command, &transcript).await;
+                if command == crate::commands::Command::SignOff {
+                    self.apply_wake(crate::wake::Wake::Off, &transcript);
+                }
                 return Ok(());
             }
             None => transcript,
@@ -765,7 +768,7 @@ impl StreamingEngine {
         }
         let start = Instant::now();
         let outcome = match command {
-            Command::Enter => run_blocking(TextInput::send_enter),
+            Command::Enter | Command::SignOff => run_blocking(TextInput::send_enter),
             Command::NewLine => run_blocking(TextInput::send_new_line),
             Command::Keys(combo) => match crate::commands::keycodes(combo) {
                 Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),

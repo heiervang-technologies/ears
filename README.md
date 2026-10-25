@@ -469,6 +469,7 @@ In VAD mode a whole utterance can be a command instead of text:
 enabled = true
 enter = ["over"]          # "Enter." or "Over." on its own presses Enter (adds to the built-in "enter")
 new_line = ["new line"]   # Shift+Enter: a new line without sending
+sign_off = ["over and out"]  # Enter, then standby
 undo = ["scratch that"]   # delete the last dictated utterance
 back = ["back"]           # "Back 3." / "Back three." deletes the last 3 words (1-10)
 backtrack = ["backtrack", "back track"]  # delete the last dictated sentence

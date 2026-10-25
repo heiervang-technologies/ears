@@ -21,6 +21,10 @@ pub struct VoiceCommands {
     /// Phrases that press Enter.
     #[serde(default = "default_enter", deserialize_with = "more_enter")]
     pub enter: Vec<String>,
+    /// Phrases that press Enter and then put VAD in standby ("over and
+    /// out").
+    #[serde(default = "default_sign_off", deserialize_with = "more_sign_off")]
+    pub sign_off: Vec<String>,
     /// Phrases that press Shift+Enter (a new line without sending, in chat
     /// boxes and agent prompts).
     #[serde(default = "default_new_line", deserialize_with = "more_new_line")]
@@ -167,6 +171,7 @@ macro_rules! accumulate {
 
 accumulate! {
     more_enter => default_enter,
+    more_sign_off => default_sign_off,
     more_new_line => default_new_line,
     more_undo => default_undo,
     more_back => default_back,
@@ -183,6 +188,10 @@ fn default_enter() -> Vec<String> {
 
 fn default_new_line() -> Vec<String> {
     vec!["new line".into()]
+}
+
+fn default_sign_off() -> Vec<String> {
+    vec!["over and out".into()]
 }
 
 fn default_undo() -> Vec<String> {
@@ -229,6 +238,7 @@ impl Default for VoiceCommands {
         Self {
             enabled: false,
             enter: default_enter(),
+            sign_off: default_sign_off(),
             new_line: default_new_line(),
             undo: default_undo(),
             back: default_back(),
@@ -253,6 +263,8 @@ impl Default for VoiceCommands {
 pub enum Command {
     /// Press Enter.
     Enter,
+    /// Press Enter, then stand by.
+    SignOff,
     /// Press Shift+Enter.
     NewLine,
     /// Delete the last dictated utterance.
@@ -272,6 +284,7 @@ impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Command::Enter => "enter",
+            Command::SignOff => "sign_off",
             Command::NewLine => "new_line",
             Command::Undo => "undo",
             Command::Back(_) => "back",
@@ -327,6 +340,9 @@ impl VoiceCommands {
         let is = |phrases: &[String]| phrases.iter().any(|p| normalize(p) == said);
         if is(&self.enter) {
             return Some(Command::Enter);
+        }
+        if is(&self.sign_off) {
+            return Some(Command::SignOff);
         }
         if is(&self.new_line) {
             return Some(Command::NewLine);
@@ -578,7 +594,8 @@ mod tests {
         assert_eq!(c.parse("  over! "), Some(Command::Enter));
         assert_eq!(c.parse("Enter"), Some(Command::Enter));
         assert_eq!(c.parse("It's over now."), None);
-        assert_eq!(c.parse("Over and out."), None);
+        assert_eq!(c.parse("Over and out."), Some(Command::SignOff));
+        assert_eq!(c.parse("Over and out of time."), None);
         assert_eq!(c.parse("Press enter to continue."), None);
     }
 

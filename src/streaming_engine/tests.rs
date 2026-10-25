@@ -984,11 +984,11 @@ fn test_ghost_command_partial_is_drawn_in_accept_colour() {
         .unwrap();
     ghost
         .partial_tx
-        .send(Partial::plain(current, Ok("Over and out".into())))
+        .send(Partial::plain(current, Ok("Over the hill".into())))
         .unwrap();
     engine.ghost_poll_partials();
     assert_eq!(next_cmd(&lines), "F 5 Over.", "whole command is frozen");
-    assert_eq!(next_cmd(&lines), "P Over and out", "dictation is not");
+    assert_eq!(next_cmd(&lines), "P Over the hill", "dictation is not");
 }
 
 #[tokio::test]
@@ -1364,4 +1364,22 @@ async fn test_a_language_you_dont_dictate_in_stands_by() {
     });
     run_one(&mut engine, &mut rx).await;
     assert!(!engine.is_standby());
+}
+
+#[tokio::test]
+async fn test_over_and_out_sends_and_stands_by() {
+    let (mut engine, mut rx, _server, _dir) = command_engine("Over and out.").await;
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby());
+    assert!(engine.accumulated_text.is_empty(), "it is not typed");
+    let sent = events
+        .iter()
+        .position(|e| e == "VoiceCommand { name: \"sign_off\", text: \"Over and out.\" }");
+    let standby = events
+        .iter()
+        .position(|e| e == "VoiceCommand { name: \"standby\", text: \"Over and out.\" }");
+    assert!(
+        sent.is_some() && sent < standby,
+        "Enter, then standby: {events:?}"
+    );
 }
