@@ -104,6 +104,42 @@ impl WakeDetector for PhraseWake {
     }
 }
 
+/// Whether `text` reads as `language` (a code or English name: "sv",
+/// "swedish"). Used to stand by when VAD picks up speech in a language
+/// you don't dictate in, typically a TV or a call in the background.
+/// Only Swedish is known; any other language never matches.
+///
+/// Even with English pinned, Qwen3-ASR writes Swedish speech out as
+/// Swedish, so the transcript tells. It counts words only Swedish uses
+/// (not Norwegian, Danish or English: "jag", "inte", "och"...) and a
+/// Swedish "ä"/"ö" without a Norwegian "æ"/"ø": two of those make it
+/// Swedish, so one stray word in English dictation does not.
+pub fn sounds_like(language: &str, text: &str) -> bool {
+    if !matches!(
+        language.to_lowercase().as_str(),
+        "sv" | "swedish" | "svenska"
+    ) {
+        return false;
+    }
+    // Not "vad": in English dictation that is the VAD.
+    const SWEDISH_ONLY: &[&str] = &[
+        "jag", "inte", "och", "är", "att", "hur", "varför", "mycket", "också", "någon", "något",
+        "några", "hon", "honom", "här", "där", "säger", "själv", "måste", "sedan", "mig", "dig",
+        "vill", "kanske", "nej", "tack", "blev", "från", "när", "inget",
+    ];
+    let lower = text.to_lowercase();
+    let mut score = lower
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|word| SWEDISH_ONLY.contains(word))
+        .count();
+    let swedish_letters = lower.contains(['ä', 'ö']);
+    let norwegian_letters = lower.contains(['æ', 'ø']);
+    if swedish_letters && !norwegian_letters {
+        score += 1;
+    }
+    score >= 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +160,29 @@ mod tests {
         assert_eq!(wake.check_transcript("I turned ears vad off."), None);
         assert_eq!(wake.check_transcript("Ears on the table."), None);
         assert_eq!(wake.check_transcript(""), None);
+    }
+
+    #[test]
+    fn swedish_is_told_from_english_and_norwegian() {
+        let heard = "Hej, vad gjorde du idag? Jag tänkte att vi kunde gå och handla.";
+        assert!(sounds_like("sv", heard));
+        assert!(sounds_like("Swedish", "Det är inte så farligt."));
+        assert!(sounds_like("sv", "jag vet inte"));
+        assert!(!sounds_like(
+            "sv",
+            "I was thinking we could go shopping later."
+        ));
+        assert!(!sounds_like(
+            "sv",
+            "Jeg tror ikke det er så farlig, vi får se."
+        ));
+        assert!(!sounds_like(
+            "sv",
+            "Hun sa at hun skulle komme etter middag."
+        ));
+        assert!(!sounds_like("sv", "Ask Jag to turn the vad off."));
+        assert!(!sounds_like("sv", "and"));
+        assert!(!sounds_like("de", heard));
     }
 
     #[test]

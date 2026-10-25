@@ -78,6 +78,11 @@ pub struct VoiceCommands {
     /// input method about their text fields.
     #[serde(default)]
     pub type_anyway: Vec<String>,
+    /// Languages that put VAD in standby when heard, e.g. `["sv"]`: speech
+    /// you don't dictate in is most likely from the background. The
+    /// utterance is not typed. See `crate::wake::sounds_like`.
+    #[serde(default)]
+    pub sleep_on_language: Vec<String>,
 }
 
 /// What to do with an utterance that is not an ears command.
@@ -238,6 +243,7 @@ impl Default for VoiceCommands {
             steer_timeout_ms: default_steer_timeout_ms(),
             text_fields_only: false,
             type_anyway: Vec::new(),
+            sleep_on_language: Vec::new(),
         }
     }
 }

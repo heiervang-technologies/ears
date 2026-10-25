@@ -565,6 +565,22 @@ impl StreamingEngine {
             return Ok(());
         }
 
+        // Checked before the filters, which strip what tells languages apart.
+        // Only with commands on: the wake phrases are the way back.
+        if self.commands.enabled && !self.standby && self.guided_grammar.is_none() {
+            let heard = &transcript;
+            if let Some(language) = self
+                .commands
+                .sleep_on_language
+                .iter()
+                .find(|language| crate::wake::sounds_like(language, heard))
+            {
+                info!("Heard {}, standing by: {:?}", language, transcript);
+                self.apply_wake(crate::wake::Wake::Off, &transcript);
+                return Ok(());
+            }
+        }
+
         // Apply text filters (lowercase, remove punctuation, strict alphabet).
         // Bash mode bypasses them: the grammar already guarantees valid shell
         // syntax, and the filters would mangle it (lowercase/strip punctuation).

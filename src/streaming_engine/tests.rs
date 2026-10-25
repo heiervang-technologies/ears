@@ -1336,3 +1336,32 @@ async fn test_ears_off_and_on_switch_one_way_and_are_never_typed() {
     run_one(&mut engine, &mut rx).await;
     assert!(!engine.is_standby());
 }
+
+#[tokio::test]
+async fn test_a_language_you_dont_dictate_in_stands_by() {
+    let swedish = "Jag tänkte att vi kunde gå och handla mat senare.";
+    let (mut engine, mut rx, _server, _dir) = command_engine(swedish).await;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        sleep_on_language: vec!["sv".into()],
+        ..Default::default()
+    });
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.is_standby());
+    assert!(engine.accumulated_text.is_empty(), "and is not typed");
+    assert!(
+        events.contains(&format!(
+            "VoiceCommand {{ name: \"standby\", text: {swedish:?} }}"
+        )),
+        "{events:?}"
+    );
+
+    // Without the setting it is dictation like any other.
+    let (mut engine, mut rx, _server, _dir) = command_engine(swedish).await;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        ..Default::default()
+    });
+    run_one(&mut engine, &mut rx).await;
+    assert!(!engine.is_standby());
+}
