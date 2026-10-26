@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Run commands: `[commands.run.<name>]` maps spoken phrases to a program,
+  started detached, in every VAD mode including standby and with typing off,
+  and independent of `[commands] enabled`. Built in: "hey friend" runs
+  `friend wake` (prefix: the rest goes to `--say`) and "bye friend" runs
+  `friend dismiss`. The phrase is never typed or published as text, only as
+  a `VoiceCommand` event.
 - `live_rollback_words` and `live_min_step_ms` config options tune continuous
   live decoding: how many trailing words stay revisable, and how much new
   audio the streaming server waits for between decodes.

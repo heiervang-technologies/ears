@@ -602,6 +602,13 @@ impl StreamingEngine {
             return Ok(());
         }
         if self.standby {
+            // Only run commands act in standby; they do not resume typing.
+            if let Some(command @ crate::commands::Command::Run { .. }) =
+                self.commands.parse(&transcript)
+            {
+                self.run_command(&command, &transcript).await;
+                return Ok(());
+            }
             // Not typed, published or logged: standby hears everything.
             debug!("Standby: utterance ignored");
             return Ok(());
@@ -742,6 +749,10 @@ impl StreamingEngine {
     /// Execute a spoken command in place of typing the utterance.
     async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
         use crate::commands::Command;
+        if let Command::Run { argv, .. } = command {
+            self.run_program(command, argv, heard).await;
+            return;
+        }
         if self.typing_mode == TypingMode::None || self.typing_suspended {
             // No key is pressed, but the command is still published, so
             // socket consumers (talking-stick, fay) never lose an utterance.
@@ -774,7 +785,11 @@ impl StreamingEngine {
                 Some(codes) => run_blocking(move || TextInput::send_keys(&codes)),
                 None => return,
             },
-            Command::Literal(_) | Command::Undo | Command::Back(_) | Command::Backtrack => return,
+            Command::Literal(_)
+            | Command::Undo
+            | Command::Back(_)
+            | Command::Backtrack
+            | Command::Run { .. } => return,
         }
         .map(|()| 0)
         .map_err(|e| {
@@ -791,6 +806,44 @@ impl StreamingEngine {
                 text: heard.to_string(),
             });
         }
+    }
+
+    /// Start a run command's program (`[commands.run]`). Nothing is typed;
+    /// the command is published in every mode, standby included, even if
+    /// the program cannot be started.
+    async fn run_program(
+        &mut self,
+        command: &crate::commands::Command,
+        argv: &[String],
+        heard: &str,
+    ) {
+        if self.standby || self.typing_mode == TypingMode::None || self.typing_suspended {
+            self.ghost_clear();
+        } else {
+            self.ghost_accept(heard).await;
+        }
+        match crate::commands::spawn_detached(argv) {
+            Ok(pid) => {
+                info!(
+                    "Voice command: {} ran {:?} (pid {}, {:?})",
+                    command.label(),
+                    argv,
+                    pid,
+                    heard
+                );
+                crate::desktop::AudioFeedback::beep_done().ok();
+            }
+            Err(e) => warn!(
+                "Voice command {}: cannot run {:?}: {}",
+                command.label(),
+                argv,
+                e
+            ),
+        }
+        self.send_event(StreamingEvent::VoiceCommand {
+            name: command.label(),
+            text: heard.to_string(),
+        });
     }
 
     /// Report a segment that typed nothing.
