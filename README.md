@@ -567,6 +567,7 @@ command = ["playerctl", "play"]   # program and arguments, no shell
 prefix = false                    # true: "play music <rest>" also runs, rest appended
 rest_flag = ""                    # with prefix: put before the rest, e.g. "--say"
 while_running = ""                # pid file: heard only while that process lives
+resume = false                    # true: also leave standby, like a wake phrase
 
 [commands.run.friend-wake]
 phrases = ["yo friend"]           # overrides only the fields you set

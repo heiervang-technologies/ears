@@ -597,6 +597,18 @@ impl StreamingEngine {
             return Ok(());
         }
 
+        // A run command with `resume = true` is a wake phrase that also acts,
+        // so it comes before the wake phrases: config can't remove a built-in
+        // one ("ears on"), but can give it an action this way.
+        if let Some(command @ crate::commands::Command::Run { .. }) =
+            self.commands.parse(&transcript)
+        {
+            if self.run_resumes(&command) {
+                self.run_command(&command, &transcript).await;
+                self.apply_wake(crate::wake::Wake::On, &transcript);
+                return Ok(());
+            }
+        }
         if let Some(wake) = self.wake.check_transcript(&transcript) {
             self.apply_wake(wake, &transcript);
             return Ok(());
@@ -747,6 +759,18 @@ impl StreamingEngine {
     }
 
     /// Execute a spoken command in place of typing the utterance.
+    /// Whether a run command also leaves standby (`resume = true`).
+    fn run_resumes(&self, command: &crate::commands::Command) -> bool {
+        let crate::commands::Command::Run { name, .. } = command else {
+            return false;
+        };
+        self.commands
+            .run
+            .resolved()
+            .iter()
+            .any(|r| &r.name == name && r.resume)
+    }
+
     async fn run_command(&mut self, command: &crate::commands::Command, heard: &str) {
         use crate::commands::Command;
         if let Command::Run { argv, .. } = command {
