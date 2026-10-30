@@ -133,6 +133,14 @@ pub async fn start_vad_pipeline(
     let health_monitor = crate::health::HealthMonitor::start(&config.state_dir)?;
     let health = health_monitor.health();
     health.device(&config.device);
+    // The check above reached the server. Keep `asr` in vad-health.json
+    // current while nobody speaks (the server may be on another machine).
+    health.asr_ok(crate::health::AsrPath::Http);
+    let asr_probe = health.spawn_asr_probe(
+        server_url.to_string(),
+        config.api_key.clone(),
+        crate::health::ASR_PROBE_INTERVAL,
+    );
 
     // Audio channel
     let (audio_tx, mut audio_rx) = crate::pipeline::audio_channel();
@@ -179,6 +187,7 @@ pub async fn start_vad_pipeline(
         shutdown_rx,
         crate::pipeline::until_capture_stops(capture_status, engine_event_tx, async move {
             let _health_monitor = health_monitor;
+            let _asr_probe = asr_probe;
             loop {
                 tokio::select! {
                     audio = audio_rx.recv() => {

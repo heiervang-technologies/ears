@@ -234,9 +234,11 @@ via `vad.pid` + `kill(pid,0)`.
 `threshold`, `candidate_frames`, `speaking`, `rejected_candidates`,
 `last_rejected_frames`, `last_rejection_probability`, `last_rejection_peak`,
 `gain`, `last_segment_mean_probability`, `dropped_segments`), and failures
-(`capture_error`, `typing_paused`). `problem()` ranks: pipeline stopped,
-capture stopped, no audio, typing paused, slow stage (5 s, 20 s while
-transcribing), detection stalled, backlog.
+(`capture_error`, `typing_paused`), and server reachability (`asr`:
+`state`, `path`, `last_ok_ms`, `last_error`; see the README). `problem()`
+ranks: pipeline stopped, capture stopped, no audio, typing paused,
+transcription server unreachable, slow stage (5 s, 20 s while transcribing),
+detection stalled, backlog. All times are CLOCK_MONOTONIC milliseconds.
 
 ---
 

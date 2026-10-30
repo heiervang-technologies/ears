@@ -12,14 +12,20 @@
 //!
 //! Errors reuse [`ContinuousError`]: `Unsupported` means the server has no
 //! stream endpoint (404 or refused upgrade, no `ready`, an `unsupported`
-//! error) and the caller should use the per-tick HTTP decoder for the rest of
-//! the process; `Failed` is transient.
+//! error) and the caller should use the per-tick HTTP decoder until it tries
+//! the stream again much later; `Failed` is transient.
+//!
+//! The server may be on another machine. The socket runs without Nagle, so
+//! small frames (`end`, short audio) leave at once, and a keepalive ping
+//! notices a peer that vanished without closing (a reboot, a dropped Wi-Fi
+//! link): without it a half-open socket looks healthy until TCP gives up,
+//! many minutes later.
 
 use crate::continuous::{ContinuousError, DecoderState, ASR_TAG};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message};
 use tracing::debug;
@@ -29,6 +35,29 @@ pub const PROTOCOL: u64 = 1;
 
 /// How long the server may take to upgrade and then to send `ready`.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A ping goes out this often while connected.
+pub const PING_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Nothing at all from the server for this long (pongs included) means the
+/// connection is dead.
+pub const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Keepalive timing of one connection.
+#[derive(Debug, Clone, Copy)]
+pub struct Keepalive {
+    pub interval: Duration,
+    pub timeout: Duration,
+}
+
+impl Default for Keepalive {
+    fn default() -> Self {
+        Self {
+            interval: PING_INTERVAL,
+            timeout: KEEPALIVE_TIMEOUT,
+        }
+    }
+}
 
 /// Audio waiting for the socket beyond this means it cannot keep up (about
 /// two minutes of 16 kHz PCM16); the session closes instead of growing.
@@ -206,6 +235,7 @@ pub fn stream_url(server_url: &str) -> Result<String, ContinuousError> {
 
 enum Outgoing {
     Text(String),
+    Ping,
     Audio { utterance: u64, bytes: Vec<u8> },
 }
 
@@ -215,6 +245,8 @@ struct OutboxState {
     queued_audio: usize,
     /// Why nothing more may be queued.
     closed: Option<String>,
+    /// When the server last sent anything (a pong counts).
+    heard: Option<Instant>,
 }
 
 /// Commands for the socket task. Only ever locked briefly, never across an
@@ -307,6 +339,25 @@ impl Outbox {
     fn closed(&self) -> Option<String> {
         self.lock().closed.clone()
     }
+
+    fn ping(&self) -> bool {
+        let mut s = self.lock();
+        if s.closed.is_some() {
+            return false;
+        }
+        s.items.push_back(Outgoing::Ping);
+        drop(s);
+        self.notify.notify_one();
+        true
+    }
+
+    fn heard(&self) {
+        self.lock().heard = Some(Instant::now());
+    }
+
+    fn last_heard(&self) -> Option<Instant> {
+        self.lock().heard
+    }
 }
 
 /// One connection speaking the ears stream protocol.
@@ -327,6 +378,15 @@ type Socket =
 impl StreamSession {
     /// Connect and wait for `ready` (each step bounded by [`READY_TIMEOUT`]).
     pub async fn connect(server_url: &str, api_key: Option<&str>) -> Result<Self, ContinuousError> {
+        Self::connect_with(server_url, api_key, Keepalive::default()).await
+    }
+
+    /// [`Self::connect`] with explicit keepalive timing.
+    pub async fn connect_with(
+        server_url: &str,
+        api_key: Option<&str>,
+        keepalive: Keepalive,
+    ) -> Result<Self, ContinuousError> {
         let url = stream_url(server_url)?;
         let mut request = url
             .as_str()
@@ -338,22 +398,21 @@ impl StreamSession {
                 .map_err(|_| ContinuousError::Failed("API key is not a valid header".into()))?;
             request.headers_mut().insert("Authorization", value);
         }
-        let mut socket =
-            match tokio::time::timeout(READY_TIMEOUT, tokio_tungstenite::connect_async(request))
-                .await
-            {
-                Err(_) => return Err(ContinuousError::Failed(format!("{url}: upgrade timed out"))),
-                // 404: the plugin is not installed; any other answer but 101 is
-                // a server that will not stream either.
-                Ok(Err(tungstenite::Error::Http(response))) => {
-                    return Err(ContinuousError::Unsupported(format!(
-                        "{url}: upgrade refused ({})",
-                        response.status()
-                    )))
-                }
-                Ok(Err(e)) => return Err(ContinuousError::Failed(format!("{url}: {e}"))),
-                Ok(Ok((socket, _))) => socket,
-            };
+        // Nagle off: an `end` must not wait for the ACK of the last audio.
+        let connect = tokio_tungstenite::connect_async_with_config(request, None, true);
+        let mut socket = match tokio::time::timeout(READY_TIMEOUT, connect).await {
+            Err(_) => return Err(ContinuousError::Failed(format!("{url}: upgrade timed out"))),
+            // 404: the plugin is not installed; any other answer but 101 is
+            // a server that will not stream either.
+            Ok(Err(tungstenite::Error::Http(response))) => {
+                return Err(ContinuousError::Unsupported(format!(
+                    "{url}: upgrade refused ({})",
+                    response.status()
+                )))
+            }
+            Ok(Err(e)) => return Err(ContinuousError::Failed(format!("{url}: {e}"))),
+            Ok(Ok((socket, _))) => socket,
+        };
         let ready = match tokio::time::timeout(READY_TIMEOUT, wait_ready(&mut socket)).await {
             Ok(result) => result?,
             Err(_) => {
@@ -363,8 +422,9 @@ impl StreamSession {
             }
         };
         let outbox = Arc::new(Outbox::default());
+        outbox.heard();
         let (tx, events) = mpsc::unbounded_channel();
-        let task = tokio::spawn(run(socket, outbox.clone(), tx));
+        let task = tokio::spawn(run(socket, outbox.clone(), tx, keepalive));
         Ok(Self {
             ready,
             outbox,
@@ -440,6 +500,19 @@ impl StreamSession {
     pub fn is_open(&self) -> bool {
         self.outbox.closed().is_none() && !self.task.is_finished()
     }
+
+    /// How long since the server last sent anything (a pong counts).
+    pub fn silent_for(&self) -> Duration {
+        self.outbox
+            .last_heard()
+            .map_or(Duration::MAX, |t| t.elapsed())
+    }
+
+    /// Ping now instead of at the next keepalive tick, to find out sooner
+    /// whether the server is still there.
+    pub fn probe(&self) -> bool {
+        self.outbox.ping()
+    }
 }
 
 impl Drop for StreamSession {
@@ -496,30 +569,58 @@ async fn wait_ready(socket: &mut Socket) -> Result<Ready, ContinuousError> {
 }
 
 /// Own the socket: forward server frames as events, drain the outbox into
-/// it. Ends with exactly one [`StreamEvent::Closed`].
-async fn run(mut socket: Socket, outbox: Arc<Outbox>, events: mpsc::UnboundedSender<StreamEvent>) {
+/// it, ping on `keepalive.interval` and give up after `keepalive.timeout`
+/// without a word from the server. Ends with exactly one
+/// [`StreamEvent::Closed`].
+async fn run(
+    mut socket: Socket,
+    outbox: Arc<Outbox>,
+    events: mpsc::UnboundedSender<StreamEvent>,
+    keepalive: Keepalive,
+) {
+    let mut ticks = tokio::time::interval_at(
+        tokio::time::Instant::now() + keepalive.interval,
+        keepalive.interval,
+    );
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let reason = 'conn: loop {
         tokio::select! {
-            message = socket.next() => match message {
-                Some(Ok(Message::Text(text))) => {
-                    match serde_json::from_str::<Incoming>(&text) {
-                        Ok(incoming) => {
-                            if let Some(event) = incoming.into_event() {
-                                let _ = events.send(event);
-                            }
-                        }
-                        Err(e) => debug!("Stream: unreadable frame ({}): {}", e, text),
-                    }
+            message = socket.next() => {
+                if matches!(message, Some(Ok(_))) {
+                    outbox.heard();
                 }
-                Some(Ok(Message::Close(_))) | None => break 'conn "closed by server".to_string(),
-                Some(Ok(_)) => {}
-                Some(Err(e)) => break 'conn e.to_string(),
+                match message {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<Incoming>(&text) {
+                            Ok(incoming) => {
+                                if let Some(event) = incoming.into_event() {
+                                    let _ = events.send(event);
+                                }
+                            }
+                            Err(e) => debug!("Stream: unreadable frame ({}): {}", e, text),
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break 'conn "closed by server".to_string(),
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => break 'conn e.to_string(),
+                }
+            },
+            _ = ticks.tick() => {
+                let silent = outbox.last_heard().map_or(Duration::MAX, |t| t.elapsed());
+                if silent >= keepalive.timeout {
+                    let _ = socket.close(None).await;
+                    break 'conn "keepalive timeout".to_string();
+                }
+                if let Err(e) = socket.send(Message::Ping(Vec::new())).await {
+                    break 'conn e.to_string();
+                }
             },
             _ = outbox.notify.notified() => {
                 let mut wrote = false;
                 while let Some(item) = outbox.pop() {
                     let message = match item {
                         Outgoing::Text(text) => Message::Text(text),
+                        Outgoing::Ping => Message::Ping(Vec::new()),
                         Outgoing::Audio { bytes, .. } => Message::Binary(bytes),
                     };
                     if let Err(e) = socket.feed(message).await {
@@ -561,6 +662,9 @@ pub(crate) mod fake {
         NotFound,
         /// `error unsupported`, then close.
         Unsupported,
+        /// `ready`, then never read again, so pings go unanswered (a peer
+        /// that vanished without closing the connection).
+        Deaf,
     }
 
     /// Frame sent by a test to make the server drop the TCP connection.
@@ -700,6 +804,12 @@ pub(crate) mod fake {
                 let _ = ws.send(Message::Text(err.to_string())).await;
                 let _ = ws.close(None).await;
                 return;
+            }
+            Mode::Deaf => {
+                let ready = serde_json::json!({"type": "ready", "protocol": 1,
+                    "model": "Qwen/Qwen3-ASR-1.7B", "sample_rate": 16000, "max_audio_ms": 90000});
+                let _ = ws.send(Message::Text(ready.to_string())).await;
+                std::future::pending::<()>().await;
             }
             Mode::Silent | Mode::NotFound => {}
         }
@@ -935,5 +1045,39 @@ mod tests {
         assert!(!session.is_open());
         assert!(!session.push(1, &[0; 4]));
         assert_eq!(session.recv().await, None);
+    }
+
+    fn fast_keepalive() -> Keepalive {
+        Keepalive {
+            interval: Duration::from_millis(50),
+            timeout: Duration::from_millis(250),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_that_stops_answering_is_closed_by_the_keepalive() {
+        let server = FakeServer::start(Mode::Deaf).await;
+        let mut session = StreamSession::connect_with(&server.url, None, fast_keepalive())
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), session.recv())
+            .await
+            .expect("keepalive never fired");
+        assert_eq!(event, Some(StreamEvent::Closed("keepalive timeout".into())));
+        assert!(!session.is_open());
+    }
+
+    #[tokio::test]
+    async fn an_answering_server_keeps_the_connection() {
+        let server = FakeServer::start(Mode::Normal).await;
+        let mut session = StreamSession::connect_with(&server.url, None, fast_keepalive())
+            .await
+            .unwrap();
+        // Several timeouts long: only the pongs keep it alive.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(session.is_open());
+        assert!(session.silent_for() < Duration::from_millis(250));
+        assert!(session.probe());
+        assert_eq!(session.try_recv(), None);
     }
 }

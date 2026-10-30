@@ -23,6 +23,131 @@ pub enum Stage {
     Stopped,
 }
 
+/// Whether the transcription server can be reached, as last observed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrState {
+    /// The live stream is up, or (no stream in use) the server answers.
+    Ok,
+    /// The live stream is down or missing, but plain HTTP requests work.
+    Degraded,
+    /// The last contact with the server failed and none succeeded since.
+    Down,
+    /// No contact yet.
+    Unknown,
+}
+
+/// How the server was last reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrPath {
+    Stream,
+    Http,
+}
+
+/// The `asr` object of `vad-health.json`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AsrHealth {
+    pub state: AsrState,
+    pub path: Option<AsrPath>,
+    /// Last successful contact, on the same clock as `updated_monotonic_ms`.
+    pub last_ok_ms: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+/// What the live stream connection (ears stream protocol) is doing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StreamStatus {
+    /// Live decoding does not use the stream.
+    #[default]
+    Unused,
+    Connecting,
+    Up,
+    /// Lost, refused, or the server has no stream endpoint.
+    Down,
+}
+
+/// Observations behind [`AsrHealth`].
+#[derive(Clone, Debug, Default)]
+struct AsrTrack {
+    stream: StreamStatus,
+    /// The stream was up or down at least once (a first connect in progress
+    /// does not count as degraded).
+    stream_settled: bool,
+    last_ok_ms: Option<u64>,
+    last_ok_path: Option<AsrPath>,
+    last_error: Option<String>,
+    failing: bool,
+}
+
+impl AsrTrack {
+    fn report(&self) -> AsrHealth {
+        let stream_down = match self.stream {
+            StreamStatus::Unused => false,
+            StreamStatus::Connecting => self.stream_settled,
+            StreamStatus::Up => false,
+            StreamStatus::Down => true,
+        };
+        let (state, path) = if self.stream == StreamStatus::Up {
+            (AsrState::Ok, Some(AsrPath::Stream))
+        } else if self.failing {
+            (AsrState::Down, None)
+        } else if self.last_ok_ms.is_none() {
+            (AsrState::Unknown, None)
+        } else if stream_down {
+            (AsrState::Degraded, Some(AsrPath::Http))
+        } else {
+            (AsrState::Ok, self.last_ok_path)
+        };
+        AsrHealth {
+            state,
+            path,
+            last_ok_ms: self.last_ok_ms,
+            last_error: self.last_error.clone(),
+        }
+    }
+}
+
+/// While the live stream is not up, the server is probed this often.
+pub const ASR_PROBE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A probe slower than this counts as a failure.
+pub const ASR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// `GET /health` (vLLM, whisper.cpp), else `GET /v1/models` (cloud APIs).
+/// A connection error or a server error fails at once.
+pub async fn probe_asr(
+    client: &reqwest::Client,
+    server_url: &str,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    let base = server_url.trim_end_matches('/');
+    let mut last = String::new();
+    for path in ["/health", "/v1/models"] {
+        let mut request = client.get(format!("{base}{path}"));
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        match request.send().await {
+            Ok(r) if r.status().is_success() => return Ok(()),
+            Ok(r) if r.status().is_server_error() => return Err(format!("{path}: {}", r.status())),
+            Ok(r) => last = format!("{path}: {}", r.status()),
+            Err(e) if e.is_timeout() => return Err(format!("{path}: timed out")),
+            Err(e) => return Err(format!("{path}: {e}")),
+        }
+    }
+    Err(last)
+}
+
+/// Background probe of the transcription server; stops when dropped.
+pub struct AsrProbe(tokio::task::JoinHandle<()>);
+
+impl Drop for AsrProbe {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// All times are CLOCK_MONOTONIC milliseconds, comparable by local consumers.
 pub fn monotonic_ms() -> u64 {
     let mut ts = libc::timespec {
@@ -79,8 +204,12 @@ pub struct HealthSnapshot {
     pub clipped_samples: u64,
     /// Microphone quality problem, if any. `ears mic-check` explains more.
     pub mic_warning: Option<&'static str>,
+    /// Transcription server reachability.
+    pub asr: AsrHealth,
     #[serde(skip)]
     levels: MicLevels,
+    #[serde(skip)]
+    asr_track: AsrTrack,
 }
 
 /// Smoothed input levels behind [`HealthSnapshot::mic_warning`].
@@ -165,6 +294,9 @@ impl HealthSnapshot {
         }
         if self.typing_paused {
             return Some("typing paused after output error");
+        }
+        if self.asr.state == AsrState::Down {
+            return Some("transcription server unreachable");
         }
         let slow_after_ms = if self.stage == Stage::Transcribing {
             20_000
@@ -264,6 +396,83 @@ impl PipelineHealth {
         self.update(|s| s.typing_paused = paused);
     }
 
+    /// What the live stream connection is doing now.
+    pub fn asr_stream(&self, status: StreamStatus) {
+        self.update(|s| {
+            let t = &mut s.asr_track;
+            if matches!(status, StreamStatus::Up | StreamStatus::Down) {
+                t.stream_settled = true;
+            }
+            if status == StreamStatus::Unused {
+                t.stream_settled = false;
+            }
+            t.stream = status;
+        });
+    }
+
+    pub fn asr_stream_status(&self) -> StreamStatus {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .asr_track
+            .stream
+    }
+
+    /// The server answered (a transcription, a stream, a health probe).
+    pub fn asr_ok(&self, path: AsrPath) {
+        self.update(|s| {
+            let t = &mut s.asr_track;
+            t.last_ok_ms = Some(monotonic_ms());
+            t.last_ok_path = Some(path);
+            t.failing = false;
+            t.last_error = None;
+        });
+    }
+
+    /// Contact with the server failed (connection, timeout, server error).
+    pub fn asr_failed(&self, error: &str) {
+        self.update(|s| {
+            let t = &mut s.asr_track;
+            t.failing = true;
+            t.last_error = Some(error.chars().take(256).collect());
+        });
+    }
+
+    /// Probe the server every `every` while the live stream is not up (it
+    /// proves reachability itself), and at once when the stream changes
+    /// state, so `asr` stays current while nobody speaks.
+    pub fn spawn_asr_probe(
+        &self,
+        server_url: String,
+        api_key: Option<String>,
+        every: Duration,
+    ) -> AsrProbe {
+        let health = self.clone();
+        AsrProbe(tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(ASR_PROBE_TIMEOUT)
+                .connect_timeout(ASR_PROBE_TIMEOUT)
+                .build()
+                .unwrap_or_default();
+            let mut last_probe: Option<tokio::time::Instant> = None;
+            let mut last_status = health.asr_stream_status();
+            loop {
+                let status = health.asr_stream_status();
+                let changed = status != last_status;
+                last_status = status;
+                let due = last_probe.is_none_or(|t| t.elapsed() >= every);
+                if status != StreamStatus::Up && (due || changed) {
+                    last_probe = Some(tokio::time::Instant::now());
+                    match probe_asr(&client, &server_url, api_key.as_deref()).await {
+                        Ok(()) => health.asr_ok(AsrPath::Http),
+                        Err(e) => health.asr_failed(&format!("health probe {e}")),
+                    }
+                }
+                tokio::time::sleep(every.min(Duration::from_secs(1))).await;
+            }
+        }))
+    }
+
     pub fn queue(&self, chunks: usize) {
         self.update(|s| s.queue_chunks = chunks);
     }
@@ -292,6 +501,7 @@ impl PipelineHealth {
         state.noise_dbfs = state.levels.noise_dbfs();
         state.speech_dbfs = state.levels.speech_dbfs();
         state.mic_warning = state.levels.warning();
+        state.asr = state.asr_track.report();
         state
     }
 }
@@ -393,7 +603,9 @@ impl HealthMonitor {
             speech_dbfs: crate::pcm::dbfs(0.0),
             clipped_samples: 0,
             mic_warning: None,
+            asr: AsrTrack::default().report(),
             levels: MicLevels::default(),
+            asr_track: AsrTrack::default(),
         })));
         let path: PathBuf = state_dir.join(HEALTH_FILE);
         publish(&path, &health.snapshot())?;
@@ -686,5 +898,86 @@ mod tests {
         let stat = format!("123 (ears (test)) S {} 9876 0", vec!["0"; 18].join(" "));
         assert_eq!(process_start_ticks(&stat).unwrap(), "9876");
         assert!(process_start_ticks("bad").is_err());
+    }
+
+    #[test]
+    fn asr_state_follows_stream_and_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        assert_eq!(health.snapshot().asr.state, AsrState::Unknown);
+        health.asr_ok(AsrPath::Http);
+        let asr = health.snapshot().asr;
+        assert_eq!((asr.state, asr.path), (AsrState::Ok, Some(AsrPath::Http)));
+        assert!(asr.last_ok_ms.is_some());
+        // A first connect is not a degradation; a reconnect is.
+        health.asr_stream(StreamStatus::Connecting);
+        assert_eq!(health.snapshot().asr.state, AsrState::Ok);
+        health.asr_stream(StreamStatus::Up);
+        let asr = health.snapshot().asr;
+        assert_eq!((asr.state, asr.path), (AsrState::Ok, Some(AsrPath::Stream)));
+        health.asr_stream(StreamStatus::Connecting);
+        assert_eq!(health.snapshot().asr.state, AsrState::Degraded);
+        health.asr_stream(StreamStatus::Down);
+        assert_eq!(health.snapshot().asr.state, AsrState::Degraded);
+        health.asr_failed("connection refused");
+        let snap = health.snapshot();
+        assert_eq!((snap.asr.state, snap.asr.path), (AsrState::Down, None));
+        assert_eq!(snap.asr.last_error.as_deref(), Some("connection refused"));
+        assert_eq!(
+            snap.problem(snap.updated_monotonic_ms),
+            Some("transcription server unreachable")
+        );
+        health.asr_ok(AsrPath::Http);
+        assert_eq!(health.snapshot().asr.state, AsrState::Degraded);
+        drop(monitor);
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(HEALTH_FILE)).unwrap()).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["asr"]["state"], "degraded");
+        assert_eq!(value["asr"]["path"], "http");
+        assert!(value["asr"]["last_ok_ms"].is_u64());
+        assert!(value["asr"]["last_error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn asr_probe_marks_the_server_up_and_down() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        let server = MockServer::start().await;
+        Mock::given(path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let probe = health.spawn_asr_probe(server.uri(), None, Duration::from_millis(20));
+        for _ in 0..200 {
+            if health.snapshot().asr.state == AsrState::Ok {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(health.snapshot().asr.state, AsrState::Ok);
+        drop(probe);
+
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let _probe = health.spawn_asr_probe(
+            format!("http://127.0.0.1:{port}"),
+            None,
+            Duration::from_millis(20),
+        );
+        for _ in 0..200 {
+            if health.snapshot().asr.state == AsrState::Down {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let asr = health.snapshot().asr;
+        assert_eq!(asr.state, AsrState::Down);
+        assert!(asr.last_error.unwrap().starts_with("health probe /health"));
     }
 }

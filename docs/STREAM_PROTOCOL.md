@@ -136,7 +136,8 @@ Drop the utterance. Nothing more is sent for it.
 `live_decoding = "continuous"` tries the stream first, then the per-tick HTTP
 decoder, then repeated previews:
 1. Connect; expect `ready` within 2 s. 404, a refused upgrade, or
-   `unsupported` → per-tick HTTP continuous for the rest of the process.
+   `unsupported` → per-tick HTTP continuous, and the stream is asked again
+   after 5 minutes.
 2. Push-to-talk (`ears toggle --ghost`): the preview process tails the
    growing `recording.wav` every 50 ms and sends new samples, and after each
    partial writes the settled state (`header` =
@@ -152,6 +153,16 @@ decoder, then repeated previews:
    `final` arrives within 1.5 s, the segment is transcribed in full.
 4. Connection lost mid-utterance: fall back to per-tick HTTP for that
    utterance; never replay audio into a second final (no duplicate commits).
+5. The server may be on another machine. The socket runs without Nagle, and
+   ears pings every 5 s: no frame at all from the server (pongs included)
+   for 10 s closes the connection as `keepalive timeout`, then it is retried
+   every 5 s. A `final` that does not arrive within 1.5 s after a wait in
+   which the server sent nothing else also drops the connection and
+   reconnects at once, instead of trusting a socket that may be half open.
+6. "No stream endpoint" (404, refused upgrade, no `ready`, `unsupported`)
+   is not permanent: the stream is tried again after 5 minutes, so a server
+   that restarted without the plugin and then got it back heals without
+   restarting ears.
 
 ## Token freeze extension
 
