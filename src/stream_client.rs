@@ -70,6 +70,9 @@ pub struct Ready {
     pub sample_rate: u32,
     /// Longest utterance the server decodes.
     pub max_audio_ms: Option<u64>,
+    /// The server constrains decodes to a `start` frame's grammar. Older
+    /// servers ignore the field, so it is sent only when this is set.
+    pub grammar: bool,
 }
 
 /// Options of a `start` frame; `None` leaves the server default.
@@ -81,6 +84,8 @@ pub struct StartParams {
     pub context: Option<String>,
     pub rollback_words: Option<usize>,
     pub min_step_ms: Option<u64>,
+    /// GBNF grammar for the utterance (bash mode).
+    pub grammar: Option<String>,
 }
 
 impl StartParams {
@@ -91,6 +96,7 @@ impl StartParams {
             context: spec.context.clone().filter(|c| !c.trim().is_empty()),
             rollback_words: spec.rollback_words,
             min_step_ms: spec.min_step_ms,
+            grammar: None,
         }
     }
 }
@@ -156,6 +162,8 @@ enum Incoming {
         model: Option<String>,
         sample_rate: Option<u32>,
         max_audio_ms: Option<u64>,
+        #[serde(default)]
+        grammar: bool,
     },
     Partial {
         utterance: u64,
@@ -459,6 +467,9 @@ impl StreamSession {
         if let Some(ms) = params.min_step_ms {
             frame["min_step_ms"] = ms.into();
         }
+        if let Some(grammar) = &params.grammar {
+            frame["grammar"] = grammar.as_str().into();
+        }
         self.outbox.text(frame)
     }
 
@@ -540,6 +551,7 @@ async fn wait_ready(socket: &mut Socket) -> Result<Ready, ContinuousError> {
                 model,
                 sample_rate,
                 max_audio_ms,
+                grammar,
             }) => {
                 let sample_rate = sample_rate.unwrap_or(crate::continuous::SAMPLE_RATE as u32);
                 if protocol != PROTOCOL || sample_rate != crate::continuous::SAMPLE_RATE as u32 {
@@ -551,6 +563,7 @@ async fn wait_ready(socket: &mut Socket) -> Result<Ready, ContinuousError> {
                         model,
                         sample_rate,
                         max_audio_ms,
+                        grammar,
                     })
                 }
             }
@@ -795,7 +808,8 @@ pub(crate) mod fake {
         match mode {
             Mode::Normal => {
                 let ready = serde_json::json!({"type": "ready", "protocol": 1,
-                    "model": "Qwen/Qwen3-ASR-1.7B", "sample_rate": 16000, "max_audio_ms": 90000});
+                    "model": "Qwen/Qwen3-ASR-1.7B", "sample_rate": 16000, "max_audio_ms": 90000,
+                    "grammar": true});
                 let _ = ws.send(Message::Text(ready.to_string())).await;
             }
             Mode::Unsupported => {
@@ -923,11 +937,13 @@ mod tests {
             .unwrap();
         assert_eq!(session.ready().max_audio_ms, Some(90_000));
         assert_eq!(session.max_samples(), Some(90 * 16_000));
+        assert!(session.ready().grammar);
         let params = StartParams {
             language: Some("en".into()),
             context: Some("vLLM".into()),
             rollback_words: Some(2),
             min_step_ms: None,
+            grammar: Some("root ::= \"ls\"".into()),
         };
         assert!(session.start(3, &params));
         assert!(session.push(3, &[1, 2, 3]));
@@ -941,7 +957,8 @@ mod tests {
         assert_eq!(
             start,
             serde_json::json!({"type": "start", "utterance": 3, "language": "en",
-                               "context": "vLLM", "rollback_words": 2})
+                               "context": "vLLM", "rollback_words": 2,
+                               "grammar": "root ::= \"ls\""})
         );
         assert_eq!(server.audio_bytes(), 8);
 

@@ -3,7 +3,8 @@
 Transport-agnostic and engine-agnostic: a `StreamSession` is fed decoded
 frames (`on_text`, `on_binary`) and talks back through an async `send(dict)`.
 Decoding goes through an async `decode(windows, prefix_text, max_tokens,
-*, context)` callable returning the model's continuation text, so the whole
+*, context[, grammar])` callable returning the model's continuation text
+(`grammar` is passed only for a grammar-constrained utterance), so the whole
 lifecycle is testable without vLLM or a GPU.
 """
 
@@ -19,6 +20,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from . import grammar as grammars
 from .protocol import (
     ASR_TAG,
     DEFAULT_MIN_STEP_MS,
@@ -63,6 +65,7 @@ class Utterance:
     id: int
     context: str
     rollback_words: int
+    grammar: grammars.StreamGrammar | None
     min_step: int  # samples
     max_samples: int
     header: str | None = None
@@ -204,6 +207,17 @@ class StreamSession:
         context = msg.get("context")
         if context is not None and not isinstance(context, str):
             raise BadRequest("context must be a string", uid)
+        grammar = msg.get("grammar")
+        if grammar is not None:
+            if not isinstance(grammar, str):
+                raise BadRequest("grammar must be a string", uid)
+            try:
+                grammar = grammars.parse(grammar)
+            except ValueError as e:
+                raise BadRequest(f"grammar: {e}", uid) from None
+            warm = getattr(self._decode, "warm", None)
+            if warm is not None:
+                warm(grammar.variants())
         rollback = msg.get("rollback_words", DEFAULT_ROLLBACK_WORDS)
         if rollback is None:
             rollback = DEFAULT_ROLLBACK_WORDS
@@ -229,6 +243,7 @@ class StreamSession:
             id=uid,
             context=sanitize_context(context),
             rollback_words=rollback,
+            grammar=grammar,
             min_step=max(1, int(min_step_ms * SAMPLE_RATE / 1000)),
             max_samples=self._max_samples,
             header=header_for(name) if name else None,
@@ -305,9 +320,13 @@ class StreamSession:
             # Forced only once text has settled: a header forced onto audio
             # with no speech yet makes the model copy the context verbatim.
             prefix = f"{utt.header}{utt.stable}" if utt.header and utt.stable else ""
+            kwargs: dict[str, Any] = {"context": utt.context}
+            if utt.grammar is not None:
+                # Forward-parse what is forced to pick the continuation rule.
+                kwargs["grammar"] = utt.grammar.for_prefix(utt.stable if prefix else "")
             try:
                 continuation = await self._decode(
-                    windows, prefix, max_tokens_for(n), context=utt.context
+                    windows, prefix, max_tokens_for(n), **kwargs
                 )
             except asyncio.CancelledError:
                 raise

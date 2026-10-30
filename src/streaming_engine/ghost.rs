@@ -90,6 +90,11 @@ pub(super) enum StreamLink {
 }
 
 impl StreamLink {
+    /// Connected to a server that ignores a `start` frame's grammar.
+    pub(super) fn lacks_grammar(&self) -> bool {
+        matches!(self, Self::Up(session) if !session.ready().grammar)
+    }
+
     fn unsupported() -> Self {
         Self::Unsupported {
             retry_at: Instant::now() + STREAM_UNSUPPORTED_RETRY,
@@ -394,7 +399,11 @@ impl StreamingEngine {
             return;
         };
         let status = match (&self.ghost, &self.continuous) {
-            (Some(ghost), Some(_)) if self.guided_grammar.is_none() => ghost.stream.status(),
+            (Some(ghost), Some(_))
+                if self.guided_grammar.is_none() || !ghost.stream.lacks_grammar() =>
+            {
+                ghost.stream.status()
+            }
             _ => StreamStatus::Unused,
         };
         if health.asr_stream_status() != status {
@@ -463,10 +472,11 @@ impl StreamingEngine {
     /// the stream owns this utterance's partials; false means decode per
     /// tick instead.
     pub(super) fn ghost_stream_feed(&mut self) -> bool {
-        if self.continuous.is_none() || self.guided_grammar.is_some() {
+        if self.continuous.is_none() {
             return false;
         }
         self.ghost_stream_link();
+        let grammar = self.guided_grammar.clone();
         let muted = self.typing_mode == TypingMode::None;
         let samples = if self.vad_detector.is_speaking() {
             self.vad_detector.current_segment_samples()
@@ -489,6 +499,10 @@ impl StreamingEngine {
             return false;
         }
         let session = match &ghost.stream {
+            // A server that cannot constrain: bash goes per tick (HTTP).
+            StreamLink::Up(session) if grammar.is_some() && !session.ready().grammar => {
+                return false;
+            }
             StreamLink::Up(session) => session,
             StreamLink::Connecting(_) => return true, // settled within 2 s
             StreamLink::Down { .. } | StreamLink::Unsupported { .. } => {
@@ -502,7 +516,10 @@ impl StreamingEngine {
                 ghost.stream_id += 1;
                 session.start(
                     ghost.stream_id,
-                    &crate::stream_client::StartParams::from_spec(spec),
+                    &crate::stream_client::StartParams {
+                        grammar,
+                        ..crate::stream_client::StartParams::from_spec(spec)
+                    },
                 );
                 Streamed {
                     id: ghost.stream_id,
@@ -645,7 +662,7 @@ impl StreamingEngine {
                 }
             };
             let (text, frozen_bytes) = if bash {
-                (text, 0)
+                crate::bash::clean_frozen(&text, frozen_bytes)
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };

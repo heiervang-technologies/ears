@@ -11,12 +11,16 @@ vLLM is imported lazily so the rest of the package imports without it.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
 from .protocol import SAMPLE_RATE, build_prompt
+
+logger = logging.getLogger("ears_vllm_stream")
 
 
 class PromptTooLong(Exception):
@@ -43,7 +47,7 @@ def default_max_audio_ms(max_model_len: int) -> int:
 
 
 class VllmDecoder:
-    """`decode(windows, prefix_text, max_tokens, *, context) -> continuation`."""
+    """`decode(windows, prefix_text, max_tokens, *, context, grammar) -> continuation`."""
 
     def __init__(self, engine_client):
         self.engine_client = engine_client
@@ -51,6 +55,46 @@ class VllmDecoder:
         self.renderer = engine_client.renderer
         self.tokenizer = self.renderer.get_tokenizer()
         self.max_model_len = self.model_config.max_model_len
+        self._warmed: set[str] = set()
+        self._warming: set[asyncio.Task] = set()
+
+    def warm(self, texts: Iterable[str]) -> None:
+        """Compile grammars ahead of the decodes that need them.
+
+        vLLM compiles a grammar on first use and caches it by text; the
+        first compile on this vocabulary takes about a second, which would
+        stall the first partial of a bash utterance. A one-token text-only
+        request per grammar pays it in the background instead.
+        """
+        for text in texts:
+            if text in self._warmed:
+                continue
+            self._warmed.add(text)
+            task = asyncio.ensure_future(self._warm_one(text))
+            self._warming.add(task)
+            task.add_done_callback(self._warming.discard)
+
+    async def _warm_one(self, text: str) -> None:
+        from vllm.inputs import TokensPrompt
+        from vllm.renderers.inputs.preprocess import parse_model_prompt
+        from vllm.sampling_params import SamplingParams, StructuredOutputsParams
+
+        try:
+            ids = list(self.tokenizer.encode("<|im_start|>assistant\n",
+                                             add_special_tokens=False))
+            parsed = parse_model_prompt(self.model_config, TokensPrompt(prompt_token_ids=ids))
+            (engine_input,) = await self.renderer.render_cmpl_async([parsed])
+            params = SamplingParams.from_optional(
+                temperature=0.0, max_tokens=1,
+                structured_outputs=StructuredOutputsParams(grammar=text),
+            )
+            async for _ in self.engine_client.generate(
+                engine_input, params, f"ears-stream-warm-{uuid.uuid4().hex}"
+            ):
+                pass
+        except Exception as e:  # noqa: BLE001 - a cold grammar only costs latency
+            self._warmed.discard(text)
+            logger.warning("ears stream: grammar warm-up failed: %s", e)
 
     def prompt_token_ids(self, context: str, n_windows: int, prefix: str) -> list[int]:
         # Same text the per-request chat template renders, tokenized the way
@@ -94,10 +138,11 @@ class VllmDecoder:
         max_tokens: int,
         *,
         context: str = "",
+        grammar: str | None = None,
     ) -> str:
         from vllm.inputs import TokensPrompt
         from vllm.renderers.inputs.preprocess import parse_model_prompt
-        from vllm.sampling_params import SamplingParams
+        from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 
         prompt = TokensPrompt(
             prompt_token_ids=self.prompt_token_ids(context, len(windows), prefix_text),
@@ -115,7 +160,11 @@ class VllmDecoder:
                 f"max_model_len={self.max_model_len}"
             )
         params = SamplingParams.from_optional(
-            temperature=0.0, max_tokens=min(max_tokens, budget)
+            temperature=0.0,
+            max_tokens=min(max_tokens, budget),
+            structured_outputs=(
+                StructuredOutputsParams(grammar=grammar) if grammar is not None else None
+            ),
         )
 
         request_id = f"ears-stream-{uuid.uuid4().hex}"

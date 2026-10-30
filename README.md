@@ -307,6 +307,22 @@ Notes:
   does not support it. Normal (non-bash) profiles are unaffected.
 - A configured `model` is required in bash mode.
 - The command allow-list lives in `grammars/bash.gbnf` — extend it as needed.
+- Spoken symbols become shell: "ls dash la" → `ls -la`, "cd dot dot" → `cd ..`,
+  "cargo build dash dash release" → `cargo build --release`, "pipe" → `|`,
+  "slash" → `/`; a trailing sentence period is dropped. Quoted strings are left
+  alone.
+
+#### Bash at a shell prompt (VAD)
+
+In VAD mode with `bash_terminal = true` (the default), every utterance that
+starts while an Alacritty window at a shell prompt (bash, zsh, fish; in tmux,
+the attached pane's program) is focused is decoded as bash, and everything
+else stays plain dictation: an agent or editor running in the same terminal
+gets prose. Ghost text works as usual: the live stream applies the grammar
+when the server supports it (`ready.grammar`, ears-vllm-stream with grammar
+support), else partials decode per tick through the chat endpoint. Voice
+commands and wake phrases are not recognised inside a bash utterance; standby
+never uses the grammar, so the wake phrase still works.
 
 ### VAD Mode (headless)
 

@@ -215,7 +215,15 @@ pub struct StreamingEngine {
 
     /// Active guided grammar (bash mode). When set, transcription is routed to
     /// the constrained chat-completions path and text filters are bypassed.
+    /// Either the configured grammar (`bash_mode`, always on) or, per
+    /// utterance, `shell_grammar` while a shell prompt is focused.
     guided_grammar: Option<String>,
+    /// Grammar from `bash_mode`: applies to every utterance.
+    configured_grammar: Option<String>,
+    /// Grammar for utterances aimed at a shell prompt (`bash_terminal`).
+    shell_grammar: Option<String>,
+    /// Is a terminal at a shell prompt focused? Replaced in tests.
+    shell_probe: fn() -> bool,
 
     /// Set after a typing failure. While suspended, transcription and
     /// transcript events continue but nothing is injected and Enter is never
@@ -302,6 +310,9 @@ impl StreamingEngine {
             text_filters: TextFilters::default(),
             language: None,
             guided_grammar: None,
+            configured_grammar: None,
+            shell_grammar: None,
+            shell_probe: crate::shell_focus::focused_shell,
             typing_suspended: false,
             ghost: None,
             continuous: None,
@@ -390,6 +401,8 @@ impl StreamingEngine {
 
         // Fire SpeechProbable on first speech frames (before min duration met)
         if is_probable && !self.was_probably_speaking {
+            // An utterance begins: pick its grammar before any partial.
+            self.aim_grammar();
             self.send_event(StreamingEvent::SpeechProbable);
         }
 
@@ -524,10 +537,9 @@ impl StreamingEngine {
             .map(|h| h.enter(crate::health::Stage::Transcribing));
         // With final_correction off, the live stream's final is the
         // committed text: no second decode, and nothing jumps at the end.
+        // A bash utterance only streams when the server applies its grammar.
         let live_final = match streamed_id {
-            Some(id) if !self.final_correction && self.guided_grammar.is_none() && !verify => {
-                self.ghost_stream_final(id).await
-            }
+            Some(id) if !self.final_correction && !verify => self.ghost_stream_final(id).await,
             _ => None,
         };
         let transcript = match live_final {
@@ -602,7 +614,7 @@ impl StreamingEngine {
         // Bash mode bypasses them: the grammar already guarantees valid shell
         // syntax, and the filters would mangle it (lowercase/strip punctuation).
         let transcript = if self.guided_grammar.is_some() {
-            transcript
+            crate::bash::clean(&transcript)
         } else {
             self.text_filters
                 .apply(&transcript, self.language.as_deref())
@@ -1431,9 +1443,50 @@ impl StreamingEngine {
         self.keep_audio_dir = dir;
     }
 
-    /// Update the active guided grammar (bash mode). `None` disables constrained
-    /// decoding and returns to the plain transcription endpoint.
+    /// Update the configured guided grammar (bash mode, every utterance).
+    /// `None` disables it; shell prompts may still get [`Self::set_shell_grammar`].
     pub fn set_guided_grammar(&mut self, grammar: Option<String>) {
+        self.configured_grammar = grammar.clone();
+        if grammar.is_some() || self.shell_grammar.is_none() {
+            self.use_grammar(grammar);
+        }
+    }
+
+    /// Grammar for utterances that start while a terminal at a shell prompt
+    /// is focused (`bash_terminal`); `None` turns that off.
+    pub fn set_shell_grammar(&mut self, grammar: Option<String>) {
+        self.shell_grammar = grammar;
+        if self.configured_grammar.is_none() && self.shell_grammar.is_none() {
+            self.use_grammar(None);
+        }
+    }
+
+    /// Choose the grammar of the utterance now starting. Speech aimed at a
+    /// shell prompt is bash, unless ears is standing by (the wake phrase
+    /// must stay hearable) or typing is off (nothing reaches the prompt).
+    fn aim_grammar(&mut self) {
+        if self.configured_grammar.is_some() {
+            return;
+        }
+        let Some(grammar) = self.shell_grammar.clone() else {
+            return;
+        };
+        let probe = self.shell_probe;
+        let aimed = !self.standby && self.typing_mode != TypingMode::None && run_blocking(probe);
+        if aimed != self.guided_grammar.is_some() {
+            info!(
+                "{}",
+                if aimed {
+                    "Shell prompt focused: decoding as bash"
+                } else {
+                    "Left the shell prompt: plain dictation"
+                }
+            );
+        }
+        self.use_grammar(aimed.then_some(grammar));
+    }
+
+    fn use_grammar(&mut self, grammar: Option<String>) {
         if self.guided_grammar.is_some() != grammar.is_some() {
             // Dictation and command text must never bleed into each other.
             self.local_agreement.reset();

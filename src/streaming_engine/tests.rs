@@ -1634,3 +1634,58 @@ async fn test_server_without_stream_endpoint_is_asked_again_later() {
     ));
     tick_until(&mut engine, unsupported).await;
 }
+
+#[test]
+fn test_shell_prompt_picks_bash_per_utterance() {
+    let (mut engine, _rx) = seq_engine();
+    engine.typing_mode = TypingMode::Wtype;
+    engine.set_shell_grammar(Some("root ::= body".to_string()));
+    engine.shell_probe = || true;
+    feed(&mut engine, &[0.9]);
+    assert_eq!(engine.guided_grammar.as_deref(), Some("root ::= body"));
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+
+    engine.shell_probe = || false;
+    feed(&mut engine, &[0.9]);
+    assert_eq!(engine.guided_grammar, None);
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+
+    // Standing by, the wake phrase must stay hearable: no grammar.
+    engine.shell_probe = || true;
+    engine.standby = true;
+    feed(&mut engine, &[0.9]);
+    assert_eq!(engine.guided_grammar, None);
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+    engine.standby = false;
+
+    // A configured grammar (bash_mode) holds everywhere.
+    engine.shell_probe = || false;
+    engine.set_guided_grammar(Some("root ::= always".to_string()));
+    feed(&mut engine, &[0.9]);
+    assert_eq!(engine.guided_grammar.as_deref(), Some("root ::= always"));
+    feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+    // Settings that turn it off hand back to the shell probe.
+    engine.set_guided_grammar(None);
+    feed(&mut engine, &[0.9]);
+    assert_eq!(engine.guided_grammar, None);
+}
+
+#[tokio::test]
+async fn test_ghost_stream_sends_the_shell_grammar_and_cleans_partials() {
+    use crate::stream_client::fake::{FakeServer, Mode};
+    let server = FakeServer::start(Mode::Normal).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_continuous(Some(spec_at(&server.url)));
+    engine.set_shell_grammar(Some("root ::= body".to_string()));
+    engine.shell_probe = || true;
+    tick_until(&mut engine, stream_up).await;
+
+    feed(&mut engine, &[0.9, 0.9, 0.9]);
+    ghost_tick(&mut engine).await;
+    let start = server.wait_for(|l| l.starts_with("start ")).await;
+    assert!(start.contains(r#""grammar":"root ::= body""#), "{start}");
+    let id = server.starts()[0];
+    server.say(stream_partial(id, "ls dash la.", 2));
+    assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "F 2 ls -la");
+}

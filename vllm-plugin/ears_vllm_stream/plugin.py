@@ -53,8 +53,11 @@ async def ears_stream(websocket: WebSocket) -> None:
                 await _send_json(websocket, msg)
 
     session = StreamSession(send, service.decode, max_audio_ms=service.max_audio_ms)
+    # `grammar`: `start` may carry a GBNF grammar (bash mode); older
+    # servers ignore the field, so clients send one only when this is true.
     await send({"type": "ready", "protocol": PROTOCOL_VERSION, "model": service.model,
-                "sample_rate": SAMPLE_RATE, "max_audio_ms": service.max_audio_ms})
+                "sample_rate": SAMPLE_RATE, "max_audio_ms": service.max_audio_ms,
+                "grammar": True})
     try:
         while True:
             frame = await websocket.receive()
@@ -86,7 +89,14 @@ class EarsStreamPlugin:
         app.include_router(router)
 
     async def init_state(self, engine_client, state, args) -> None:
-        setattr(state, STATE_KEY, build_service(engine_client, args))
+        service = build_service(engine_client, args)
+        setattr(state, STATE_KEY, service)
+        warm = getattr(service.decode, "warm", None)
+        if warm is not None:
+            # The bash grammar ears sends: compiled before anyone speaks.
+            from . import grammar
+
+            warm(grammar.parse(grammar.builtin("bash")).variants())
 
 
 def _served_name(model_config, args) -> str:

@@ -11,6 +11,7 @@ vLLM port for live dictation with Qwen3-ASR. Built against vLLM 0.28.0
 |------|------|
 | `ears_vllm_stream/protocol.py` | Pure helpers mirroring `src/continuous.rs`: prompt text, 8 s windows, 100 ms tail rule, `max_tokens`, `settled_prefix`, language names |
 | `ears_vllm_stream/session.py` | Connection state machine: utterance lifecycle, settling, `min_step_ms` scheduling, cancel/supersede, caps, error codes. Talks to the engine only through `decode(windows, prefix_text, max_tokens, *, context) -> str` |
+| `ears_vllm_stream/grammar.py` | `start.grammar`: picks the entry rule (`root`, `cont`, `cont_dq`, `cont_sq`) by scanning the settled text forward, so every grammar variant compiles once; `grammars/bash.gbnf` is the bash grammar ears sends, warmed at startup |
 | `ears_vllm_stream/engine.py` | vLLM glue (`VllmDecoder`): one decode = one engine request |
 | `ears_vllm_stream/plugin.py` | `EarsStreamPlugin` (entry point `vllm.endpoint_plugins` / `ears_stream`) and the WebSocket route |
 | `tools/stream_wav.py` | Streams a 16 kHz mono WAV in real time and prints partials with timestamps |

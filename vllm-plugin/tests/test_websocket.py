@@ -22,7 +22,7 @@ def test_ready_partial_final_over_websocket():
     with TestClient(app).websocket_connect(PATH) as ws:
         ready = ws.receive_json()
         assert ready == {"type": "ready", "protocol": 1, "model": "Qwen/Qwen3-ASR-1.7B",
-                         "sample_rate": 16000, "max_audio_ms": 90_000}
+                         "sample_rate": 16000, "max_audio_ms": 90_000, "grammar": True}
         ws.send_json({"type": "start", "utterance": 1})
         ws.send_bytes(np.zeros(4800, dtype="<i2").tobytes())
         p = ws.receive_json()
