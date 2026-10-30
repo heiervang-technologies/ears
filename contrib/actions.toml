@@ -1,0 +1,89 @@
+# ears command mode: say "command" on its own and the ears light turns violet.
+# Each utterance is then embedded (raw audio, EmbeddingGemma 2) and routed to
+# the action whose anchors are nearest. Say "command" again to leave.
+#
+# An action has a `name`, `text` (phrasings; each becomes an anchor) and one
+# effect: `keys` (a combination, as in [commands.keys]) or `run` (a program
+# and its arguments). Add as many as you like.
+#
+# Your own voice teaches it: `ears teach NAME`, then say what you would say
+# for that action; the recording becomes one of its anchors. An action that
+# fires clearly also keeps the recording that fired it. Say "wrong" to take
+# the last one back. Recordings start counting once there are four.
+#
+# Built in: `leave` (back to dictation), `none` (chatter: nothing happens),
+# `wrong`. An action here with the same name replaces the built-in.
+
+server = "http://localhost:30201"
+# Similarities are z-scored per anchor kind (text, your voice): how much
+# closer than usual. The k nearest anchors vote; the winner fires only if its
+# nearest anchor scores at least `floor`...
+floor = 2.0
+# ...and beats every other action's nearest anchor by `margin`.
+margin = 0.4
+k = 5
+
+[[action]]
+name = "enter"
+keys = "enter"
+text = ["enter", "press enter", "submit", "send it", "confirm"]
+
+[[action]]
+name = "escape"
+keys = "escape"
+text = ["escape", "cancel", "never mind", "close this"]
+
+[[action]]
+name = "tab"
+keys = "tab"
+text = ["tab", "next field", "complete"]
+
+[[action]]
+name = "backspace"
+keys = "backspace"
+text = ["backspace", "delete a letter", "erase"]
+
+[[action]]
+name = "up"
+keys = "up"
+text = ["up", "arrow up", "previous line", "go up"]
+
+[[action]]
+name = "down"
+keys = "down"
+text = ["down", "arrow down", "next line", "go down"]
+
+[[action]]
+name = "left"
+keys = "left"
+text = ["left", "arrow left", "go left"]
+
+[[action]]
+name = "right"
+keys = "right"
+text = ["right", "arrow right", "go right"]
+
+[[action]]
+name = "play-pause"
+run = ["playerctl", "play-pause"]
+text = ["pause the music", "play", "resume playback", "stop the music"]
+
+[[action]]
+name = "next-track"
+run = ["playerctl", "next"]
+text = ["next track", "skip this song", "next song"]
+
+[[action]]
+name = "previous-track"
+run = ["playerctl", "previous"]
+text = ["previous track", "last song", "go back a song"]
+
+[[action]]
+name = "volume-up"
+run = ["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%+"]
+text = ["volume up", "louder", "turn it up"]
+
+[[action]]
+name = "volume-down"
+run = ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"]
+text = ["volume down", "quieter", "turn it down"]

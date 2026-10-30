@@ -168,6 +168,14 @@ pub enum Commands {
         action: String,
     },
 
+    /// Command mode: teach an action your phrasing. The next utterance in
+    /// command mode becomes one of its anchors (it is not fired). Without
+    /// ACTION, list the actions and how many anchors each has.
+    Teach {
+        /// Action name from ~/.config/ears/actions.toml or a built-in.
+        action: Option<String>,
+    },
+
     /// Select audio device with fzf (shortcut for `device select`)
     #[command(alias = "s", hide = true)]
     Select,

@@ -152,6 +152,9 @@ async fn main() -> Result<()> {
         Some(Commands::Typing { action }) => {
             handle_typing(&action).await?;
         }
+        Some(Commands::Teach { action }) => {
+            handle_teach(&config, action.as_deref())?;
+        }
         // Hidden backwards-compat aliases
         Some(Commands::Select) => select_device(&config)?,
         Some(Commands::List) => list_devices()?,
@@ -179,6 +182,37 @@ async fn handle_auto_enter() -> Result<()> {
 
 /// `ears typing on|off|toggle|status`: ask the running instance, or update the
 /// persisted switch directly when no ears is running.
+/// `ears teach [ACTION]`.
+fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
+    use ears::command_mode as cm;
+    let paths = cm::Paths::new(&config.state_dir);
+    let (_, actions) = cm::load_actions(&paths.actions)?;
+    let voice = cm::VoiceAnchors::load(&paths.voice);
+    let Some(action) = action else {
+        println!("Actions ({}):", paths.actions.display());
+        for a in &actions {
+            let recorded = voice.anchors.iter().filter(|v| v.action == a.name).count();
+            println!("  {:16} {} text, {} voice", a.name, a.text.len(), recorded);
+        }
+        return Ok(());
+    };
+    if !actions.iter().any(|a| a.name == action) {
+        anyhow::bail!("no action named {action:?}; `ears teach` lists them");
+    }
+    std::fs::create_dir_all(&config.state_dir)?;
+    std::fs::write(config.state_dir.join(cm::TEACH), action)?;
+    let on = config.state_dir.join(cm::MARKER).exists();
+    println!(
+        "Say what you would say for {action}{}",
+        if on {
+            "."
+        } else {
+            " once command mode is on (say \"command\")."
+        }
+    );
+    Ok(())
+}
+
 async fn handle_typing(action: &str) -> Result<()> {
     use ears::typing_switch::{self, TypingRequest};
     let request = TypingRequest::from_arg(action)

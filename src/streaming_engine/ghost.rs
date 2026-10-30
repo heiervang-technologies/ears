@@ -699,7 +699,8 @@ impl StreamingEngine {
 
     /// Start a partial transcription of the utterance so far, if due.
     pub(super) fn ghost_maybe_start_partial(&mut self) {
-        if self.ghost.is_none() || self.ghost_stream_feed() {
+        // Command mode embeds whole utterances; nothing is transcribed.
+        if self.ghost.is_none() || self.command_mode.is_some() || self.ghost_stream_feed() {
             return;
         }
         let Some(ghost) = self.ghost.as_ref() else {

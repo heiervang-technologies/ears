@@ -213,6 +213,12 @@ pub struct StreamingEngine {
     /// Language for text filter alphabet checking
     language: Option<String>,
 
+    /// Where command mode keeps its files; None: command mode is off.
+    command_paths: Option<crate::command_mode::Paths>,
+    /// Command mode while it is on: utterances route to actions by
+    /// embedding instead of being transcribed.
+    command_mode: Option<crate::command_mode::CommandMode>,
+
     /// Active guided grammar (bash mode). When set, transcription is routed to
     /// the constrained chat-completions path and text filters are bypassed.
     /// Either the configured grammar (`bash_mode`, always on) or, per
@@ -313,6 +319,8 @@ impl StreamingEngine {
             configured_grammar: None,
             shell_grammar: None,
             shell_probe: crate::shell_focus::focused_shell,
+            command_paths: None,
+            command_mode: None,
             typing_suspended: false,
             ghost: None,
             continuous: None,
@@ -528,6 +536,11 @@ impl StreamingEngine {
         debug!("WAV save took {:?}", wav_start.elapsed());
         drop(saving);
 
+        if self.command_mode.is_some() {
+            self.command_segment(&segment_file).await;
+            return Ok(());
+        }
+
         // Transcribe with Whisper. In bash mode a guided grammar routes the
         // request to the constrained chat-completions path.
         let transcribe_start = Instant::now();
@@ -623,6 +636,15 @@ impl StreamingEngine {
             debug!("Transcript filtered out (empty after filters)");
             self.ghost_clear();
             self.discard("filtered out");
+            return Ok(());
+        }
+
+        if !self.standby
+            && self.command_paths.is_some()
+            && crate::command_mode::ENTER_PHRASES
+                .contains(&crate::commands::normalize(&transcript).as_str())
+        {
+            self.enter_command_mode(&transcript).await;
             return Ok(());
         }
 
@@ -1083,6 +1105,9 @@ impl StreamingEngine {
             return;
         }
         self.standby = standby;
+        if standby {
+            self.leave_command_mode();
+        }
         self.ghost_clear();
         if let Some(path) = &self.standby_marker {
             let result = if self.standby {
@@ -1494,6 +1519,131 @@ impl StreamingEngine {
             self.accumulated_text.clear();
         }
         self.guided_grammar = grammar;
+    }
+
+    /// Allow command mode ("command" on its own), keeping its runtime files
+    /// in `state_dir`. A marker left by an earlier run is removed.
+    pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
+        let _ = std::fs::remove_file(state_dir.join(crate::command_mode::MARKER));
+        self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
+    }
+
+    /// Whether command mode is on.
+    pub fn in_command_mode(&self) -> bool {
+        self.command_mode.is_some()
+    }
+
+    async fn enter_command_mode(&mut self, heard: &str) {
+        let Some(paths) = self.command_paths.clone() else {
+            return;
+        };
+        let started = Instant::now();
+        match crate::command_mode::CommandMode::start(paths.clone()).await {
+            Ok(mode) => {
+                info!(
+                    "Command mode on: {} actions, ready in {:?}",
+                    mode.router.actions.len(),
+                    started.elapsed()
+                );
+                self.command_mode = Some(mode);
+                let marker = paths.state_dir.join(crate::command_mode::MARKER);
+                if let Err(e) = std::fs::write(marker, "") {
+                    warn!("Cannot write the command mode marker: {}", e);
+                }
+                self.ghost_accept(heard).await;
+                crate::desktop::AudioFeedback::beep_done().ok();
+                self.send_event(StreamingEvent::VoiceCommand {
+                    name: "command-mode".into(),
+                    text: heard.to_string(),
+                });
+            }
+            Err(e) => {
+                warn!("Command mode unavailable: {}", e);
+                self.ghost_clear();
+                crate::desktop::AudioFeedback::beep_error().ok();
+                self.send_event(StreamingEvent::Error(format!(
+                    "Command mode unavailable: {e}"
+                )));
+            }
+        }
+    }
+
+    fn leave_command_mode(&mut self) {
+        if self.command_mode.take().is_none() {
+            return;
+        }
+        if let Some(paths) = &self.command_paths {
+            let _ = std::fs::remove_file(paths.state_dir.join(crate::command_mode::MARKER));
+        }
+        info!("Command mode off: dictating again");
+        self.send_event(StreamingEvent::VoiceCommand {
+            name: "dictation-mode".into(),
+            text: String::new(),
+        });
+    }
+
+    /// Route a command-mode utterance to its action by embedding.
+    async fn command_segment(&mut self, wav: &std::path::Path) {
+        use crate::command_mode::{Effect, Outcome};
+        let Ok(bytes) = std::fs::read(wav) else {
+            self.discard("segment audio unreadable");
+            return;
+        };
+        let Some(mode) = self.command_mode.as_mut() else {
+            return;
+        };
+        let started = Instant::now();
+        let (outcome, decision) = match mode.hear(&bytes).await {
+            Ok(result) => result,
+            Err(e) => {
+                warn!("Command mode: {}", e);
+                crate::desktop::AudioFeedback::beep_error().ok();
+                self.discard("embedding failed");
+                return;
+            }
+        };
+        let top: Vec<String> = decision
+            .votes
+            .iter()
+            .take(3)
+            .map(|(name, share)| format!("{name} {:.0}%", share * 100.0))
+            .collect();
+        info!(
+            "Command mode: {:?} in {:?} (nearest {:.3}; {})",
+            outcome,
+            started.elapsed(),
+            decision.nearest,
+            top.join(", ")
+        );
+        match outcome {
+            Outcome::Fire { name, effect } => match effect {
+                Effect::Keys(combo) => {
+                    self.run_command(&crate::commands::Command::Keys(combo), &name)
+                        .await
+                }
+                Effect::Run(argv) => {
+                    let command = crate::commands::Command::Run {
+                        name: name.clone(),
+                        argv: argv.clone(),
+                    };
+                    self.run_program(&command, &argv, &name).await;
+                }
+                Effect::Leave => {
+                    crate::desktop::AudioFeedback::beep_done().ok();
+                    self.leave_command_mode();
+                }
+                Effect::Nothing | Effect::Wrong => {}
+            },
+            Outcome::Taught(name) => {
+                info!("Command mode: learned a new way to say {}", name);
+                crate::desktop::AudioFeedback::beep_done().ok();
+            }
+            Outcome::Forgot(name) => {
+                info!("Command mode: forgot the last recording of {:?}", name);
+                crate::desktop::AudioFeedback::beep_done().ok();
+            }
+            Outcome::Nothing => self.discard("no action is a confident match"),
+        }
     }
 
     /// Check if VAD is currently detecting speech
