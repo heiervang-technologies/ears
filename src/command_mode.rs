@@ -148,7 +148,8 @@ fn builtins() -> Vec<Action> {
         a(
             "orange",
             Effect::Colour(crate::colour_mode::Colour::Orange),
-            &["orange", "orange mode"],
+            // "out": out of command mode, into standby
+            &["orange", "orange mode", "out"],
         ),
         a(
             "blue",
@@ -879,6 +880,17 @@ run = ["playerctl", "next"]
         }
         assert!(actions.len() > 8);
         assert!(actions.iter().all(|a| !a.text.is_empty()));
+    }
+
+    #[test]
+    fn out_goes_to_standby() {
+        let (_, actions) = parse_actions(DEFAULT_ACTIONS).unwrap();
+        let orange = actions.iter().find(|a| a.name == "orange").unwrap();
+        assert_eq!(
+            orange.effect,
+            Effect::Colour(crate::colour_mode::Colour::Orange)
+        );
+        assert!(orange.text.iter().any(|t| t == "out"));
     }
 
     #[test]
