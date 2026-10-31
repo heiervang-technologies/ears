@@ -31,7 +31,7 @@ text = ["enter", "press enter", "submit", "send it", "confirm"]
 [[action]]
 name = "escape"
 keys = "escape"
-text = ["escape", "cancel", "never mind", "close this"]
+text = ["escape", "cancel", "never mind", "dismiss"]
 
 [[action]]
 name = "tab"
