@@ -233,6 +233,24 @@ pub enum Commands {
         other: bool,
     },
 
+    /// Find something on screen with SAM 3 and act on it (vision mode).
+    /// "the send button" outlines the best match in pink; then say
+    /// "click", "right click", "middle click", "next", a number, "up
+    /// twenty" / "down five" (scroll there), or describe something else.
+    /// A verb up front ("right click the blue folder") picks the action.
+    /// Exit 0 done, 1 cancelled or nothing found, 2 no answer in time.
+    Look {
+        /// What to find, e.g. "right click the second send button".
+        #[arg(required = true, num_args = 1..)]
+        words: Vec<String>,
+        /// Act on the best match without asking (needs a verb).
+        #[arg(long)]
+        yes: bool,
+        /// Print the matches as JSON and exit, without acting.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Live subtitles of what VAD hears, drawn above the ears LED line
     /// (for a stream). Without on|off, say whether they are on.
     Subtitles {

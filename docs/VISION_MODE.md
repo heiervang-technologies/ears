@@ -1,6 +1,6 @@
 # Vision mode (pink): point at the screen by voice
 
-Status: design draft, 2026-11-03.
+Status: P0 and pink mode implemented (`ears look`, colour word "pink"), 2026-11-03.
 
 Say what you want to click. ears finds it on screen with SAM 3, outlines its
 best guess in pink, and clicks it once you confirm:
@@ -8,10 +8,13 @@ best guess in pink, and clicks it once you confirm:
     "pink"                          LED turns pink; speech is no longer typed
     "the send button"               the send button is outlined, numbered 1;
                                     other matches are outlined faintly as 2, 3, ...
-    "yes" / "click"                 left click inside it
-    "right click the blue folder"   outline, then right click once confirmed
-    "next" / "two" / "no"           move to the next match, pick #2, or drop the guess
-    "cancel" / "blue"               leave vision mode
+    "click" / "left click"          left click inside it
+    "right click" / "middle click"  that button
+    "up twenty" / "down five"       scroll there by that many notches, then look again (forms)
+    "next" / "two"                  move to the next match, or pick #2
+    "the search field"              look for something else on the same screenshot
+    "right click the blue folder"   a verb up front: outline, then "yes" does it
+    "cancel"                        drop the guess; "blue" leaves vision mode
 
 The SAM model runs on centurion. Hackbook, or any other machine, sends its
 own screenshot over the LAN.
@@ -171,10 +174,17 @@ root-only there, so the sway seat commands are the path that works.
 4. **P3:** spatial relations ("next to", "in the sidebar"), "scroll down",
    "drag X to Y", follow-ups on the last target ("right click it").
 
-## Questions
+## Decided (Markus, 2026-11-03)
 
-- Pink, with "pink / vision / look", as the colour and trigger: OK?
-- With no verb, outline only (then "click"), or treat no verb as a left click
-  that still asks to confirm? The draft does outline only.
-- Who may scale `sam-segment` up and down on demand: ears over the k8s API,
-  or a small broker on centurion?
+- Pink, triggered by "pink / magenta / vision / look".
+- A bare description only outlines. Then the command: click, left click,
+  right click, middle click, or "up N" / "down N" to scroll forms.
+- ears (this desk) owns scaling `sam-segment` for now. SAM may later also
+  run on other GPU machines, but it runs on centurion first.
+
+## Measured
+
+`/segment` on a 1280×800 hackbook screenshot (JPEG, 180 KB), sent to
+centurion's 3090, round trip including upload: 160 to 210 ms. That is far
+under the documented 0.7 to 3 s. Splitting off `/image` (step 2) is
+therefore an optimisation for later, not a prerequisite.

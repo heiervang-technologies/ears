@@ -296,6 +296,9 @@ pub struct Config {
     /// Spoken commands in VAD mode (`[commands]`).
     #[serde(default)]
     pub commands: crate::commands::VoiceCommands,
+    /// Vision mode: pointing at the screen by voice with SAM 3 (`[vision]`).
+    #[serde(default)]
+    pub vision: crate::vision::VisionConfig,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -359,6 +362,7 @@ impl Config {
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
+            vision: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
@@ -517,6 +521,7 @@ impl Config {
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
+            vision: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
