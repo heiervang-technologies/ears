@@ -463,9 +463,10 @@ async fn test_ghost_stream_utterance_follows_the_segment() {
         .process_segment(segs.into_iter().next().unwrap())
         .await
         .unwrap();
-    server.wait_for(|l| l == format!("end {id}")).await;
-    // Every sample went out exactly once, before `end`.
-    assert_eq!(server.audio_bytes(), 2 * total);
+    server.wait_for(|l| l == format!("cancel {id}")).await;
+    // Final HTTP delivery must not trigger unused stream inference. Pending
+    // preview samples may be discarded when the preview is cancelled.
+    assert!(server.audio_bytes() <= 2 * total);
     assert_eq!(
         next_cmd_ticking(&mut engine, &lines).await,
         "C hello stream."

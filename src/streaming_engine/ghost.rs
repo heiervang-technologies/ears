@@ -192,33 +192,6 @@ impl GhostState {
         }
     }
 
-    /// The current utterance's segment is complete: send the rest of it and
-    /// `end`. Its `final` is not used; the committed text comes from the
-    /// final transcription as always.
-    pub(super) fn stream_end(&mut self, samples: &[f32]) {
-        let Some(streamed) = self.streamed.take() else {
-            return;
-        };
-        let Some(session) = self.session() else {
-            return;
-        };
-        if streamed.utterance == self.utterance {
-            let end = samples
-                .len()
-                .min(session.max_samples().unwrap_or(usize::MAX));
-            if end > streamed.sent {
-                let pcm: Vec<i16> = samples[streamed.sent..end]
-                    .iter()
-                    .map(|&s| f32_to_i16(s))
-                    .collect();
-                session.push(streamed.id, &pcm);
-            }
-            session.end(streamed.id);
-        } else {
-            session.cancel(streamed.id);
-        }
-    }
-
     pub(super) fn clear(&mut self) {
         if self.showing {
             let r = self.client.clear();

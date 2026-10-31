@@ -31,6 +31,10 @@ pub const PRESETS: &[(&str, &str)] = &[
 /// The `[ghost]` config section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GhostStyle {
+    /// Opt in only with Alacritty's custom preedit-colors patch. Stock builds
+    /// reject these keys; inline ghost text still works without them.
+    #[serde(default)]
+    pub alacritty_preedit: bool,
     /// `#rrggbb`, `#rgb`, or a preset name. None: each app's default.
     #[serde(default)]
     pub color: Option<String>,
@@ -223,6 +227,9 @@ fn profile_dirs(root: &Path, ini: &str) -> Vec<PathBuf> {
 
 /// Set `[colors.preedit]` in an alacritty.toml, keeping everything else.
 fn apply_alacritty(path: &Path, style: &GhostStyle) -> std::io::Result<bool> {
+    if !style.alacritty_preedit {
+        return Ok(false);
+    }
     let old = std::fs::read_to_string(path)?;
     // Ghost text is drawn over the terminal, without a background box.
     let mut keys: Vec<(&str, String)> = vec![
@@ -407,6 +414,15 @@ size = 11
     }
 
     #[test]
+    fn stock_alacritty_is_not_given_custom_config_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alacritty.toml");
+        std::fs::write(&path, ALACRITTY).unwrap();
+        assert!(!apply_alacritty(&path, &GhostStyle::default()).unwrap());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), ALACRITTY);
+    }
+
+    #[test]
     fn alacritty_file_is_written_through_symlinks_only_on_change() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real.toml");
@@ -414,6 +430,7 @@ size = 11
         let link = dir.path().join("alacritty.toml");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let style = GhostStyle {
+            alacritty_preedit: true,
             color: Some("orange".into()),
             underline: false,
             ..Default::default()
@@ -438,12 +455,14 @@ size = 11
         let path = dir.path().join("user.js");
         std::fs::write(&path, "user_pref(\"a.b\", true);\n").unwrap();
         let style = GhostStyle {
+            alacritty_preedit: true,
             color: Some("#e0c040".into()),
             underline: false,
             ..Default::default()
         };
         assert!(apply_hover(&path, &style).unwrap());
         let style = GhostStyle {
+            alacritty_preedit: true,
             color: Some("green-yellow".into()),
             underline: false,
             ..Default::default()
@@ -462,6 +481,7 @@ size = 11
         let path = dir.path().join("alacritty.toml");
         std::fs::write(&path, ALACRITTY).unwrap();
         let mut style = GhostStyle {
+            alacritty_preedit: true,
             color: Some("grey".into()),
             frozen_color: Some("#fff".into()),
             ..Default::default()

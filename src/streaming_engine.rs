@@ -335,7 +335,8 @@ impl StreamingEngine {
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
         if let Some(ghost) = self.ghost.as_mut() {
-            ghost.stream_end(&segment.samples);
+            // The final HTTP transcription owns delivery. Cancel the live
+            // preview instead of requesting a second final decode we discard.
             // Partials still in flight belong to this finished utterance.
             ghost.next_utterance();
         }
