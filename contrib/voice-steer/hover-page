@@ -13,7 +13,7 @@
 
 Options (any position):
   --dry          print what would be hit, change nothing
-  --embed        blend in EmbeddingGemma similarity (k8s service, see README)
+  --embed        blend in embeddinggemma2 similarity (k8s service, see README)
   --notify       send a desktop notification when nothing matched
   --timing       print per-phase latency to stderr
   --json         (list) machine-readable output

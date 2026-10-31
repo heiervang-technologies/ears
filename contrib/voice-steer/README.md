@@ -31,7 +31,7 @@ hover-page scroll up|down|top|bottom [N|a bit|a lot]   N screens (0.8 of a viewp
 hover-page back|forward|reload
 hover-page list [TARGET]                candidates and scores, for debugging
   --dry      print what would be hit, change nothing      --timing  per-phase latency
-  --embed    blend in EmbeddingGemma similarity           --notify  desktop note on a miss
+  --embed    blend in embeddinggemma2 similarity           --notify  desktop note on a miss
   --tab TEXT act on the tab whose URL contains TEXT (default: the selected tab)
 ```
 
@@ -85,7 +85,7 @@ written afterwards and scored once.
 
 \* "sidebar" became a menu word and submit buttons answer to "submit".
 
-`--embed` re-ranks the top 40 fuzzy candidates with EmbeddingGemma
+`--embed` re-ranks the top 40 fuzzy candidates with embeddinggemma2
 (`http://localhost:30201/v1/embeddings`, model `embeddinggemma-2`; override with
 `HOVER_PAGE_EMBED_URL` / `HOVER_PAGE_EMBED_MODEL`), as 0.6 fuzzy + 0.4 cosine. It
 recovered none of the fuzzy misses and added false positives: "upload video" hit
