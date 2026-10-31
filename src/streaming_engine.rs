@@ -1625,20 +1625,33 @@ impl StreamingEngine {
         }
         self.leave_command_mode();
         let yellow = colour == Colour::Yellow;
-        // Typing goes through the running VAD's own switch (`ears typing`),
-        // so the settings it keeps stay the one source of truth.
-        let ears = std::env::current_exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "ears".into());
-        let typing = if yellow { "off" } else { "on" };
-        if let Err(e) = crate::commands::spawn_detached(&[ears, "typing".into(), typing.into()]) {
-            warn!("Cannot switch typing {}: {}", typing, e);
-        }
-        if yellow && !crate::colour_mode::stick_listening() {
-            match crate::commands::spawn_detached(&["talking-stick".into(), "listen".into()]) {
-                Ok(pid) => info!("Talking stick listening (pid {})", pid),
-                Err(e) => warn!("Cannot start the talking stick: {}", e),
-            }
+        // haios-voice-route owns the route: it switches typing and starts
+        // the talking stick listener for yellow, and stops that same
+        // listener for blue. Starting one here, as before, left it running
+        // after "blue", so speech was typed and sent to the stick at once.
+        let route = if yellow { "stick" } else { "cursor" };
+        let argv: Vec<String> = if crate::colour_mode::on_path(crate::colour_mode::VOICE_ROUTE) {
+            [
+                "env",
+                "HAIOS_VOICE_ROUTE_QUIET=1",
+                crate::colour_mode::VOICE_ROUTE,
+                route,
+            ]
+            .map(String::from)
+            .to_vec()
+        } else {
+            // No router: typing only, through the running VAD's own switch.
+            let ears = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "ears".into());
+            vec![
+                ears,
+                "typing".into(),
+                if yellow { "off" } else { "on" }.into(),
+            ]
+        };
+        if let Err(e) = crate::commands::spawn_detached(&argv) {
+            warn!("Cannot switch to the {} route: {}", route, e);
         }
         self.ghost_clear();
         crate::desktop::AudioFeedback::beep_done().ok();
