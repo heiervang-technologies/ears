@@ -1144,6 +1144,11 @@ impl StreamingEngine {
     /// (`ears standby on|off|toggle`), e.g. by a voice call that needs the
     /// words. The switch is cued and published like a spoken one.
     pub fn request_wake(&mut self, wake: crate::wake::Wake) {
+        // A tool asking for the mode ears is already in (a call answered
+        // while awake) gets no cue: only a spoken phrase is confirmed.
+        if wake.standby_after(self.standby) == self.standby {
+            return;
+        }
         self.apply_wake(wake, "");
     }
 
