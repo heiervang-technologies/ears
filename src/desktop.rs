@@ -295,6 +295,107 @@ impl Notifications {
     }
 }
 
+/// Soft static played while ears is listening, so it is audible that the
+/// microphone is live. Noise is generated here and streamed to `paplay`,
+/// which exits on its own once this process (and so the pipe) goes away.
+pub struct StaticHiss {
+    child: std::process::Child,
+}
+
+impl StaticHiss {
+    const RATE: u32 = 48_000;
+
+    /// Start the hiss at `volume` (0-100; 0 plays nothing).
+    pub fn start(volume: u8) -> Result<Option<Self>> {
+        if volume == 0 {
+            return Ok(None);
+        }
+        let pa_volume = (volume.min(100) as u32 * 65536 / 100).to_string();
+        let mut child = Command::new("paplay")
+            .args([
+                "--raw",
+                "--format=s16le",
+                "--channels=1",
+                &format!("--rate={}", Self::RATE),
+                &format!("--volume={}", pa_volume),
+                "--client-name=ears",
+                "--stream-name=ears static",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("Failed to spawn paplay")?;
+        let mut stdin = child.stdin.take().context("paplay has no stdin")?;
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut noise = Noise::new(Self::RATE);
+            let mut buf = vec![0u8; Self::RATE as usize / 10 * 2];
+            loop {
+                noise.fill(&mut buf);
+                // paplay gone (stopped, or this process is exiting).
+                if stdin.write_all(&buf).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Some(Self { child }))
+    }
+}
+
+impl Drop for StaticHiss {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Gently low-passed white noise with a short fade-in (no click on start).
+struct Noise {
+    state: u64,
+    low: f32,
+    fade: f32,
+    fade_step: f32,
+}
+
+impl Noise {
+    /// Peak level before the stream volume: quiet on its own.
+    const LEVEL: f32 = 0.12;
+
+    fn new(rate: u32) -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9e37_79b9_7f4a_7c15);
+        Self {
+            state: seed | 1,
+            low: 0.0,
+            fade: 0.0,
+            fade_step: 1.0 / (rate as f32 * 0.25),
+        }
+    }
+
+    fn white(&mut self) -> f32 {
+        // xorshift64*
+        self.state ^= self.state >> 12;
+        self.state ^= self.state << 25;
+        self.state ^= self.state >> 27;
+        let r = self.state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        (r >> 40) as f32 / (1u64 << 23) as f32 - 1.0
+    }
+
+    fn fill(&mut self, buf: &mut [u8]) {
+        for frame in buf.as_chunks_mut::<2>().0 {
+            // One-pole low-pass takes the harsh top off the hiss.
+            let w = self.white();
+            self.low += 0.35 * (w - self.low);
+            self.fade = (self.fade + self.fade_step).min(1.0);
+            let v = (self.low * Self::LEVEL * self.fade * 32767.0) as i16;
+            *frame = v.to_le_bytes();
+        }
+    }
+}
+
 /// Audio feedback manager
 ///
 /// Sounds (E5 start, E4 done, double-B4 error) are embedded in the binary.
@@ -962,6 +1063,33 @@ impl TextInput {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn static_noise_is_quiet_and_fades_in() {
+        let mut noise = Noise::new(48_000);
+        let mut buf = vec![0u8; 48_000 * 2];
+        noise.fill(&mut buf);
+        let samples = crate::continuous::samples(&buf);
+        let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(peak > 0, "not silent");
+        assert!(peak as f32 <= Noise::LEVEL * 32767.0 + 1.0, "peak {peak}");
+        let early = samples[..480]
+            .iter()
+            .map(|s| s.unsigned_abs() as u32)
+            .max()
+            .unwrap();
+        let late = samples[40_000..]
+            .iter()
+            .map(|s| s.unsigned_abs() as u32)
+            .max()
+            .unwrap();
+        assert!(early * 4 < late, "fades in: early {early}, late {late}");
+    }
+
+    #[test]
+    fn static_hiss_off_at_zero_volume() {
+        assert!(StaticHiss::start(0).unwrap().is_none());
+    }
+
     use super::*;
 
     #[test]

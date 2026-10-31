@@ -1128,6 +1128,15 @@ async fn run_ghost_preview(config: &Config, recorder_pid: i32, recorder_start: u
     // one reusing the PID) is not ours to preview.
     let recorder_alive = || same_process(recorder_pid, recorder_start);
 
+    // Lives as long as this preview: stopped (or killed) with it.
+    let _hiss = match ears::desktop::StaticHiss::start(config.static_volume) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::debug!("Static hiss: {}", e);
+            None
+        }
+    };
+
     let mut last_len = 0usize;
     let mut last_shown = String::new();
     while recorder_alive() {

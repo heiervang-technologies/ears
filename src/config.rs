@@ -191,6 +191,9 @@ pub struct Config {
     /// hypothesis finished off in one more tick, which is faster. Default: true.
     #[serde(default = "default_final_correction")]
     pub final_correction: bool,
+    /// Soft static while a ghost recording is listening (0-100, 0 = off).
+    #[serde(default)]
+    pub static_volume: u8,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -245,6 +248,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             final_correction: default_final_correction(),
+            static_volume: 0,
             config_dir,
             active_profile: None,
             state_dir,
@@ -380,6 +384,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             final_correction: default_final_correction(),
+            static_volume: 0,
             config_dir: PathBuf::new(),
             active_profile: None,
             state_dir: PathBuf::new(),
