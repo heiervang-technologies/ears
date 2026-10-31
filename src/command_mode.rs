@@ -1,10 +1,14 @@
-//! Command mode: speech routed to actions by embedding, not transcription.
+//! Command mode: speech routed to actions by its words and by embedding.
 //!
 //! Saying "command" on its own switches VAD into command mode (the ears
-//! light turns violet). From then on an utterance is not transcribed: its raw
-//! audio is embedded with EmbeddingGemma 2 (the cluster's `embeddinggemma2`,
-//! a llama-server with the audio encoder) and compared with the anchors of
-//! every action. Anchors are examples of what an action means: the text
+//! light turns violet). From then on each utterance is heard two ways at
+//! once: transcribed, and its raw audio embedded with EmbeddingGemma 2 (the
+//! cluster's `embeddinggemma2`, a llama-server with the audio encoder).
+//! Words that are an action's name or one of its phrasings fire it outright.
+//! Otherwise the audio, and the transcript's text embedding, are compared
+//! with the anchors of every action (see [`CommandMode::hear_with`] for how
+//! the two votes combine). The transcript is also the feedback: the subtitle
+//! line shows what was heard, and the nearest action when nothing fired. Anchors are examples of what an action means: the text
 //! descriptions in `actions.toml`, and recordings of your own voice, added by
 //! `ears teach ACTION` or automatically each time an action fires. The k
 //! nearest anchors vote; the winner fires only if its nearest anchor is
@@ -585,6 +589,82 @@ pub enum Outcome {
     Nothing,
 }
 
+/// How one command-mode utterance was heard: written to [`LAST`] and logged.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Hearing {
+    /// What the ASR heard ("" if it failed or was too slow).
+    pub words: String,
+    /// The vote on the raw audio, if it could be embedded.
+    pub audio: Option<Decision>,
+    /// The vote on the transcript's text embedding.
+    pub text: Option<Decision>,
+    /// What fired it: "words" (an exact phrasing), "both" (audio and text
+    /// agree), "voice" (the audio alone) or "meaning" (the text alone).
+    pub by: Option<&'static str>,
+    /// Nothing fired: the action it came closest to, if not chatter.
+    pub nearest: Option<String>,
+}
+
+/// Lowercase words, punctuation and filler gone: "Press Enter." -> "press enter".
+pub fn plain(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '\'' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .filter(|w| !matches!(*w, "please" | "uh" | "um" | "erm"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+impl Router {
+    /// The action whose name or one of whose phrasings the words are.
+    pub fn by_words(&self, words: &str) -> Option<usize> {
+        let said = plain(words);
+        if said.is_empty() {
+            return None;
+        }
+        self.actions
+            .iter()
+            .position(|a| plain(&a.name) == said || a.text.iter().any(|t| plain(t) == said))
+    }
+}
+
+/// Combine the three ways an utterance is heard into the action to fire.
+/// Exact words win. Then audio and text: agreeing, or either alone. If they
+/// fire different actions, nothing does: a wrong key is worse than a retry.
+fn combine(
+    words: Option<usize>,
+    audio: Option<&Decision>,
+    text: Option<&Decision>,
+) -> (Option<usize>, Option<&'static str>) {
+    if words.is_some() {
+        return (words, Some("words"));
+    }
+    match (audio.and_then(|d| d.fire), text.and_then(|d| d.fire)) {
+        (Some(a), Some(t)) if a == t => (Some(a), Some("both")),
+        (Some(_), Some(_)) => (None, None),
+        (Some(a), None) => (Some(a), Some("voice")),
+        (None, Some(t)) => (Some(t), Some("meaning")),
+        (None, None) => (None, None),
+    }
+}
+
+/// The action the votes leaned to when nothing fired (not chatter).
+fn nearest(hearing: &Hearing) -> Option<String> {
+    [hearing.text.as_ref(), hearing.audio.as_ref()]
+        .into_iter()
+        .flatten()
+        .find_map(|d| d.votes.first().map(|v| v.0.clone()))
+        .filter(|name| name != "none")
+}
+
 impl CommandMode {
     /// Load actions and anchors, embedding text anchors not in the cache.
     pub async fn start(paths: Paths) -> Result<Self> {
@@ -637,27 +717,48 @@ impl CommandMode {
         })
     }
 
-    /// Route one utterance (16 kHz mono WAV bytes).
-    pub async fn hear(&mut self, wav: &[u8]) -> Result<(Outcome, Decision)> {
+    /// Route one utterance by its audio alone (16 kHz mono WAV bytes).
+    pub async fn hear(&mut self, wav: &[u8]) -> Result<(Outcome, Hearing)> {
         let u = self.embedder.audio(wav).await?;
-        let decision = self.router.decide(&u);
-        let _ = std::fs::write(
-            self.paths.state_dir.join(LAST),
-            serde_json::to_vec(&decision).unwrap_or_default(),
-        );
-        // A label from `ears teach` wins over the vote.
+        Ok(self.hear_with(Some(u), "").await)
+    }
+
+    /// Route one utterance from its audio embedding (`audio`, if the
+    /// embedding worked) and its transcript (`words`, "" if the ASR did not
+    /// answer in time). See [`combine`].
+    pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
+        let by_words = self.router.by_words(words);
+        let mut hearing = Hearing {
+            words: words.trim().to_string(),
+            audio: audio.as_ref().map(|u| self.router.decide(u)),
+            ..Default::default()
+        };
+        // What the words mean, unless they already name an action.
+        if by_words.is_none() && !plain(words).is_empty() {
+            match self.embedder.text(words.trim()).await {
+                Ok(v) => hearing.text = Some(self.router.decide(&v)),
+                Err(e) => tracing::warn!("Command mode: cannot embed the transcript: {}", e),
+            }
+        }
+        // A label from `ears teach` wins over the vote (it needs the voice).
         let teach = self.paths.state_dir.join(TEACH);
-        if let Ok(name) = std::fs::read_to_string(&teach) {
+        if let (Some(u), Ok(name)) = (audio.as_ref(), std::fs::read_to_string(&teach)) {
             let _ = std::fs::remove_file(&teach);
             let name = name.trim().to_string();
             if let Some(i) = self.router.index(&name) {
-                self.remember(i, u, "teach");
-                return Ok((Outcome::Taught(name), decision));
+                self.remember(i, u.clone(), "teach");
+                self.write_last(&hearing);
+                return (Outcome::Taught(name), hearing);
             }
         }
-        let Some(i) = decision.fire else {
-            return Ok((Outcome::Nothing, decision));
+        let (fire, by) = combine(by_words, hearing.audio.as_ref(), hearing.text.as_ref());
+        hearing.by = by;
+        let Some(i) = fire else {
+            hearing.nearest = nearest(&hearing);
+            self.write_last(&hearing);
+            return (Outcome::Nothing, hearing);
         };
+        self.write_last(&hearing);
         let action = self.router.actions[i].clone();
         let outcome = match action.effect {
             Effect::Wrong => {
@@ -673,9 +774,16 @@ impl CommandMode {
             }
             Effect::Nothing => Outcome::Nothing,
             effect => {
-                // Few-shot calibration: a clear firing teaches its own
-                // phrasing. A narrow one might be a misroute nobody undid.
-                if decision.margin >= 2.0 * self.router.margin {
+                // Few-shot calibration: a clear firing teaches the voice its
+                // own phrasing. A narrow one might be a misroute nobody undid.
+                let clear =
+                    |d: Option<&Decision>| d.is_some_and(|d| d.margin >= 2.0 * self.router.margin);
+                let teaches = match by {
+                    Some("words") | Some("both") => true,
+                    Some("voice") => clear(hearing.audio.as_ref()),
+                    _ => clear(hearing.text.as_ref()),
+                };
+                if let (true, Some(u)) = (teaches, audio) {
                     self.remember(i, u, "auto");
                 }
                 Outcome::Fire {
@@ -684,7 +792,14 @@ impl CommandMode {
                 }
             }
         };
-        Ok((outcome, decision))
+        (outcome, hearing)
+    }
+
+    fn write_last(&self, hearing: &Hearing) {
+        let _ = std::fs::write(
+            self.paths.state_dir.join(LAST),
+            serde_json::to_vec(hearing).unwrap_or_default(),
+        );
     }
 
     fn remember(&mut self, action: usize, vec: Vec<f32>, source: &str) {
@@ -836,5 +951,49 @@ run = ["playerctl", "next"]
             assert_eq!(parse_embedding(&v), Some(vec![3.0, 4.0]));
         }
         assert_eq!(parse_embedding(&serde_json::json!({})), None);
+    }
+
+    fn decision(r: &Router, v: &[f32]) -> Decision {
+        r.decide(&unit(v))
+    }
+
+    #[test]
+    fn words_name_an_action_by_its_name_or_a_phrasing() {
+        let r = router();
+        assert_eq!(r.by_words("Press enter."), r.index("enter"));
+        assert_eq!(r.by_words("NEXT!"), r.index("next"));
+        assert_eq!(r.by_words("Please, press enter"), r.index("enter"));
+        assert_eq!(r.by_words("press enter twice"), None);
+        assert_eq!(r.by_words(""), None);
+    }
+
+    #[test]
+    fn exact_words_win_and_disagreement_fires_nothing() {
+        let r = router();
+        let enter = decision(&r, &[1.0, 0.0, 0.0, 0.0, 0.0]);
+        let next = decision(&r, &[0.0, 1.0, 0.0, 0.0, 0.0]);
+        let unsure = decision(&r, &[0.5, 0.5, 0.5, 0.5, 0.0]);
+        let (e, n) = (r.index("enter"), r.index("next"));
+        assert_eq!(combine(n, Some(&enter), Some(&enter)), (n, Some("words")));
+        assert_eq!(combine(None, Some(&enter), Some(&enter)), (e, Some("both")));
+        assert_eq!(combine(None, Some(&enter), Some(&next)), (None, None));
+        assert_eq!(
+            combine(None, Some(&enter), Some(&unsure)),
+            (e, Some("voice"))
+        );
+        assert_eq!(combine(None, None, Some(&next)), (n, Some("meaning")));
+        assert_eq!(combine(None, Some(&unsure), None), (None, None));
+    }
+
+    #[test]
+    fn a_miss_names_the_nearest_action_unless_it_was_chatter() {
+        let r = router();
+        let mut hearing = Hearing {
+            text: Some(decision(&r, &[0.6, 0.3, 0.0, 0.0, 0.5])),
+            ..Default::default()
+        };
+        assert_eq!(nearest(&hearing).as_deref(), Some("enter"));
+        hearing.text = Some(decision(&r, &[0.0, 0.0, 1.0, 0.0, 0.0]));
+        assert_eq!(nearest(&hearing), None);
     }
 }

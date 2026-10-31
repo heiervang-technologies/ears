@@ -327,11 +327,23 @@ never uses the grammar, so the wake phrase still works.
 ### Command mode (VAD)
 
 Say "command" on its own and VAD switches to command mode: the ears light
-turns violet and nothing is transcribed or typed. Each utterance's raw audio is
-embedded with embeddinggemma2 (a llama-server) and routed
-to the nearest action in `~/.config/ears/actions.toml`, which ships with keys
-(enter, escape, tab, arrows) and media controls and takes any number of
-`keys`/`run` actions. Say "command" again to go back to dictation.
+turns violet and nothing is typed. Each utterance is heard two ways at once:
+transcribed, and its raw audio embedded with embeddinggemma2 (a llama-server).
+Words that are an action's name or one of its phrasings in
+`~/.config/ears/actions.toml` fire it at once. Otherwise the audio and the
+transcript's meaning each vote for the nearest action; one that agrees, or
+either alone, fires, and two that disagree fire nothing. The words only count
+if they arrive within 1.5 s; after that the embedding decides alone. The file
+ships with keys (enter, escape, tab, arrows) and media controls and takes any
+number of `keys`/`run` actions. Say "command" again to go back to dictation.
+
+With subtitles on, the line shows what was heard: highlighted with the action
+it fired ("send it" -> enter), or marked as no command with the nearest action,
+so a command that does not exist is plain to see. `command-last.json` in the
+runtime dir has the last hearing in full.
+
+`ears command on|off|toggle|status` switches it from scripts (a voice call
+leaves command mode so your words reach the caller).
 
 It learns your phrasing few-shot, without training:
 

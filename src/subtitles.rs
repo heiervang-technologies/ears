@@ -11,6 +11,11 @@
 //! `settled` is how many characters of `text` will not change; `final` marks
 //! the committed transcript; `command` that it was heard as a command (a key,
 //! a mode switch, an action), which the overlay highlights. An empty `text` clears the line (discarded speech).
+//!
+//! In command mode a line says what came of the words: `"action"` names the
+//! action that fired when the words were not its name ("send it" -> enter),
+//! and `"miss": true` marks words that fired nothing, with `"nearest"` the
+//! action they came closest to, if any.
 //! The marker is checked on every write, so `ears subtitles on|off` takes
 //! effect in a running VAD at once. It holds the modes subtitles show in
 //! (config `subtitle_modes`), one per line, so the overlay can show a
@@ -101,20 +106,68 @@ impl Subtitles {
         self.write("", 0, true, false);
     }
 
+    /// Command mode: `heard` fired `action` (the words, highlighted, and
+    /// the action when the words were not simply its name).
+    pub fn fired(&mut self, mode: Mode, heard: &str, action: &str) {
+        if !self.modes.contains(&mode) {
+            return;
+        }
+        let heard = heard.trim();
+        let text = if heard.is_empty() { action } else { heard };
+        let mut extra = serde_json::Map::new();
+        if crate::command_mode::plain(text) != crate::command_mode::plain(action) {
+            extra.insert("action".into(), action.into());
+        }
+        self.write_with(text, text.len(), true, true, extra);
+    }
+
+    /// Command mode: `heard` fired nothing; `nearest` is the action it came
+    /// closest to. Without words there is nothing to show: the line clears.
+    pub fn missed(&mut self, mode: Mode, heard: &str, nearest: Option<&str>) {
+        if !self.modes.contains(&mode) {
+            return;
+        }
+        let heard = heard.trim();
+        if heard.is_empty() {
+            self.clear();
+            return;
+        }
+        let mut extra = serde_json::Map::new();
+        extra.insert("miss".into(), true.into());
+        if let Some(name) = nearest {
+            extra.insert("nearest".into(), name.into());
+        }
+        self.write_with(heard, heard.len(), true, false, extra);
+    }
+
     fn write(&mut self, text: &str, settled: usize, final_: bool, command: bool) {
+        self.write_with(text, settled, final_, command, serde_json::Map::new());
+    }
+
+    fn write_with(
+        &mut self,
+        text: &str,
+        settled: usize,
+        final_: bool,
+        command: bool,
+        extra: serde_json::Map<String, serde_json::Value>,
+    ) {
         if !self.on() {
             return;
         }
         self.seq += 1;
         let text = text.trim();
         let settled = floor_char_boundary(text, settled.min(text.len()));
-        let line = serde_json::json!({
+        let mut line = serde_json::json!({
             "seq": self.seq,
             "text": text,
             "settled": text[..settled].chars().count(),
             "final": final_,
             "command": command,
         });
+        if let Some(map) = line.as_object_mut() {
+            map.extend(extra);
+        }
         // Atomic: the overlay never reads half a line.
         let tmp = self.file.with_extension("json.tmp");
         if std::fs::write(&tmp, line.to_string()).is_ok() {
@@ -227,5 +280,33 @@ mod tests {
         s.finished(Mode::Dictation, "again");
         assert!(!dir.path().join(FILE).exists());
         set(dir.path(), false, &Mode::ALL).unwrap();
+    }
+
+    #[test]
+    fn command_lines_say_what_came_of_the_words() {
+        let dir = tempfile::tempdir().unwrap();
+        set(dir.path(), true, &Mode::ALL).unwrap();
+        let mut s = Subtitles::new(dir.path(), &Mode::ALL);
+        s.fired(Mode::Command, "Send it.", "enter");
+        let line = read(dir.path());
+        assert_eq!(
+            (line["text"].as_str(), line["command"].as_bool()),
+            (Some("Send it."), Some(true))
+        );
+        assert_eq!(line["action"], "enter");
+        s.fired(Mode::Command, "Enter.", "enter");
+        assert!(
+            read(dir.path()).get("action").is_none(),
+            "the words were its name"
+        );
+        s.missed(Mode::Command, "Scroll sideways.", Some("down"));
+        let line = read(dir.path());
+        assert_eq!(
+            (line["miss"].as_bool(), line["nearest"].as_str()),
+            (Some(true), Some("down"))
+        );
+        assert_eq!(line["command"], false);
+        s.missed(Mode::Command, "", None);
+        assert_eq!(read(dir.path())["text"], "");
     }
 }

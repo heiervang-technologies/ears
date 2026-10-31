@@ -160,6 +160,9 @@ async fn main() -> Result<()> {
         Some(Commands::Standby { action }) => {
             handle_standby(&action, &config.state_dir).await?;
         }
+        Some(Commands::CommandMode { action }) => {
+            handle_command_mode(&action, &config.state_dir).await?;
+        }
         Some(Commands::Teach { action }) => {
             handle_teach(&config, action.as_deref())?;
         }
@@ -354,6 +357,43 @@ async fn handle_standby(action: &str, state_dir: &std::path::Path) -> Result<()>
             Err(_) => anyhow::bail!("VAD is not running"),
         },
         other => anyhow::bail!("Unknown standby action: {}", other),
+    }
+}
+
+/// `ears command on|off|toggle|status`: command mode, as saying "command"
+/// switches it. Status reads the marker VAD keeps while it is on.
+async fn handle_command_mode(action: &str, state_dir: &std::path::Path) -> Result<()> {
+    let marker = state_dir.join(ears::command_mode::MARKER);
+    let status = || {
+        println!("command:{}", if marker.exists() { "on" } else { "off" });
+    };
+    match action {
+        "status" => {
+            status();
+            Ok(())
+        }
+        "on" | "off" | "toggle" => match ears::ipc::send_command(&format!("command-{}", action))
+            .await
+        {
+            Ok(resp) if resp.starts_with("command:") => {
+                // entering loads the actions: give it a moment so status is current
+                for _ in 0..60 {
+                    let on = marker.exists();
+                    if (action == "on" && on) || (action == "off" && !on) || action == "toggle" {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                status();
+                Ok(())
+            }
+            Ok(resp) => anyhow::bail!(
+                "Running ears does not support command mode control: {}",
+                resp
+            ),
+            Err(_) => anyhow::bail!("VAD is not running"),
+        },
+        other => anyhow::bail!("Unknown command mode action: {}", other),
     }
 }
 
@@ -707,6 +747,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
             ghost,
             claimed,
             wake: None,
+            command: None,
         }
     };
 
@@ -732,6 +773,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
     let mut auto_enter = config.auto_enter;
     let mut claims: usize = 0;
     let mut wake_seq: u64 = 0;
+    let mut command_seq: u64 = 0;
 
     let save_to_clipboard = config.save_to_clipboard;
     let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
@@ -842,6 +884,13 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
                                 if claims > 0 { "claimed: publishing instead of typing" } else { "released: typing again" }
                             );
                         }
+                    }
+                    ears::ipc::EarsCommand::CommandMode { on } => {
+                        command_seq += 1;
+                        let mut settings = make_settings(auto_enter, typing, claims > 0);
+                        settings.command = Some((command_seq, on));
+                        let _ = settings_tx.send(settings);
+                        tracing::info!("Command mode switch asked for over IPC: {:?}", on);
                     }
                     ears::ipc::EarsCommand::Standby { wake } => {
                         wake_seq += 1;
@@ -1052,6 +1101,7 @@ async fn handle_ws_listen(
                 ghost: false,
                 claimed: false,
                 wake: None,
+                command: None,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();
