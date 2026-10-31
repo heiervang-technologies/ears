@@ -112,6 +112,11 @@ pub enum Commands {
         /// so a remote client can draw words as they are heard
         #[arg(long)]
         live: bool,
+
+        /// Drop agents' `say` lines this mic picks up (`[say_echo]` in the
+        /// config sets the log and window; off for ws-listen without this)
+        #[arg(long)]
+        say_echo: bool,
     },
 
     /// Audio device management
