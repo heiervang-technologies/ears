@@ -336,6 +336,9 @@ either alone, fires, and two that disagree fire nothing. The words only count
 if they arrive within 1.5 s; after that the embedding decides alone. The file
 ships with keys (enter, escape, tab, arrows) and media controls and takes any
 number of `keys`/`run` actions. Say "command" again to go back to dictation.
+An action with `exact = true` fires only on its exact words, never on how it
+sounds or what it means: for things a misfire would quietly leave changed,
+like the keyboard layout or notifications off.
 
 With subtitles on, the line shows what was heard: highlighted with the action
 it fired ("send it" -> enter), or marked as no command with the nearest action,

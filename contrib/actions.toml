@@ -4,7 +4,8 @@
 #
 # An action has a `name`, `text` (phrasings; each becomes an anchor) and one
 # effect: `keys` (a combination, as in [commands.keys]) or `run` (a program
-# and its arguments). Add as many as you like.
+# and its arguments). Add as many as you like. `exact = true`: it fires only on
+# its exact words, never on how it sounds or what it means.
 #
 # Your own voice teaches it: `ears teach NAME`, then say what you would say
 # for that action; the recording becomes one of its anchors. An action that
