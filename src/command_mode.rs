@@ -105,6 +105,11 @@ pub struct ActionSpec {
     /// layout, touchpad, notifications off).
     #[serde(default)]
     pub exact: bool,
+    /// Fire when the words start with one of its phrasings, and pass what
+    /// follows to `run` as one more argument ("call moon" -> `... "moon"`,
+    /// "" when nothing follows). By words only, like `exact`.
+    #[serde(default)]
+    pub rest: bool,
 }
 
 /// What firing an action does.
@@ -129,11 +134,14 @@ pub struct Action {
     pub text: Vec<String>,
     /// Fires only by its exact words (see [`ActionSpec::exact`]).
     pub exact: bool,
+    /// Takes the words after its phrasing as an argument (see [`ActionSpec::rest`]).
+    pub rest: bool,
 }
 
 fn builtins() -> Vec<Action> {
     let a = |name: &str, effect, text: &[&str]| Action {
         exact: false,
+        rest: false,
         name: name.into(),
         effect,
         text: text.iter().map(|t| t.to_string()).collect(),
@@ -218,8 +226,12 @@ pub fn parse_actions(text: &str) -> std::result::Result<(ActionsFile, Vec<Action
                 ))
             }
         };
+        if spec.rest && spec.run.is_none() {
+            return Err(format!("action {}: `rest` needs `run`", spec.name));
+        }
         let action = Action {
-            exact: spec.exact,
+            exact: spec.exact || spec.rest,
+            rest: spec.rest,
             name: spec.name.clone(),
             effect,
             text: spec.text.clone(),
@@ -645,6 +657,32 @@ impl Router {
             .iter()
             .position(|a| plain(&a.name) == said || a.text.iter().any(|t| plain(t) == said))
     }
+
+    /// An action taking the rest of the words, and that rest: the longest
+    /// phrasing the words start with wins ("call clanker moon" over "call").
+    pub fn by_rest(&self, words: &str) -> Option<(usize, String)> {
+        let said = plain(words);
+        let mut best: Option<(usize, usize, String)> = None;
+        for (i, a) in self.actions.iter().enumerate().filter(|(_, a)| a.rest) {
+            for p in std::iter::once(&a.name)
+                .chain(a.text.iter())
+                .map(|t| plain(t))
+            {
+                if p.is_empty() || best.as_ref().is_some_and(|b| b.1 >= p.len()) {
+                    continue;
+                }
+                let rest = if said == p {
+                    Some(String::new())
+                } else {
+                    said.strip_prefix(&format!("{p} ")).map(str::to_string)
+                };
+                if let Some(rest) = rest {
+                    best = Some((i, p.len(), rest));
+                }
+            }
+        }
+        best.map(|(i, _, rest)| (i, rest))
+    }
 }
 
 /// Combine the three ways an utterance is heard into the action to fire.
@@ -738,7 +776,12 @@ impl CommandMode {
     /// embedding worked) and its transcript (`words`, "" if the ASR did not
     /// answer in time). See [`combine`].
     pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
-        let by_words = self.router.by_words(words);
+        let rest = self.router.by_rest(words);
+        let by_words = self
+            .router
+            .by_words(words)
+            .filter(|&i| !self.router.actions[i].rest)
+            .or(rest.as_ref().map(|r| r.0));
         let mut hearing = Hearing {
             words: words.trim().to_string(),
             audio: audio.as_ref().map(|u| self.router.decide(u)),
@@ -771,7 +814,14 @@ impl CommandMode {
         };
         self.write_last(&hearing);
         let action = self.router.actions[i].clone();
-        let outcome = match action.effect {
+        let effect = match (action.effect, &rest) {
+            (Effect::Run(mut argv), Some((r, arg))) if action.rest && *r == i => {
+                argv.push(arg.clone());
+                Effect::Run(argv)
+            }
+            (effect, _) => effect,
+        };
+        let outcome = match effect {
             Effect::Wrong => {
                 let forgotten = self.last_auto.take().map(|anchor| {
                     if let Some(a) = self.router.index(&anchor.action) {
@@ -794,7 +844,8 @@ impl CommandMode {
                     Some("voice") => clear(hearing.audio.as_ref()),
                     _ => clear(hearing.text.as_ref()),
                 };
-                if let (true, Some(u)) = (teaches, audio) {
+                // "call moon" says little about how "call doc" sounds.
+                if let (true, false, Some(u)) = (teaches, action.rest, audio) {
                     self.remember(i, u, "auto");
                 }
                 Outcome::Fire {
@@ -910,6 +961,26 @@ run = ["playerctl", "next"]
         assert_eq!(
             r.decide(&unit(&[0.1, 1.0, 0.0, 0.0, 0.0])).fired.as_deref(),
             Some("next")
+        );
+    }
+
+    #[test]
+    fn a_rest_action_takes_the_words_after_it() {
+        let toml = "[[action]]\nname = \"call\"\nrun = [\"ears-call\"]\nrest = true\n\
+                    text = [\"call\", \"call clanker\", \"call agent\"]\n";
+        let (_, actions) = parse_actions(toml).unwrap();
+        let call = actions.iter().position(|a| a.name == "call").unwrap();
+        assert!(actions[call].exact && actions[call].rest);
+        let r = Router::new(actions, 1.0, 0.1, 3);
+        assert_eq!(r.by_rest("Call moon."), Some((call, "moon".into())));
+        assert_eq!(
+            r.by_rest("call clanker the TTS one"),
+            Some((call, "the tts one".into()))
+        );
+        assert_eq!(r.by_rest("Call agent"), Some((call, String::new())));
+        assert_eq!(r.by_rest("recall moon"), None);
+        assert!(
+            parse_actions("[[action]]\nname = \"x\"\nkeys = \"enter\"\nrest = true\n").is_err()
         );
     }
 
