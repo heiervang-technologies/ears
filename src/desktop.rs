@@ -786,12 +786,24 @@ impl TextInput {
     /// (see `crate::commands::keycodes`): all down in order, then up in
     /// reverse. Same ydotool path as [`TextInput::send_enter`].
     pub fn send_keys(codes: &[u16]) -> Result<()> {
+        Self::send_key_sequence(&[codes.to_vec()])
+    }
+
+    /// Press combinations one after another, in one ydotool call.
+    pub fn send_key_sequence(sequence: &[Vec<u16>]) -> Result<()> {
         use std::process::Stdio;
 
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let mut args = vec!["key".to_string()];
-        args.extend(key_args(codes));
+        if sequence.len() > 1 {
+            // ydotool waits 12 ms per event by default: a long sequence
+            // (ctrl+u*40) would take seconds.
+            args.push("--key-delay=4".to_string());
+        }
+        for codes in sequence {
+            args.extend(key_args(codes));
+        }
         let mut cmd = Command::new("ydotool");
         cmd.args(&args)
             .stdin(Stdio::null())

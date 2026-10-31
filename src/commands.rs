@@ -593,7 +593,7 @@ impl VoiceCommands {
         if let Some((_, combo)) = self
             .keys
             .iter()
-            .find(|(phrase, combo)| normalize(phrase) == said && keycodes(combo).is_some())
+            .find(|(phrase, combo)| normalize(phrase) == said && key_sequence(combo).is_some())
         {
             return Some(Command::Keys(combo.clone()));
         }
@@ -752,9 +752,44 @@ pub fn keycodes(combo: &str) -> Option<Vec<u16>> {
     (!codes.is_empty()).then_some(codes)
 }
 
+/// Combinations pressed one after another: "ctrl+a backspace", or with a
+/// count, "ctrl+u*40" (e.g. clear every line of an input: in readline and
+/// Claude Code another ctrl+u at a line start eats the line break above).
+/// None if any part is not a key combination ([`keycodes`]).
+pub fn key_sequence(spec: &str) -> Option<Vec<Vec<u16>>> {
+    const MAX_REPEAT: usize = 200;
+    let mut sequence = Vec::new();
+    for part in spec.split([' ', ',']).filter(|p| !p.is_empty()) {
+        let (combo, times) = match part.split_once('*') {
+            Some((combo, n)) => (combo, n.parse::<usize>().ok()?),
+            None => (part, 1),
+        };
+        if !(1..=MAX_REPEAT).contains(&times) {
+            return None;
+        }
+        let codes = keycodes(combo)?;
+        sequence.extend(std::iter::repeat_n(codes, times));
+    }
+    (!sequence.is_empty()).then_some(sequence)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_sequences() {
+        assert_eq!(key_sequence("ctrl+u"), Some(vec![vec![29, 22]]));
+        assert_eq!(key_sequence("ctrl+u*3").unwrap().len(), 3);
+        assert_eq!(
+            key_sequence("ctrl+a, backspace"),
+            Some(vec![vec![29, 30], vec![14]])
+        );
+        assert_eq!(key_sequence("ctrl+u*0"), None);
+        assert_eq!(key_sequence("ctrl+u*x"), None);
+        assert_eq!(key_sequence("ctrl+nope"), None);
+        assert_eq!(key_sequence(""), None);
+    }
 
     #[test]
     fn speech_outside_text_fields_is_dropped_only_when_asked() {

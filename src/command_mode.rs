@@ -192,7 +192,7 @@ pub fn parse_actions(text: &str) -> std::result::Result<(ActionsFile, Vec<Action
     for spec in &file.actions {
         let effect = match (&spec.keys, &spec.run) {
             (Some(keys), None) => {
-                if crate::commands::keycodes(keys).is_none() {
+                if crate::commands::key_sequence(keys).is_none() {
                     return Err(format!("action {}: unknown keys {keys:?}", spec.name));
                 }
                 Effect::Keys(keys.clone())
