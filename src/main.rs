@@ -155,6 +155,9 @@ async fn main() -> Result<()> {
         Some(Commands::Teach { action }) => {
             handle_teach(&config, action.as_deref())?;
         }
+        Some(Commands::Subtitles { state }) => {
+            handle_subtitles(&config, state.as_deref())?;
+        }
         // Hidden backwards-compat aliases
         Some(Commands::Select) => select_device(&config)?,
         Some(Commands::List) => list_devices()?,
@@ -210,6 +213,20 @@ fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
             " once command mode is on (say \"command\")."
         }
     );
+    Ok(())
+}
+
+fn handle_subtitles(config: &ears::Config, state: Option<&str>) -> Result<()> {
+    let on = match state {
+        None => config.state_dir.join(ears::subtitles::MARKER).exists(),
+        Some("on") => true,
+        Some("off") => false,
+        Some(other) => anyhow::bail!("expected on or off, not {other:?}"),
+    };
+    if state.is_some() {
+        ears::subtitles::set(&config.state_dir, on)?;
+    }
+    println!("Subtitles {}", if on { "on" } else { "off" });
     Ok(())
 }
 

@@ -176,6 +176,13 @@ pub enum Commands {
         action: Option<String>,
     },
 
+    /// Live subtitles of what VAD hears, drawn above the ears LED line
+    /// (for a stream). Without on|off, say whether they are on.
+    Subtitles {
+        /// on or off
+        state: Option<String>,
+    },
+
     /// Select audio device with fzf (shortcut for `device select`)
     #[command(alias = "s", hide = true)]
     Select,

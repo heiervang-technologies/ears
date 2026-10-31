@@ -176,6 +176,7 @@ pub async fn start_vad_pipeline(
     engine.set_shell_grammar(config.shell_grammar());
     engine.set_standby_marker(config.state_dir.join(crate::prompt::STANDBY_MARKER));
     engine.set_command_mode_dir(&config.state_dir);
+    engine.set_subtitles_dir(&config.state_dir, config.subtitles);
     engine.set_final_correction(config.final_correction);
 
     // Shutdown channel

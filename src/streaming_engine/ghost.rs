@@ -617,6 +617,7 @@ impl StreamingEngine {
         let bash = self.guided_grammar.is_some();
         let commands = (!bash).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
+        let standby = self.standby;
         self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
             return;
@@ -651,9 +652,6 @@ impl StreamingEngine {
             if !streamed {
                 ghost.decoder = decoder;
             }
-            if muted && !claimed {
-                continue; // typing switched off: show nothing in the target
-            }
             let text = match result {
                 Ok(text) => text,
                 Err(e) => {
@@ -666,6 +664,13 @@ impl StreamingEngine {
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
             };
+            // Subtitles follow speech even with typing off, never in standby.
+            if let (Some(subtitles), false) = (self.subtitles.as_mut(), standby) {
+                subtitles.partial(&text, frozen_bytes);
+            }
+            if muted && !claimed {
+                continue; // typing switched off: show nothing in the target
+            }
             let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             if muted {
                 // The claimant draws it, not fcitx. A run command's words are
