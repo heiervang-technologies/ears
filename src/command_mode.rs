@@ -109,6 +109,8 @@ pub enum Effect {
     Nothing,
     /// Forget the voice anchor the last firing added.
     Wrong,
+    /// Switch to the mode of a colour word ([`crate::colour_mode`]).
+    Colour(crate::colour_mode::Colour),
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +131,22 @@ fn builtins() -> Vec<Action> {
             "leave",
             Effect::Leave,
             &["command", "command mode", "exit command mode"],
+        ),
+        // Colour words, as outside command mode (purple is this mode).
+        a(
+            "orange",
+            Effect::Colour(crate::colour_mode::Colour::Orange),
+            &["orange", "orange mode"],
+        ),
+        a(
+            "blue",
+            Effect::Colour(crate::colour_mode::Colour::Blue),
+            &["blue", "blue mode", "cyan"],
+        ),
+        a(
+            "yellow",
+            Effect::Colour(crate::colour_mode::Colour::Yellow),
+            &["yellow", "yellow mode"],
         ),
         a(
             "none",

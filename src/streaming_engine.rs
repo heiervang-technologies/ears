@@ -650,7 +650,14 @@ impl StreamingEngine {
             if self.standby {
                 self.apply_wake(crate::wake::Wake::On, &transcript);
             }
+            self.subtitle_command(&transcript);
             self.enter_command_mode(&transcript).await;
+            return Ok(());
+        }
+        // A colour said alone switches to the mode the LED shows in it.
+        if let Some(colour) = crate::colour_mode::Colour::parse(&transcript) {
+            self.subtitle_command(&transcript);
+            self.switch_to_colour(colour, &transcript).await;
             return Ok(());
         }
 
@@ -694,6 +701,7 @@ impl StreamingEngine {
             _ if guided_command => transcript,
             Some(crate::commands::Command::Literal(rest)) => rest,
             Some(command) => {
+                self.subtitle_command(&transcript);
                 self.run_command(&command, &transcript).await;
                 if command == crate::commands::Command::SignOff {
                     self.apply_wake(crate::wake::Wake::Off, &transcript);
@@ -705,6 +713,7 @@ impl StreamingEngine {
         if self.typing_mode != TypingMode::None && !self.typing_suspended && !guided_command {
             if self.commands.steer(&transcript).await {
                 info!("Steered: {}", transcript);
+                self.subtitle_command(&transcript);
                 self.ghost_accept(&transcript).await;
                 self.send_event(StreamingEvent::VoiceCommand {
                     name: "steer".into(),
@@ -1552,6 +1561,63 @@ impl StreamingEngine {
         self.subtitles = Some(crate::subtitles::Subtitles::new(state_dir));
     }
 
+    /// Show what was acted on as a command, highlighted.
+    fn subtitle_command(&mut self, heard: &str) {
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.command(heard);
+        }
+    }
+
+    /// Switch to the mode the LED shows in `colour` ([`crate::colour_mode`]).
+    async fn switch_to_colour(&mut self, colour: crate::colour_mode::Colour, heard: &str) {
+        use crate::colour_mode::Colour;
+        info!("Colour word {:?}: switching to {}", heard, colour.name());
+        match colour {
+            Colour::Orange => {
+                self.apply_wake(crate::wake::Wake::Off, heard);
+                return;
+            }
+            Colour::Purple => {
+                if self.standby {
+                    self.apply_wake(crate::wake::Wake::On, heard);
+                }
+                if self.command_mode.is_none() {
+                    self.enter_command_mode(heard).await;
+                } else {
+                    crate::desktop::AudioFeedback::beep_done().ok();
+                }
+                return;
+            }
+            Colour::Blue | Colour::Yellow => {}
+        }
+        if self.standby {
+            self.apply_wake(crate::wake::Wake::On, heard);
+        }
+        self.leave_command_mode();
+        let yellow = colour == Colour::Yellow;
+        // Typing goes through the running VAD's own switch (`ears typing`),
+        // so the settings it keeps stay the one source of truth.
+        let ears = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "ears".into());
+        let typing = if yellow { "off" } else { "on" };
+        if let Err(e) = crate::commands::spawn_detached(&[ears, "typing".into(), typing.into()]) {
+            warn!("Cannot switch typing {}: {}", typing, e);
+        }
+        if yellow && !crate::colour_mode::stick_listening() {
+            match crate::commands::spawn_detached(&["talking-stick".into(), "listen".into()]) {
+                Ok(pid) => info!("Talking stick listening (pid {})", pid),
+                Err(e) => warn!("Cannot start the talking stick: {}", e),
+            }
+        }
+        self.ghost_clear();
+        crate::desktop::AudioFeedback::beep_done().ok();
+        self.send_event(StreamingEvent::VoiceCommand {
+            name: format!("colour-{}", colour.name()),
+            text: heard.to_string(),
+        });
+    }
+
     /// Whether command mode is on.
     pub fn in_command_mode(&self) -> bool {
         self.command_mode.is_some()
@@ -1640,24 +1706,28 @@ impl StreamingEngine {
             top.join(", ")
         );
         match outcome {
-            Outcome::Fire { name, effect } => match effect {
-                Effect::Keys(combo) => {
-                    self.run_command(&crate::commands::Command::Keys(combo), &name)
-                        .await
+            Outcome::Fire { name, effect } => {
+                self.subtitle_command(&name);
+                match effect {
+                    Effect::Keys(combo) => {
+                        self.run_command(&crate::commands::Command::Keys(combo), &name)
+                            .await
+                    }
+                    Effect::Run(argv) => {
+                        let command = crate::commands::Command::Run {
+                            name: name.clone(),
+                            argv: argv.clone(),
+                        };
+                        self.run_program(&command, &argv, &name).await;
+                    }
+                    Effect::Colour(colour) => self.switch_to_colour(colour, &name).await,
+                    Effect::Leave => {
+                        crate::desktop::AudioFeedback::beep_done().ok();
+                        self.leave_command_mode();
+                    }
+                    Effect::Nothing | Effect::Wrong => {}
                 }
-                Effect::Run(argv) => {
-                    let command = crate::commands::Command::Run {
-                        name: name.clone(),
-                        argv: argv.clone(),
-                    };
-                    self.run_program(&command, &argv, &name).await;
-                }
-                Effect::Leave => {
-                    crate::desktop::AudioFeedback::beep_done().ok();
-                    self.leave_command_mode();
-                }
-                Effect::Nothing | Effect::Wrong => {}
-            },
+            }
             Outcome::Taught(name) => {
                 info!("Command mode: learned a new way to say {}", name);
                 crate::desktop::AudioFeedback::beep_done().ok();

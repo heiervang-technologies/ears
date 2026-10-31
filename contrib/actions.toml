@@ -92,3 +92,8 @@ text = ["volume down", "quieter", "turn it down"]
 name = "fullscreen"
 keys = "super+f"
 text = ["fullscreen", "toggle fullscreen", "full screen", "make it fullscreen", "exit fullscreen"]
+
+[[action]]
+name = "close"
+run = ["hyprctl", "dispatch", "killactive"]
+text = ["close", "close window", "close it", "close this window", "kill window"]

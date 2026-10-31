@@ -5,11 +5,12 @@
 //! and final transcript is written to `subtitle.json` there:
 //!
 //! ```json
-//! {"seq": 12, "text": "hello wor", "settled": 6, "final": false}
+//! {"seq": 12, "text": "hello wor", "settled": 6, "final": false, "command": false}
 //! ```
 //!
-//! `settled` is how many bytes of `text` will not change; `final` marks the
-//! committed transcript. An empty `text` clears the line (discarded speech).
+//! `settled` is how many characters of `text` will not change; `final` marks
+//! the committed transcript; `command` that it was heard as a command (a key,
+//! a mode switch, an action), which the overlay highlights. An empty `text` clears the line (discarded speech).
 //! The marker is checked on every write, so `ears subtitles on|off` takes
 //! effect in a running VAD at once.
 
@@ -42,21 +43,27 @@ impl Subtitles {
     }
 
     /// Show `text` with its first `settled` bytes final in all but name.
-    pub fn partial(&mut self, text: &str, settled: usize) {
-        self.write(text, settled, false);
+    /// `command`: so far it reads as a command.
+    pub fn partial(&mut self, text: &str, settled: usize, command: bool) {
+        self.write(text, settled, false, command);
     }
 
     /// Show the committed transcript.
     pub fn finished(&mut self, text: &str) {
-        self.write(text, text.len(), true);
+        self.write(text, text.len(), true, false);
+    }
+
+    /// Show what was acted on as a command, highlighted.
+    pub fn command(&mut self, text: &str) {
+        self.write(text, text.len(), true, true);
     }
 
     /// Take the line down (the utterance produced nothing).
     pub fn clear(&mut self) {
-        self.write("", 0, true);
+        self.write("", 0, true, false);
     }
 
-    fn write(&mut self, text: &str, settled: usize, final_: bool) {
+    fn write(&mut self, text: &str, settled: usize, final_: bool, command: bool) {
         if !self.on() {
             return;
         }
@@ -68,6 +75,7 @@ impl Subtitles {
             "text": text,
             "settled": text[..settled].chars().count(),
             "final": final_,
+            "command": command,
         });
         // Atomic: the overlay never reads half a line.
         let tmp = self.file.with_extension("json.tmp");
@@ -111,7 +119,7 @@ mod tests {
     fn writes_nothing_while_off() {
         let dir = tempfile::tempdir().unwrap();
         let mut s = Subtitles::new(dir.path());
-        s.partial("hello", 3);
+        s.partial("hello", 3, false);
         assert!(!dir.path().join(FILE).exists());
     }
 
@@ -120,7 +128,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         set(dir.path(), true).unwrap();
         let mut s = Subtitles::new(dir.path());
-        s.partial(" hello wor", 6);
+        s.partial(" hello wor", 6, false);
         let v = read(dir.path());
         assert_eq!(v["text"], "hello wor");
         assert_eq!(v["settled"], 6);
@@ -137,8 +145,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         set(dir.path(), true).unwrap();
         let mut s = Subtitles::new(dir.path());
-        s.partial("blåbær er", 3); // inside "å"
+        s.partial("blåbær er", 3, false); // inside "å"
         assert_eq!(read(dir.path())["settled"], 2);
+    }
+
+    #[test]
+    fn commands_are_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        set(dir.path(), true).unwrap();
+        let mut s = Subtitles::new(dir.path());
+        s.command("enter");
+        let v = read(dir.path());
+        assert_eq!(v["command"], true);
+        assert_eq!(v["final"], true);
+        s.finished("hello");
+        assert_eq!(read(dir.path())["command"], false);
     }
 
     #[test]
