@@ -178,7 +178,18 @@ async fn main() -> Result<()> {
             std::process::exit(code);
         }
         Some(Commands::Look { words, yes, json }) => {
-            let code = handle_look(&config, &words.join(" "), yes, json).await?;
+            // Vision mode replaces a look still running with SIGTERM: leave
+            // no overlay or state behind (the guard in handle_look drops).
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            let said = words.join(" ");
+            let code = tokio::select! {
+                code = handle_look(&config, &said, yes, json) => code?,
+                _ = term.recv() => {
+                    ears::vision::clear(&config.state_dir);
+                    143
+                }
+            };
             std::process::exit(code);
         }
         Some(Commands::Subtitles { state }) => {
@@ -243,6 +254,24 @@ fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
 }
 
 /// `ears look`: one round of vision mode (docs/VISION_MODE.md).
+/// Act at `target` only if the screen is still the one SAM saw (same
+/// output, workspace and focused window): otherwise the point may now sit
+/// on something else, and a click there is the one thing not to do.
+fn act_on_same_screen(
+    compositor: ears::pointer::Compositor,
+    output: &ears::pointer::Output,
+    target: &ears::vision::Shown,
+    action: ears::vision::Action,
+    scene: &Option<String>,
+) -> Result<()> {
+    let now = ears::pointer::scene(compositor);
+    if scene.is_some() && now != *scene {
+        ears::desktop::AudioFeedback::beep_error().ok();
+        anyhow::bail!("the screen changed since the screenshot ({scene:?} -> {now:?}): not acting");
+    }
+    ears::vision::act(compositor, output, target, action)
+}
+
 async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -> Result<i32> {
     use ears::pointer::{self, Compositor};
     use ears::vision::{self, Action, ButtonName, Request, State};
@@ -284,6 +313,7 @@ async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -
 
     let t0 = std::time::Instant::now();
     let mut jpeg = pointer::screenshot(&output)?;
+    let mut scene = pointer::scene(compositor);
     let shot_ms = t0.elapsed().as_millis();
     vision::write_state(
         dir,
@@ -326,7 +356,7 @@ async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -
                 dir,
                 &state("acting", req.target.clone(), shown.clone(), picked),
             )?;
-            vision::act(compositor, &output, target, action)?;
+            act_on_same_screen(compositor, &output, target, action, &scene)?;
             return Ok(0);
         }
         let hint = format!("{} {}/{}", req.target, picked + 1, shown.len());
@@ -353,13 +383,13 @@ async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -
             options.insert(0, "yes".to_string());
         }
         let timeout = Some(Duration::from_secs(config.vision.confirm_s));
-        let answer = ears::decide::ask(dir, &hint, &options, true, timeout).await?;
+        let answer = ears::decide::ask(dir, &hint, &options, true, true, timeout).await?;
         let Some(answer) = answer else {
             return Ok(2);
         };
         let chosen = answer.choice.as_deref();
         let custom = answer.custom.as_deref().unwrap_or("");
-        let act = |a: Action| vision::act(compositor, &output, target, a);
+        let act = |a: Action| act_on_same_screen(compositor, &output, target, a, &scene);
         match chosen {
             Some("yes") => {
                 act(action)?;
@@ -391,6 +421,7 @@ async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -
             // The page moved: look again for the same thing.
             tokio::time::sleep(Duration::from_millis(250)).await;
             jpeg = pointer::screenshot(&output)?;
+            scene = pointer::scene(compositor);
             let (found, s) = vision::segment(server, &jpeg, &req.target).await?;
             cands = vision::rank(found, req.which);
             size = s;
@@ -446,7 +477,8 @@ async fn handle_decide(
     let timeout = timeout
         .filter(|_| config.decide_timeouts)
         .map(std::time::Duration::from_secs);
-    let answer = ears::decide::ask(&config.state_dir, question, options, other, timeout).await?;
+    let answer =
+        ears::decide::ask(&config.state_dir, question, options, other, false, timeout).await?;
     Ok(match answer {
         None => {
             eprintln!("No answer");

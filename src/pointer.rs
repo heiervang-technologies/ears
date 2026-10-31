@@ -118,6 +118,39 @@ pub fn focused_output(compositor: Compositor) -> Result<Output> {
     }
 }
 
+/// What is on screen, coarsely: the focused output, its workspace and the
+/// focused window. A click waits for SAM and for an answer, seconds in which
+/// the user may switch workspace or focus; if this changed since the
+/// screenshot, the point may sit on something else. None if it cannot tell.
+pub fn scene(compositor: Compositor) -> Option<String> {
+    match compositor {
+        Compositor::Hyprland => {
+            let ws = json("hyprctl", &["-j", "activeworkspace"]).ok()?;
+            let win = json("hyprctl", &["-j", "activewindow"]).ok();
+            Some(format!(
+                "{}/{}/{}",
+                ws["monitor"].as_str().unwrap_or_default(),
+                ws["id"].as_i64().unwrap_or_default(),
+                win.as_ref()
+                    .and_then(|w| w["address"].as_str())
+                    .unwrap_or_default()
+            ))
+        }
+        Compositor::Sway => {
+            let wss = json("swaymsg", &["-r", "-t", "get_workspaces"]).ok()?;
+            let ws = wss
+                .as_array()?
+                .iter()
+                .find(|w| w["focused"].as_bool() == Some(true))?;
+            Some(format!(
+                "{}/{}",
+                ws["output"].as_str().unwrap_or_default(),
+                ws["name"].as_str().unwrap_or_default()
+            ))
+        }
+    }
+}
+
 /// JPEG of the whole output, in its pixels.
 pub fn screenshot(output: &Output) -> Result<Vec<u8>> {
     run("grim", &["-o", &output.name, "-t", "jpeg", "-q", "85", "-"])

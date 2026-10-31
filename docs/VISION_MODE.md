@@ -138,10 +138,15 @@ root-only there, so the sway seat commands are the path that works.
 
 - Never click unconfirmed by default. An optional `[vision] auto_click_score`
   (default off) clicks at once when exactly one candidate scores above it.
-- Reuse `Decision::hear` matching (words, ordinals, embeddinggemma2
-  fallback) with the fixed options `yes`, `next`, `cancel` plus the
-  candidate numbers. "click it" and "that one" count as yes. A new
-  description re-queries the same screenshot.
+- The guess is an *exact* decision: an option (`yes`, `click`,
+  `right click`, `middle click`, `next`) counts only when it is the whole
+  utterance. No ordinals, no option inside a sentence, no prefix, and no
+  embeddinggemma2 fallback, because a near miss must never click. Numbers
+  ("two", "number two") pick a candidate, and so does anything else said,
+  even a single word: a new description re-queries the same screenshot.
+- A click happens only if the screen is still the one SAM saw: same
+  output, workspace and focused window. Otherwise ears beeps and does not
+  click.
 - The guess times out after 8 s, with the bar draining as in decide mode.
 - This is the user's own input, so it does not go through the agent
   `controls` gate. It does stop if `controls` says an agent is driving.
@@ -156,6 +161,8 @@ root-only there, so the sway seat commands are the path that works.
   scale it, ears or a small broker on centurion, needs deciding (see
   Questions).
 - Hackbook sends a 1280×800 JPEG, about 150 KB, over the LAN.
+- `[vision] enabled = true` in the ears config. Pink mode is off by
+  default: until it is on, "pink", "look" and "vision" are only words.
 - `[vision] server = "http://centurion.lan:30190"` in the ears config.
 
 ## Plan

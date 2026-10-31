@@ -230,6 +230,9 @@ pub struct StreamingEngine {
     vision_mode: bool,
     /// Its marker for the LED (`vad.vision` in the state dir).
     vision_marker: Option<std::path::PathBuf>,
+    /// Pink is a mode only when `[vision] enabled`: otherwise "look" and
+    /// "pink" are just words.
+    vision_enabled: bool,
     /// Decisions asked by `ears decide` (the red mode); None until VAD sets
     /// a runtime dir.
     decisions: Option<crate::decide::Decisions>,
@@ -342,6 +345,7 @@ impl StreamingEngine {
             command_mode: None,
             vision_mode: false,
             vision_marker: None,
+            vision_enabled: false,
             subtitles: None,
             decisions: None,
             decision_vectors: None,
@@ -695,7 +699,9 @@ impl StreamingEngine {
             return Ok(());
         }
         // A colour said alone switches to the mode the LED shows in it.
-        if let Some(colour) = crate::colour_mode::Colour::parse(&transcript) {
+        if let Some(colour) = crate::colour_mode::Colour::parse(&transcript)
+            .filter(|c| *c != crate::colour_mode::Colour::Pink || self.vision_enabled)
+        {
             self.subtitle_command(&transcript);
             self.switch_to_colour(colour, &transcript).await;
             return Ok(());
@@ -1612,6 +1618,11 @@ impl StreamingEngine {
         self.vision_marker = Some(vision);
     }
 
+    /// Allow vision mode (pink), from `[vision] enabled`.
+    pub fn set_vision_enabled(&mut self, enabled: bool) {
+        self.vision_enabled = enabled;
+    }
+
     /// Write live subtitles to `state_dir` while they are on
     /// ([`crate::subtitles`]); `on` turns them on now (config `subtitles`).
     pub fn set_subtitles_dir(
@@ -1778,7 +1789,8 @@ impl StreamingEngine {
             decision.hear(said)
         };
         let mut via = "words";
-        if heard == Heard::Unclear {
+        // An exact decision acts (a click): a guess by sound must not.
+        if heard == Heard::Unclear && !decision.exact {
             if let Some(i) = self
                 .decision_by_embedding(&decision, audio.as_deref())
                 .await
@@ -1789,10 +1801,16 @@ impl StreamingEngine {
         }
         // An answer of your own is at least two words: a lone word or a
         // stray sound ("I.") is more likely noise than an answer.
+        // An exact decision takes one word too ("three", "down"): its asker
+        // reads those itself.
+        let words = crate::commands::normalize(said)
+            .split(' ')
+            .filter(|w| !w.is_empty())
+            .count();
         let custom = (heard == Heard::Unclear
             && decision.other
-            && crate::commands::normalize(said).split(' ').count() >= 2)
-            .then(|| said.to_string());
+            && words >= if decision.exact { 1 } else { 2 })
+        .then(|| said.to_string());
         info!(
             "Decision {:?}: heard {:?} as {:?} by {}{}",
             decision.question,
@@ -1945,22 +1963,38 @@ impl StreamingEngine {
         if let Some(marker) = &self.vision_marker {
             let _ = std::fs::remove_file(marker);
         }
+        // A look still asking would take the next words as its answer.
+        self.stop_look();
         info!("Vision mode off");
+    }
+
+    /// Stop the look still running, if any: one waiting for SAM, or whose
+    /// guess was not answered. Only a process that is an `ears look`: the
+    /// pid in a stale state file may belong to someone else by now.
+    fn stop_look(&self) {
+        let Some(dir) = self.vision_marker.as_ref().and_then(|m| m.parent()) else {
+            return;
+        };
+        let running = std::fs::read_to_string(dir.join(crate::vision::FILE))
+            .ok()
+            .and_then(|s| serde_json::from_str::<crate::vision::State>(&s).ok())
+            .and_then(|v| v.id.parse::<i32>().ok())
+            .filter(|p| *p > 0 && *p != std::process::id() as i32);
+        let Some(pid) = running else {
+            return;
+        };
+        if !crate::vision::is_look(pid) {
+            crate::vision::clear(dir);
+            return;
+        }
+        // SAFETY: plain kill(2) of a pid just checked to be an ears look.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
     }
 
     /// Hand an utterance to `ears look`, replacing a look still running
     /// (one that is waiting for SAM, or whose guess was not answered).
     fn look(&mut self, heard: &str) {
-        if let Some(dir) = self.vision_marker.as_ref().and_then(|m| m.parent()) {
-            let running = std::fs::read_to_string(dir.join(crate::vision::FILE))
-                .ok()
-                .and_then(|s| serde_json::from_str::<crate::vision::State>(&s).ok())
-                .and_then(|v| v.id.parse::<i32>().ok());
-            if let Some(pid) = running.filter(|p| *p > 0 && *p != std::process::id() as i32) {
-                // SAFETY: plain kill(2) of the earlier look's pid.
-                unsafe { libc::kill(pid, libc::SIGTERM) };
-            }
-        }
+        self.stop_look();
         let ears = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "ears".into());

@@ -28,6 +28,10 @@ pub const MAX_CANDIDATES: usize = 5;
 /// `[vision]` config.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisionConfig {
+    /// Vision mode (pink) is off unless this is on: it clicks on the
+    /// screen, so it is opt-in. `ears look` itself works either way.
+    #[serde(default)]
+    pub enabled: bool,
     /// The sam-segment server (SAM 3, `POST /segment`).
     #[serde(default = "default_server")]
     pub server: String,
@@ -47,6 +51,7 @@ fn default_confirm_s() -> u64 {
 impl Default for VisionConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             server: default_server(),
             confirm_s: default_confirm_s(),
         }
@@ -656,6 +661,22 @@ pub fn act(compositor: Compositor, output: &Output, target: &Shown, action: Acti
         Action::Scroll(n) => pointer::scroll(compositor, n)?,
     }
     Ok(())
+}
+
+/// Whether `pid` is an `ears look` (its argv has `look` right after the
+/// program), so a stale pid is never signalled.
+pub fn is_look(pid: i32) -> bool {
+    std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|argv| {
+            let mut args = argv.split(|b| *b == 0);
+            let prog = args.next().unwrap_or_default();
+            let prog = String::from_utf8_lossy(prog);
+            prog.rsplit('/')
+                .next()
+                .is_some_and(|p| p.starts_with("ears"))
+                && args.next() == Some(b"look".as_slice())
+        })
+        .unwrap_or(false)
 }
 
 /// A look's working files.
