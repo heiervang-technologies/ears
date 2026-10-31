@@ -886,7 +886,10 @@ run = ["playerctl", "next"]
     fn out_goes_to_standby() {
         let (_, actions) = parse_actions(DEFAULT_ACTIONS).unwrap();
         let orange = actions.iter().find(|a| a.name == "orange").unwrap();
-        assert_eq!(orange.effect, Effect::Colour(crate::colour_mode::Colour::Orange));
+        assert_eq!(
+            orange.effect,
+            Effect::Colour(crate::colour_mode::Colour::Orange)
+        );
         assert!(orange.text.iter().any(|t| t == "out"));
     }
 
