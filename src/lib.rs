@@ -10,6 +10,8 @@ pub mod colour_mode;
 pub mod command_mode;
 pub mod commands;
 pub mod decide;
+pub mod pointer;
+pub mod vision;
 
 // Iteration 1: Configuration
 pub mod config;
