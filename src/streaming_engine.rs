@@ -267,6 +267,8 @@ pub struct StreamingEngine {
     /// Re-transcribe each segment in full even when the live stream has a
     /// final for it.
     final_correction: bool,
+    /// Drops agents' `say` lines the mic picked up (`[say_echo]`).
+    say_echo: crate::say_echo::SayEchoConfig,
     /// Utterances "scratch that" can delete, oldest first.
     undo_marks: Vec<UndoMark>,
     /// Focused window id (Hyprland address), to keep undo in its window.
@@ -325,6 +327,10 @@ impl StreamingEngine {
             normalize_segments,
             commands: Default::default(),
             final_correction: true,
+            say_echo: crate::say_echo::SayEchoConfig {
+                enabled: false,
+                ..Default::default()
+            },
             undo_marks: Vec::new(),
             focus_probe: crate::ghost::hyprland_active_address,
             was_probably_speaking: false,
@@ -635,6 +641,31 @@ impl StreamingEngine {
 
         // Clean up temp file
         drop(segment_file);
+
+        // An agent's own voice from the speakers, not the user's.
+        let transcript = if self.say_echo.enabled && !transcript.is_empty() {
+            use crate::say_echo::{self, Echo};
+            let now = say_echo::now();
+            let said = say_echo::recent(
+                std::path::Path::new(&self.say_echo.log),
+                now - self.say_echo.window_s,
+            );
+            match say_echo::check(&transcript, &said, now) {
+                Echo::None => transcript,
+                Echo::All => {
+                    info!("Heard an agent's say, dropped: {:?}", transcript);
+                    self.ghost_clear();
+                    self.discard("an agent speaking");
+                    return Ok(());
+                }
+                Echo::Part(rest) => {
+                    info!("Cut an agent's say from {:?}: {:?}", transcript, rest);
+                    rest
+                }
+            }
+        } else {
+            transcript
+        };
 
         // An open decision takes every utterance, in any mode.
         if decision_audio.is_some() && self.deciding() {
@@ -1012,6 +1043,11 @@ impl StreamingEngine {
     /// segment again (`final_correction = false`). Default: true.
     pub fn set_final_correction(&mut self, enabled: bool) {
         self.final_correction = enabled;
+    }
+
+    /// Drop what agents said with `say` from what the mic heard.
+    pub fn set_say_echo(&mut self, config: crate::say_echo::SayEchoConfig) {
+        self.say_echo = config;
     }
 
     /// Remember a dictated utterance that reached the focused window, so

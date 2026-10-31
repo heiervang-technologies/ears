@@ -618,6 +618,9 @@ impl StreamingEngine {
         let commands = (!bash).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
         let standby = self.standby;
+        let say_echo = self.say_echo.enabled.then(|| self.say_echo.clone());
+        // Read once per poll, and only when a partial needs it.
+        let mut said: Option<(f64, Vec<crate::say_echo::Said>)> = None;
         self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
             return;
@@ -663,6 +666,26 @@ impl StreamingEngine {
                 crate::bash::clean_frozen(&text, frozen_bytes)
             } else {
                 crate::freeze::filtered(&text, frozen_bytes, &filters, language.as_deref())
+            };
+            // An agent's own voice is not drafted (`say_echo`).
+            let (text, frozen_bytes) = match &say_echo {
+                Some(config) => {
+                    use crate::say_echo::{self, Echo};
+                    let (now, said) = said.get_or_insert_with(|| {
+                        let now = say_echo::now();
+                        let since = now - config.window_s;
+                        (
+                            now,
+                            say_echo::recent(std::path::Path::new(&config.log), since),
+                        )
+                    });
+                    match say_echo::check(&text, said, *now) {
+                        Echo::None => (text, frozen_bytes),
+                        Echo::All => (String::new(), 0),
+                        Echo::Part(rest) => (rest, 0),
+                    }
+                }
+                None => (text, frozen_bytes),
             };
             let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             // Subtitles follow speech even with typing off, never in standby.

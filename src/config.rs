@@ -299,6 +299,9 @@ pub struct Config {
     /// Vision mode: pointing at the screen by voice with SAM 3 (`[vision]`).
     #[serde(default)]
     pub vision: crate::vision::VisionConfig,
+    /// Dropping agents' `say` lines the mic picked up (`[say_echo]`).
+    #[serde(default)]
+    pub say_echo: crate::say_echo::SayEchoConfig,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -363,6 +366,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             vision: Default::default(),
+            say_echo: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
@@ -522,6 +526,7 @@ impl Config {
             vad: VadSettings::default(),
             live_decoding: LiveDecoding::default(),
             vision: Default::default(),
+            say_echo: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
