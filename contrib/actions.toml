@@ -87,3 +87,8 @@ text = ["volume up", "louder", "turn it up"]
 name = "volume-down"
 run = ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"]
 text = ["volume down", "quieter", "turn it down"]
+
+[[action]]
+name = "fullscreen"
+keys = "super+f"
+text = ["fullscreen", "toggle fullscreen", "full screen", "make it fullscreen", "exit fullscreen"]
