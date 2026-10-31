@@ -269,6 +269,8 @@ pub struct StreamingEngine {
     final_correction: bool,
     /// Drops agents' `say` lines the mic picked up (`[say_echo]`).
     say_echo: crate::say_echo::SayEchoConfig,
+    /// An agent's `say` was playing when this utterance began.
+    say_playing: Option<bool>,
     /// Utterances "scratch that" can delete, oldest first.
     undo_marks: Vec<UndoMark>,
     /// Focused window id (Hyprland address), to keep undo in its window.
@@ -331,6 +333,7 @@ impl StreamingEngine {
                 enabled: false,
                 ..Default::default()
             },
+            say_playing: None,
             undo_marks: Vec::new(),
             focus_probe: crate::ghost::hyprland_active_address,
             was_probably_speaking: false,
@@ -441,6 +444,9 @@ impl StreamingEngine {
         if is_probable && !self.was_probably_speaking {
             // An utterance begins: pick its grammar before any partial.
             self.aim_grammar();
+            if self.say_echo.enabled {
+                self.say_playing = self.say_echo.playing();
+            }
             self.send_event(StreamingEvent::SpeechProbable);
         }
 
@@ -650,7 +656,7 @@ impl StreamingEngine {
                 std::path::Path::new(&self.say_echo.log),
                 now - self.say_echo.window_s,
             );
-            match say_echo::check(&transcript, &said, now) {
+            match say_echo::check(&transcript, &said, now, self.say_playing) {
                 Echo::None => transcript,
                 Echo::All => {
                     info!("Heard an agent's say, dropped: {:?}", transcript);

@@ -619,6 +619,7 @@ impl StreamingEngine {
         let speaking = self.vad_detector.is_speaking();
         let standby = self.standby;
         let say_echo = self.say_echo.enabled.then(|| self.say_echo.clone());
+        let say_playing = self.say_playing;
         // Read once per poll, and only when a partial needs it.
         let mut said: Option<(f64, Vec<crate::say_echo::Said>)> = None;
         self.ghost_stream_events();
@@ -679,7 +680,7 @@ impl StreamingEngine {
                             say_echo::recent(std::path::Path::new(&config.log), since),
                         )
                     });
-                    match say_echo::check(&text, said, *now) {
+                    match say_echo::check(&text, said, *now, say_playing) {
                         Echo::None => (text, frozen_bytes),
                         Echo::All => (String::new(), 0),
                         Echo::Part(rest) => (rest, 0),

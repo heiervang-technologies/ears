@@ -7,16 +7,21 @@
 //! with the lines said in the last `window_s` seconds:
 //!
 //! - runs of `LONG_RUN` or more words that a line also has are echo, and
-//!   are cut out, as are runs of `MIN_RUN` while that line still plays;
-//!   a single differing word between two runs is an ASR slip and goes with
-//!   them;
-//! - an utterance shorter than that is echo only if a line containing it is
-//!   still playing (from its log time to its estimated end, plus slack);
+//!   are cut out, as are runs of `MIN_RUN` if an agent was playing when the
+//!   utterance began; a single differing word between two runs is an ASR
+//!   slip and goes with them;
+//! - an utterance shorter than that is echo only if an agent was playing
+//!   when it began, and a recent line contains it;
 //! - when (almost) nothing but echo is left, the whole utterance goes.
 //!
 //! Matching text instead of timing audio makes the delay irrelevant: a
 //! Bluetooth speaker or headset 150 to 400 ms behind, or a line that sat in
 //! the speaker queue for a while, matches all the same.
+//!
+//! Whether an agent is playing comes from say's talking flags
+//! (`talking/<agent>.json`, there while its audio plays), checked when the
+//! utterance begins: an echo begins while the line plays, while an answer
+//! to it ("pick up", read out a moment ago) begins after.
 
 use serde::Deserialize;
 use std::io::{Read, Seek, SeekFrom};
@@ -34,6 +39,10 @@ pub struct SayEchoConfig {
     /// How far back a said line can still come in, in seconds. Default: 120.
     #[serde(default = "default_window_s")]
     pub window_s: f64,
+    /// say's talking flags: `<agent>.json` with `{started, pid}` while its
+    /// audio plays. Empty: `~/.local/share/agent-tools/talking`.
+    #[serde(default)]
+    pub talking_dir: String,
 }
 
 fn default_enabled() -> bool {
@@ -54,6 +63,7 @@ impl Default for SayEchoConfig {
             enabled: default_enabled(),
             log: default_log(),
             window_s: default_window_s(),
+            talking_dir: String::new(),
         }
     }
 }
@@ -68,6 +78,9 @@ const SECONDS_PER_WORD: f64 = 0.4;
 /// After a line's estimated end, it can still be heard for this long
 /// (speaker latency, queueing, the VAD's hangover).
 const PLAYING_SLACK_S: f64 = 4.0;
+/// A talking flag older than this is stale, whatever its pid (say's
+/// contract with its consumers).
+const FLAG_MAX_AGE_S: f64 = 120.0;
 /// Only the tail of the log is read; it rotates at 256 KB.
 const TAIL_BYTES: u64 = 64 * 1024;
 
@@ -96,6 +109,48 @@ pub enum Echo {
     All,
     /// Some of it did; this is what is left.
     Part(String),
+}
+
+impl SayEchoConfig {
+    fn talking_dir(&self) -> Option<std::path::PathBuf> {
+        if !self.talking_dir.is_empty() {
+            return Some(self.talking_dir.clone().into());
+        }
+        std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".local/share/agent-tools/talking"))
+    }
+
+    /// Is an agent's line playing right now? None when there are no flags to
+    /// tell (no say here): then each line's estimated playing time is used.
+    pub fn playing(&self) -> Option<bool> {
+        let dir = self.talking_dir()?;
+        let entries = std::fs::read_dir(dir).ok()?;
+        let now = std::time::SystemTime::now();
+        Some(entries.flatten().any(|e| {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "json") {
+                return false; // also skips say's `.json.tmp.PID` leftovers
+            }
+            // Cheap first: most flags are long gone.
+            let fresh = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .is_some_and(|age| age.as_secs_f64() <= FLAG_MAX_AGE_S);
+            fresh
+                && std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| v["pid"].as_i64())
+                    .is_some_and(|pid| pid > 0 && alive(pid as i32))
+        }))
+    }
+}
+
+fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 /// One log line. `time` is a number or, from some writers, a string;
@@ -183,8 +238,9 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// How much of `heard` came from `said` lines, as of `now`.
-pub fn check(heard: &str, said: &[Said], now: f64) -> Echo {
+/// How much of `heard` came from `said` lines, as of `now`. `playing`: an
+/// agent was playing when the utterance began (None: unknown, estimate).
+pub fn check(heard: &str, said: &[Said], now: f64, playing: Option<bool>) -> Echo {
     // Original tokens (kept as typed) and their compared forms.
     let tokens: Vec<&str> = heard
         .split_whitespace()
@@ -200,8 +256,9 @@ pub fn check(heard: &str, said: &[Said], now: f64) -> Echo {
         if s.is_empty() {
             continue;
         }
+        let playing = playing.unwrap_or_else(|| line.playing_at(now, s.len()));
         if h.len() < MIN_RUN {
-            if line.playing_at(now, s.len())
+            if playing
                 && s.windows(h.len())
                     .any(|w| w.iter().zip(&h).all(|(a, b)| alike(a, b)))
             {
@@ -218,9 +275,8 @@ pub fn check(heard: &str, said: &[Said], now: f64) -> Echo {
                 }
             }
         }
-        // A few common words ("on the phone") are echo only while the
-        // line plays; a longer run is echo whenever it comes in.
-        let playing = line.playing_at(now, s.len());
+        // A few common words ("on the phone") are echo only while an agent
+        // plays; a longer run is echo whenever it comes in.
         for i in 0..h.len() {
             let longest = run[i].iter().copied().max().unwrap_or(0);
             if longest >= LONG_RUN || (longest >= MIN_RUN && playing) {
@@ -270,7 +326,12 @@ mod tests {
     fn whole_echo_is_dropped() {
         let lines = [said(LINE, 100.0)];
         assert_eq!(
-            check("ears sound effects are now at half volume", &lines, 105.0),
+            check(
+                "ears sound effects are now at half volume",
+                &lines,
+                105.0,
+                None
+            ),
             Echo::All
         );
     }
@@ -283,7 +344,8 @@ mod tests {
             check(
                 "years sound effects are now at half volume on both centurian and hackbook",
                 &lines,
-                105.0
+                105.0,
+                None
             ),
             Echo::All
         );
@@ -296,7 +358,8 @@ mod tests {
             check(
                 "sound effects are now at half volume please open the browser for me",
                 &lines,
-                104.0
+                104.0,
+                None
             ),
             Echo::Part("please open the browser for me".into())
         );
@@ -305,10 +368,13 @@ mod tests {
     #[test]
     fn unrelated_speech_is_kept() {
         let lines = [said(LINE, 100.0)];
-        assert_eq!(check("set the volume to thirty", &lines, 110.0), Echo::None);
+        assert_eq!(
+            check("set the volume to thirty", &lines, 110.0, None),
+            Echo::None
+        );
         // Two shared words are not a run.
         assert_eq!(
-            check("half volume is fine thanks", &lines, 110.0),
+            check("half volume is fine thanks", &lines, 110.0, None),
             Echo::None
         );
     }
@@ -317,10 +383,49 @@ mod tests {
     fn short_echo_only_while_playing() {
         let lines = [said("Should I merge it? Yes or no.", 100.0)];
         // Still playing (7 words, about 3 s, plus slack).
-        assert_eq!(check("yes or no", &lines, 103.0), Echo::All);
-        assert_eq!(check("Yes.", &lines, 103.0), Echo::All);
+        assert_eq!(check("yes or no", &lines, 103.0, None), Echo::All);
+        assert_eq!(check("Yes.", &lines, 103.0, None), Echo::All);
         // Long over: the user answering.
-        assert_eq!(check("Yes.", &lines, 112.0), Echo::None);
+        assert_eq!(check("Yes.", &lines, 112.0, None), Echo::None);
+    }
+
+    #[test]
+    fn an_answer_after_the_line_is_not_echo() {
+        let lines = [said("Say answer, pick up or decline.", 100.0)];
+        // Begun after the agent stopped: the user answering.
+        assert_eq!(check("Pick up.", &lines, 103.0, Some(false)), Echo::None);
+        // Begun while it played: the speaker.
+        assert_eq!(check("Pick up.", &lines, 103.0, Some(true)), Echo::All);
+        // A long run is echo either way.
+        assert_eq!(
+            check("say answer pick up or decline", &lines, 103.0, Some(false)),
+            Echo::All
+        );
+    }
+
+    #[test]
+    fn talking_flags_need_a_live_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SayEchoConfig {
+            talking_dir: dir.path().to_string_lossy().into(),
+            ..Default::default()
+        };
+        assert_eq!(config.playing(), Some(false));
+        std::fs::write(
+            dir.path().join("gone.json"),
+            r#"{"started":1,"pid":2147483000}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("x.json.tmp.5"), "{}").unwrap();
+        assert_eq!(config.playing(), Some(false));
+        let me = format!(r#"{{"started":1,"pid":{}}}"#, std::process::id());
+        std::fs::write(dir.path().join("moon.json"), me).unwrap();
+        assert_eq!(config.playing(), Some(true));
+        let missing = SayEchoConfig {
+            talking_dir: dir.path().join("nope").to_string_lossy().into(),
+            ..Default::default()
+        };
+        assert_eq!(missing.playing(), None);
     }
 
     #[test]
@@ -330,7 +435,7 @@ mod tests {
             100.0,
         )];
         assert_eq!(
-            check("test the clanker call on the phone", &lines, 140.0),
+            check("test the clanker call on the phone", &lines, 140.0, None),
             Echo::None
         );
     }
@@ -339,7 +444,12 @@ mod tests {
     fn delay_does_not_matter_for_long_runs() {
         let lines = [said(LINE, 100.0)];
         assert_eq!(
-            check("ears sound effects are now at half volume", &lines, 190.0),
+            check(
+                "ears sound effects are now at half volume",
+                &lines,
+                190.0,
+                None
+            ),
             Echo::All
         );
     }
