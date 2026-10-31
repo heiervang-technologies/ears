@@ -340,6 +340,9 @@ or "out" to drop to standby (orange).
 An action with `exact = true` fires only on its exact words, never on how it
 sounds or what it means: for things a misfire would quietly leave changed,
 like the keyboard layout or notifications off.
+An action with `rest = true` (and `run`) fires when the words start with one
+of its phrasings and gets the words after it as one more argument: "call moon"
+runs `ears-call-agent moon`, "call agent" runs it with "".
 
 With subtitles on, the line shows what was heard: highlighted with the action
 it fired ("send it" -> enter), or marked as no command with the nearest action,
