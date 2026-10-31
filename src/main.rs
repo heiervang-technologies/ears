@@ -62,8 +62,13 @@ async fn main() -> Result<()> {
         Some(Commands::Ghost) => {
             handle_vad(&config, true).await?;
         }
-        Some(Commands::WsListen { host, port, socket }) => {
-            handle_ws_listen(&config, &host, port, socket).await?;
+        Some(Commands::WsListen {
+            host,
+            port,
+            socket,
+            ghost,
+        }) => {
+            handle_ws_listen(&config, &host, port, socket, ghost).await?;
         }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
@@ -655,6 +660,7 @@ async fn handle_ws_listen(
     host: &str,
     port: u16,
     socket: Option<String>,
+    ghost: bool,
 ) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
@@ -737,6 +743,9 @@ async fn handle_ws_listen(
         );
         engine.set_text_filters(s.text_filters, s.language);
         engine.set_guided_grammar(s.guided_grammar.clone());
+        // Never the fcitx5 addon: the audio comes from a remote client, so
+        // previews only go back out as events.
+        engine.set_ghost_preview(ghost);
 
         // Shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -797,7 +806,14 @@ async fn handle_ws_listen(
             }
         });
 
-        eprintln!("WebSocket VAD listening on ws://{}:{}", host, port);
+        if ghost {
+            eprintln!(
+                "WebSocket VAD listening on ws://{}:{} (ghost previews)",
+                host, port
+            );
+        } else {
+            eprintln!("WebSocket VAD listening on ws://{}:{}", host, port);
+        }
 
         // Wait for signal
         use tokio::signal::unix::{signal, SignalKind};

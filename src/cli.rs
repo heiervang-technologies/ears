@@ -61,6 +61,12 @@ pub enum Commands {
         /// Custom IPC socket path (avoids conflicting with desktop ears instance)
         #[arg(long)]
         socket: Option<String>,
+
+        /// Publish ghost previews: while a client speaks, partial transcripts
+        /// of the utterance so far are sent as `GhostPreview` events (on the
+        /// WebSocket and IPC socket). Nothing is typed.
+        #[arg(long)]
+        ghost: bool,
     },
 
     /// Audio device management

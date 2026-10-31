@@ -71,6 +71,11 @@ pub enum StreamingEvent {
     /// Transcription segment completed
     SegmentCompleted { text: String, duration_ms: u64 },
 
+    /// Ghost completion: best guess at the utterance still being spoken.
+    /// Each preview replaces the previous one; an empty `text` withdraws it.
+    /// The utterance's `SegmentCompleted` (if any) supersedes the preview.
+    GhostPreview { text: String },
+
     /// Error occurred
     Error(String),
 
@@ -177,8 +182,10 @@ pub struct StreamingEngine {
     /// (i.e. restarting listening).
     typing_suspended: bool,
 
-    /// Ghost completion state; `Some` when output goes to the fcitx5 ghost
-    /// addon as inline preedit instead of being typed.
+    /// Ghost completion state; `Some` while partial transcripts are produced.
+    /// With an addon client they are shown as inline preedit and the final
+    /// text is committed through it instead of being typed; without one they
+    /// are only published as [`StreamingEvent::GhostPreview`].
     ghost: Option<GhostState>,
 }
 
@@ -197,7 +204,8 @@ const GHOST_MAX_PARTIAL_SAMPLES: usize = 16_000 * 30;
 
 /// Ghost completion bookkeeping.
 struct GhostState {
-    client: crate::ghost::GhostClient,
+    /// The fcitx5 addon; `None` in preview-only mode (e.g. `ws-listen`).
+    client: Option<crate::ghost::GhostClient>,
     /// Identifies the utterance being spoken. Bumped whenever an utterance
     /// ends (segment complete or candidate rejected) so that partial results
     /// for an older utterance are discarded.
@@ -207,7 +215,7 @@ struct GhostState {
     partial_seq: u64,
     partial_tx: mpsc::UnboundedSender<(u64, Result<String, String>)>,
     partial_rx: mpsc::UnboundedReceiver<(u64, Result<String, String>)>,
-    /// Something is currently drawn as a ghost.
+    /// Something is currently drawn as a ghost (addon preedit or preview).
     showing: bool,
     /// At least one utterance was committed this session (for spacing).
     committed_any: bool,
@@ -216,7 +224,7 @@ struct GhostState {
 }
 
 impl GhostState {
-    fn new(client: crate::ghost::GhostClient) -> Self {
+    fn new(client: Option<crate::ghost::GhostClient>) -> Self {
         let (partial_tx, partial_rx) = mpsc::unbounded_channel();
         Self {
             client,
@@ -259,12 +267,17 @@ impl GhostState {
         self.last_partial_at = None;
     }
 
-    fn clear(&mut self) {
-        if self.showing {
-            let r = self.client.clear();
-            self.note_result(&r);
-            self.showing = false;
+    /// Remove the ghost. Returns whether one was showing.
+    fn clear(&mut self) -> bool {
+        if !self.showing {
+            return false;
         }
+        if let Some(client) = self.client.as_mut() {
+            let r = client.clear();
+            self.note_result(&r);
+        }
+        self.showing = false;
+        true
     }
 }
 
@@ -379,15 +392,30 @@ impl StreamingEngine {
                         e
                     ),
                 }
-                self.ghost = Some(GhostState::new(client));
+                self.ghost = Some(GhostState::new(Some(client)));
             }
-            (None, true) => {
-                if let Some(mut ghost) = self.ghost.take() {
-                    ghost.clear();
-                }
-            }
+            (None, true) => self.disable_ghost(),
             _ => {}
         }
+    }
+
+    /// Enable or disable preview-only ghost completion: partial transcripts
+    /// are published as [`StreamingEvent::GhostPreview`] and nothing is sent
+    /// to the fcitx5 addon. Final transcripts take the ordinary path.
+    pub fn set_ghost_preview(&mut self, enabled: bool) {
+        match (enabled, self.ghost.is_some()) {
+            (true, false) => {
+                info!("Ghost previews enabled (events only)");
+                self.ghost = Some(GhostState::new(None));
+            }
+            (false, true) => self.disable_ghost(),
+            _ => {}
+        }
+    }
+
+    fn disable_ghost(&mut self) {
+        self.ghost_clear();
+        self.ghost = None;
     }
 
     /// Whether ghost completion is active.
@@ -405,12 +433,13 @@ impl StreamingEngine {
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
+        let mut previews = Vec::new();
         while let Ok((utterance, result)) = ghost.partial_rx.try_recv() {
             ghost.partial_in_flight = false;
             if utterance != ghost.utterance || !speaking {
                 continue; // stale: that utterance already ended
             }
-            if muted {
+            if muted && ghost.client.is_some() {
                 continue; // typing switched off: show nothing in the target
             }
             let text = match result {
@@ -429,11 +458,20 @@ impl StreamingEngine {
                 continue;
             }
             let shown = ghost.spaced(&text);
-            let r = ghost.client.preedit(&shown);
+            let Some(client) = ghost.client.as_mut() else {
+                ghost.showing = true;
+                previews.push(text);
+                continue;
+            };
+            let r = client.preedit(&shown);
             ghost.note_result(&r);
             if r.is_ok() {
                 ghost.showing = true;
             }
+            previews.push(text);
+        }
+        for text in previews {
+            self.send_event(StreamingEvent::GhostPreview { text });
         }
     }
 
@@ -496,7 +534,10 @@ impl StreamingEngine {
             return;
         };
         let spaced = ghost.spaced(text);
-        let delivery = ghost.client.commit(&spaced);
+        let Some(client) = ghost.client.as_mut() else {
+            return;
+        };
+        let delivery = client.commit(&spaced);
         ghost.showing = false;
         match delivery {
             crate::ghost::Delivery::Delivered => {
@@ -539,8 +580,11 @@ impl StreamingEngine {
 
     /// Remove the ghost (utterance produced nothing to commit).
     fn ghost_clear(&mut self) {
-        if let Some(ghost) = self.ghost.as_mut() {
-            ghost.clear();
+        let cleared = self.ghost.as_mut().is_some_and(GhostState::clear);
+        if cleared {
+            self.send_event(StreamingEvent::GhostPreview {
+                text: String::new(),
+            });
         }
     }
 
@@ -580,8 +624,8 @@ impl StreamingEngine {
             self.send_event(StreamingEvent::SpeechRejected);
             if let Some(ghost) = self.ghost.as_mut() {
                 ghost.next_utterance();
-                ghost.clear();
             }
+            self.ghost_clear();
         }
 
         self.was_probably_speaking = is_probable;
@@ -700,7 +744,12 @@ impl StreamingEngine {
             .map(|h| h.enter(crate::health::Stage::Typing));
 
         // Update progressive typing with the full accumulated text
-        if self.ghost.is_some() {
+        if let Some(ghost) = self.ghost.as_mut().filter(|g| g.client.is_none()) {
+            // Preview-only ghost: SegmentCompleted below supersedes the
+            // preview; the final text takes the ordinary path.
+            ghost.showing = false;
+        }
+        if self.ghost.as_ref().is_some_and(|g| g.client.is_some()) {
             if self.typing_suspended {
                 debug!("Typing suspended after earlier failure; ghost cleared, nothing committed");
                 self.ghost_clear();
@@ -925,8 +974,8 @@ impl StreamingEngine {
             health.set_typing_paused(false);
         }
         // Partials still in flight belong to the old session.
+        self.ghost_clear();
         if let Some(ghost) = self.ghost.as_mut() {
-            ghost.clear();
             ghost.next_utterance();
             ghost.committed_any = false;
         }
@@ -959,7 +1008,9 @@ impl StreamingEngine {
             auto_correction,
             typing_mode,
         });
-        if typing_mode == TypingMode::None {
+        if typing_mode == TypingMode::None
+            && self.ghost.as_ref().is_some_and(|g| g.client.is_some())
+        {
             // Muted: take down a ghost that is already on screen.
             self.ghost_clear();
         }
@@ -1277,6 +1328,65 @@ mod tests {
         engine.ghost_commit("secret");
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(lines.try_recv().is_err(), "nothing may reach the app");
+    }
+
+    fn previews(rx: &mut mpsc::UnboundedReceiver<StreamingEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let StreamingEvent::GhostPreview { text } = ev {
+                out.push(text);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_ghost_preview_publishes_fresh_partials_only() {
+        let (mut engine, mut rx) = seq_engine();
+        engine.set_ghost_preview(true);
+        feed(&mut engine, &[0.9, 0.9, 0.9]); // confirmed speech
+        let ghost = engine.ghost.as_ref().unwrap();
+        let current = ghost.utterance;
+        ghost
+            .partial_tx
+            .send((current + 7, Ok("old".into())))
+            .unwrap();
+        ghost
+            .partial_tx
+            .send((current, Ok("fresh".into())))
+            .unwrap();
+        engine.ghost_poll_partials();
+        assert_eq!(previews(&mut rx), vec!["fresh"]);
+    }
+
+    #[test]
+    fn test_ghost_preview_withdrawn_when_candidate_rejected() {
+        let (mut engine, mut rx) = seq_engine();
+        engine.set_ghost_preview(true);
+        engine.ghost.as_mut().unwrap().showing = true;
+        feed(&mut engine, &[0.9, 0.0]);
+        assert_eq!(previews(&mut rx), vec![""]);
+        // Nothing left to withdraw.
+        engine.set_ghost_preview(false);
+        assert!(previews(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn test_ghost_preview_ignores_typing_switch() {
+        let (mut engine, mut rx) = seq_engine();
+        engine.set_ghost_preview(true);
+        engine.set_typing_enabled(false, false, TypingMode::None, false);
+        feed(&mut engine, &[0.9, 0.9, 0.9]);
+        let current = engine.ghost.as_ref().unwrap().utterance;
+        engine
+            .ghost
+            .as_ref()
+            .unwrap()
+            .partial_tx
+            .send((current, Ok("still shown".into())))
+            .unwrap();
+        engine.ghost_poll_partials();
+        assert_eq!(previews(&mut rx), vec!["still shown"]);
     }
 
     #[test]
