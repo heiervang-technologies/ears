@@ -105,6 +105,11 @@ pub enum Commands {
         /// (newest 32 kept; the consumer may delete them)
         #[arg(long, value_name = "DIR")]
         keep_audio: Option<std::path::PathBuf>,
+
+        /// Drop agents' `say` lines this mic picks up (`[say_echo]` in the
+        /// config sets the log and window; off for ws-listen without this)
+        #[arg(long)]
+        say_echo: bool,
     },
 
     /// Audio device management

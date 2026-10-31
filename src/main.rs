@@ -118,8 +118,9 @@ async fn main() -> Result<()> {
             port,
             socket,
             keep_audio,
+            say_echo,
         }) => {
-            handle_ws_listen(&config, &host, port, socket, keep_audio).await?;
+            handle_ws_listen(&config, &host, port, socket, keep_audio, say_echo).await?;
         }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
@@ -1219,6 +1220,7 @@ async fn handle_ws_listen(
     port: u16,
     socket: Option<String>,
     keep_audio: Option<std::path::PathBuf>,
+    say_echo: bool,
 ) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
@@ -1273,6 +1275,12 @@ async fn handle_ws_listen(
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
     engine.set_event_sender(event_tx.clone());
     engine.set_keep_audio_dir(keep_audio);
+    if say_echo {
+        engine.set_say_echo(ears::say_echo::SayEchoConfig {
+            enabled: true,
+            ..config.say_echo.clone()
+        });
+    }
 
     // Disable typing for ws-listen — only emit IPC events, never type into windows
     {
