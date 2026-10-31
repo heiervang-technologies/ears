@@ -328,7 +328,7 @@ never uses the grammar, so the wake phrase still works.
 
 Say "command" on its own and VAD switches to command mode: the ears light
 turns violet and nothing is transcribed or typed. Each utterance's raw audio is
-embedded with EmbeddingGemma 2 (the `embeddinggemma2` llama-server) and routed
+embedded with embeddinggemma2 (a llama-server) and routed
 to the nearest action in `~/.config/ears/actions.toml`, which ships with keys
 (enter, escape, tab, arrows) and media controls and takes any number of
 `keys`/`run` actions. Say "command" again to go back to dictation.
@@ -346,6 +346,55 @@ An action that fires clearly also keeps the recording that fired it; say
 recordings of the same voice looks close whatever was said. An action fires
 only on a clear winner (`floor`, `margin`); otherwise nothing happens. Design:
 the wiki page "Embedding-Driven Voice Control".
+
+### Colour words (VAD)
+
+Each mode has the colour the ears light shows for it; say the colour on its
+own to switch to that mode, from any mode including standby and command mode:
+
+| say | mode |
+|---|---|
+| orange | standby: only the wake phrase acts |
+| blue, cyan | dictation: typed where the cursor is |
+| yellow | the talking stick (typing off, `haios-voice-route stick`) |
+| purple, violet | command mode |
+
+A colour word said alone is therefore never typed.
+
+### Subtitles (VAD)
+
+```bash
+ears subtitles on       # or off; no argument says which
+```
+
+What VAD hears is written to `$XDG_RUNTIME_DIR/ears/subtitle.json` as it is
+heard (partials, then the final), and the ears light (`haios-ears-led`, hai-os)
+draws it just above its line: small, translucent, in the mode's colour, a
+recognised command radiant. Config `subtitles = true` turns them on at start,
+and `subtitle_modes` picks the modes that are captioned (default all of
+`"standby"`, `"dictation"`, `"command"`, `"decide"`); a small "CC" at the end of
+the line shows while the current mode is captioned. Standby captions finals
+only.
+
+### Decisions (VAD, the red mode)
+
+An agent can ask a question with a few discrete options out loud:
+
+```bash
+ears decide "Merge the pull request?" "Merge now" "Wait for review" "Close it" \
+    [--other] [--timeout 30] [--index]
+```
+
+The ears light turns red and the question and numbered options float above
+it. Read one out, say its number ("two", "the second one"), enough of its
+start, or "cancel". While a decision is open every utterance answers it, in
+any mode, and nothing is typed. It is heard by its words and, when they are
+unclear or ASR is down, by embeddinggemma2 (the audio against each option's
+text). `--other` leaves room for an answer of your own: anything of two words
+or more that is not an option is returned as said. `--timeout` makes it a
+quick time event (a bar drains meanwhile); config `decide_timeouts = false`
+ignores timeouts, so every decision waits. The choice is printed; exit 0
+chosen, 1 cancelled, 2 timed out, 3 VAD not running.
 
 ### VAD Mode (headless)
 
@@ -528,7 +577,14 @@ sleep_on_language = ["sv"]  # stand by on hearing Swedish (below)
 [commands.keys]           # any phrase to any key combination
 background = "ctrl+b"     # "Background." on its own presses Ctrl+B
 "go back" = "alt+left"
+"clear all" = "ctrl+u*40" # a sequence: combos in turn, *N repeats
 ```
+
+A key value may be a sequence of combinations, separated by spaces or commas,
+each with an optional `*N` count, pressed in one go. In readline and Claude
+Code a ctrl+u at the start of a line also eats the line break above, so
+`ctrl+u*40` clears a whole multi-line input. `keys` in `actions.toml` take the
+same form.
 
 **Steering and text fields.** With `steer` set, every utterance that is not
 one of the commands above is first given to that program, as its last
