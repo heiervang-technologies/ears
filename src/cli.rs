@@ -105,6 +105,13 @@ pub enum Commands {
         /// (newest 32 kept; the consumer may delete them)
         #[arg(long, value_name = "DIR")]
         keep_audio: Option<std::path::PathBuf>,
+
+        /// Publish the utterance in progress as `Partial { text, settled }`
+        /// events while the speaker is still talking (the same live decoding
+        /// the desktop ghost uses; `live_decoding = "continuous"` streams it),
+        /// so a remote client can draw words as they are heard
+        #[arg(long)]
+        live: bool,
     },
 
     /// Audio device management
