@@ -51,6 +51,13 @@ futures-util = "0.3"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
 crossterm = "0.29"
 
+[features]
+# Load ONNX Runtime (the Silero VAD) from the system at run time instead of
+# linking a prebuilt one: for targets ort has no binaries for, such as
+# armv7-unknown-linux-musleabihf on Alpine (community/onnxruntime). The
+# library comes from ORT_DYLIB_PATH, else the first of SYSTEM_ORT that exists.
+ort-dynamic = ["voice_activity_detector/load-dynamic"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 serial_test = "3.2"

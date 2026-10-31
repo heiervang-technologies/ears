@@ -25,6 +25,23 @@ async fn main() -> Result<()> {
     // Parse CLI first (need profile for config loading)
     let cli = Cli::parse();
 
+    // Headless VAD check: no config, devices or logging needed.
+    if let Some(Commands::VadFile { file, threshold }) = &cli.command {
+        let scan = ears::vad::scan_wav(file, *threshold)?;
+        let speech = scan.spans.iter().fold(0.0f32, |s, (a, b, _)| s + (b - a));
+        for (start, end, peak) in &scan.spans {
+            println!("speech {start:.2}-{end:.2} s  peak {peak:.2}");
+        }
+        println!(
+            "{:.2} s of speech in {:.2} s ({} span{})",
+            speech,
+            scan.seconds,
+            scan.spans.len(),
+            if scan.spans.len() == 1 { "" } else { "s" }
+        );
+        return Ok(());
+    }
+
     // Runs on every shell prompt: answer before config loading and logging.
     if let Some(Commands::Prompt {
         state,
@@ -142,6 +159,8 @@ async fn main() -> Result<()> {
                 show_server(&config)?;
             }
         }
+        // answered before config loading, above
+        Some(Commands::VadFile { .. }) => {}
         Some(Commands::Test { file }) => {
             test_config(&config, file.as_deref()).await?;
         }

@@ -138,6 +138,16 @@ pub enum Commands {
         url: Option<String>,
     },
 
+    /// Run the Silero VAD over a 16 kHz 16-bit WAV and print where speech is:
+    /// no microphone, no server, no sound. For checking a build on a new machine.
+    VadFile {
+        /// The WAV to scan
+        file: std::path::PathBuf,
+        /// Speech probability that counts as speech
+        #[arg(long, default_value_t = 0.5)]
+        threshold: f32,
+    },
+
     /// Validate the active config: print a summary and check server health
     Test {
         /// Optional audio file (WAV) to run a sample transcription against
