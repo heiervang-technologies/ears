@@ -78,6 +78,9 @@ impl Default for SayEchoConfig {
 const MIN_RUN: usize = 3;
 /// Shortest run that counts as echo any time in the window.
 const LONG_RUN: usize = 5;
+/// After a long run and one misheard word, this many words in their place
+/// in the line carry the echo on.
+const SLIP_RUN: usize = 2;
 /// Speaking rate used to estimate when a line ends when the log has no
 /// duration: TTS runs at about 2.5 words a second.
 const SECONDS_PER_WORD: f64 = 0.4;
@@ -354,10 +357,26 @@ pub fn check(heard: &str, said: &[Said], now: f64, playing: Option<&[String]>) -
         // A few common words ("on the phone") are echo only while their line
         // plays, and only said exactly; a longer run may be misheard.
         for i in 0..h.len() {
-            let longest = run[i].iter().copied().max().unwrap_or(0);
+            let (at, longest) = run[i]
+                .iter()
+                .copied()
+                .enumerate()
+                .fold(
+                    (0, 0),
+                    |best, (j, n)| if n > best.1 { (j, n) } else { best },
+                );
             let short = exact[i].iter().copied().max().unwrap_or(0);
             if longest >= LONG_RUN && long_ok {
-                echo[i..i + longest].iter_mut().for_each(|e| *e = true);
+                // A long echo goes on past a misheard word ("away" for
+                // "awake") while the words after it keep their place in the
+                // line: the rest of that line, not the speaker.
+                let (mut end, mut j) = (i + longest, at + longest);
+                while end + 1 < h.len() && j + 1 < s.len() && run[end + 1][j + 1] >= SLIP_RUN {
+                    let more = run[end + 1][j + 1];
+                    end += 1 + more;
+                    j += 1 + more;
+                }
+                echo[i..end].iter_mut().for_each(|e| *e = true);
             } else if short >= MIN_RUN && playing {
                 echo[i..i + short].iter_mut().for_each(|e| *e = true);
             }
@@ -428,6 +447,51 @@ mod tests {
                 None
             ),
             Echo::All
+        );
+    }
+
+    #[test]
+    fn echo_carries_on_past_a_misheard_word() {
+        // centurion's line came back as "...call me away when you need me"
+        // over Markus's "Centurion, sleep." (2026-11-05 16:38): "away" for
+        // "awake" broke the run and the rest reached the agent
+        let lines = [said(
+            "Going to sleep. Call me awake when you need me. I will keep listening.",
+            100.0,
+        )];
+        assert_eq!(
+            check(
+                "Centurion, sleep. Going to sleep. Call me away when you need me.",
+                &lines,
+                105.0,
+                Some(&[]),
+            ),
+            // two words beside a long echo: dropped with it, as before
+            Echo::All
+        );
+        assert_eq!(
+            check(
+                "Centurion, sleep now please. Going to sleep. Call me away when you need me.",
+                &lines,
+                105.0,
+                Some(&[]),
+            ),
+            Echo::Part("Centurion, sleep now please.".into())
+        );
+    }
+
+    #[test]
+    fn own_words_after_echo_are_not_carried() {
+        // the words after the slip are not where the line goes next
+        let lines = [said(LINE, 100.0)];
+        assert_eq!(
+            check(
+                "sound effects are now at half volume so you need me here",
+                &lines,
+                104.0,
+                None
+            ),
+            Echo::Part("so you need me here".into())
         );
     }
 
