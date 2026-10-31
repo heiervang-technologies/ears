@@ -218,6 +218,11 @@ pub struct StreamingEngine {
     /// Command mode while it is on: utterances route to actions by
     /// embedding instead of being transcribed.
     command_mode: Option<crate::command_mode::CommandMode>,
+    /// Decisions asked by `ears decide` (the red mode); None until VAD sets
+    /// a runtime dir.
+    decisions: Option<crate::decide::Decisions>,
+    /// The open decision's options embedded (its id, their vectors).
+    decision_vectors: Option<(String, Vec<Vec<f32>>)>,
     /// Live subtitles for an overlay; None until VAD sets a runtime dir.
     subtitles: Option<crate::subtitles::Subtitles>,
 
@@ -324,6 +329,8 @@ impl StreamingEngine {
             command_paths: None,
             command_mode: None,
             subtitles: None,
+            decisions: None,
+            decision_vectors: None,
             typing_suspended: false,
             ghost: None,
             continuous: None,
@@ -373,7 +380,8 @@ impl StreamingEngine {
 
         let segment = self.handle_vad_outcome(outcome);
 
-        if self.ghost.is_some() && !self.standby {
+        // While a decision is open nothing is typed, not even a ghost.
+        if self.ghost.is_some() && !self.standby && !self.deciding() {
             self.ghost_poll_partials();
             if segment.is_none() {
                 self.ghost_maybe_start_partial();
@@ -511,7 +519,7 @@ impl StreamingEngine {
                 self.apply_wake(wake, "");
                 return Ok(());
             }
-            crate::wake::AudioVerdict::NotWake if self.standby => return Ok(()),
+            crate::wake::AudioVerdict::NotWake if self.standby && !self.deciding() => return Ok(()),
             _ => {}
         }
 
@@ -539,10 +547,16 @@ impl StreamingEngine {
         debug!("WAV save took {:?}", wav_start.elapsed());
         drop(saving);
 
-        if self.command_mode.is_some() {
+        if self.command_mode.is_some() && !self.deciding() {
             self.command_segment(&segment_file).await;
             return Ok(());
         }
+        // A decision also hears by embedding: keep the audio.
+        let decision_audio = if self.deciding() {
+            std::fs::read(&segment_file).ok()
+        } else {
+            None
+        };
 
         // Transcribe with Whisper. In bash mode a guided grammar routes the
         // request to the constrained chat-completions path.
@@ -588,6 +602,12 @@ impl StreamingEngine {
             Ok(text) => text,
             // An empty reply is silence or noise, not a failure.
             Err(crate::whisper::WhisperError::EmptyTranscription) => String::new(),
+            // ASR down: a decision can still be heard by embedding.
+            Err(e) if decision_audio.is_some() => {
+                warn!("Transcription error during a decision: {}", e);
+                self.decision_heard("", decision_audio).await;
+                return Ok(());
+            }
             Err(e) => {
                 warn!("Transcription error: {}", e);
                 self.send_event(StreamingEvent::Error(format!("Transcription error: {}", e)));
@@ -603,6 +623,11 @@ impl StreamingEngine {
         // Clean up temp file
         drop(segment_file);
 
+        // An open decision takes every utterance, in any mode.
+        if decision_audio.is_some() && self.deciding() {
+            self.decision_heard(&transcript, decision_audio).await;
+            return Ok(());
+        }
         if transcript.is_empty() {
             debug!("Empty transcript, skipping");
             self.ghost_clear();
@@ -1573,7 +1598,13 @@ impl StreamingEngine {
     /// The mode subtitles are written for.
     fn subtitle_mode(&self) -> crate::subtitles::Mode {
         use crate::subtitles::Mode;
-        if self.standby {
+        if self
+            .decisions
+            .as_ref()
+            .is_some_and(|d| d.current().is_some())
+        {
+            Mode::Decide
+        } else if self.standby {
             Mode::Standby
         } else if self.command_mode.is_some() {
             Mode::Command
@@ -1659,6 +1690,157 @@ impl StreamingEngine {
             name: format!("colour-{}", colour.name()),
             text: heard.to_string(),
         });
+    }
+
+    /// Take decisions from `ears decide` in `state_dir`.
+    pub fn set_decisions_dir(&mut self, state_dir: &std::path::Path) {
+        self.decisions = Some(crate::decide::Decisions::new(state_dir));
+    }
+
+    /// A decision is open: utterances answer it.
+    fn deciding(&mut self) -> bool {
+        self.decisions.as_mut().is_some_and(|d| d.open().is_some())
+    }
+
+    /// Answer the open decision with what was said: by its words, else by
+    /// embeddinggemma2 on its audio (either may be down), else as an answer
+    /// of your own where the decision leaves room for one.
+    async fn decision_heard(&mut self, transcript: &str, audio: Option<Vec<u8>>) {
+        use crate::decide::Heard;
+        self.ghost_clear();
+        let Some(decision) = self.decisions.as_mut().and_then(|d| d.open().cloned()) else {
+            return;
+        };
+        let said = transcript.trim();
+        let mut heard = if said.is_empty() {
+            Heard::Unclear
+        } else {
+            decision.hear(said)
+        };
+        let mut via = "words";
+        if heard == Heard::Unclear {
+            if let Some(i) = self
+                .decision_by_embedding(&decision, audio.as_deref())
+                .await
+            {
+                heard = Heard::Chose(i);
+                via = "embedding";
+            }
+        }
+        // An answer of your own is at least two words: a lone word or a
+        // stray sound ("I.") is more likely noise than an answer.
+        let custom = (heard == Heard::Unclear
+            && decision.other
+            && crate::commands::normalize(said).split(' ').count() >= 2)
+            .then(|| said.to_string());
+        info!(
+            "Decision {:?}: heard {:?} as {:?} by {}{}",
+            decision.question,
+            said,
+            heard,
+            via,
+            if custom.is_some() {
+                " (own answer)"
+            } else {
+                ""
+            }
+        );
+        let (choice, outcome) = match (&heard, &custom) {
+            (Heard::Chose(i), _) => (Some(*i), "chose"),
+            (Heard::Cancel, _) => (None, "cancel"),
+            (Heard::Unclear, Some(_)) => (None, "custom"),
+            (Heard::Unclear, None) => (None, "unclear"),
+        };
+        if let Some(decisions) = self.decisions.as_ref() {
+            decisions.note(&crate::decide::Feedback {
+                id: decision.id.clone(),
+                outcome: outcome.into(),
+                index: choice,
+                heard: said.to_string(),
+                via: via.into(),
+            });
+        }
+        if outcome == "unclear" {
+            self.subtitle_finished(said);
+            crate::desktop::AudioFeedback::beep_error().ok();
+            return;
+        }
+        let shown = choice
+            .and_then(|i| decision.options.get(i).cloned())
+            .or_else(|| custom.clone())
+            .unwrap_or_else(|| "cancelled".to_string());
+        self.subtitle_command(&shown);
+        let answered = match self.decisions.as_mut() {
+            Some(decisions) => decisions.answer(choice, custom),
+            None => return,
+        };
+        match answered {
+            Ok(_) => {
+                if outcome == "cancel" {
+                    crate::desktop::AudioFeedback::beep_toggle_off().ok();
+                } else {
+                    crate::desktop::AudioFeedback::beep_done().ok();
+                }
+                self.send_event(StreamingEvent::VoiceCommand {
+                    name: "decision".into(),
+                    text: shown,
+                });
+            }
+            Err(e) => {
+                warn!("Cannot answer the decision: {}", e);
+                crate::desktop::AudioFeedback::beep_error().ok();
+            }
+        }
+    }
+
+    /// The option the utterance's audio is nearest to by embeddinggemma2,
+    /// if one leads clearly. None when the server is down or unsure.
+    async fn decision_by_embedding(
+        &mut self,
+        decision: &crate::decide::Decision,
+        audio: Option<&[u8]>,
+    ) -> Option<usize> {
+        let audio = audio?;
+        let paths = self.command_paths.as_ref()?;
+        let server = match crate::command_mode::load_actions(&paths.actions) {
+            Ok((file, _)) => file.server,
+            Err(e) => {
+                debug!("Decision by embedding: {}", e);
+                return None;
+            }
+        };
+        let embedder = crate::command_mode::Embedder::new(&server);
+        let options = match &self.decision_vectors {
+            Some((id, vectors)) if *id == decision.id => vectors.clone(),
+            _ => {
+                let mut vectors = Vec::new();
+                for option in &decision.options {
+                    match embedder.text(option).await {
+                        Ok(v) => vectors.push(v),
+                        Err(e) => {
+                            info!("Decision by embedding unavailable: {}", e);
+                            return None;
+                        }
+                    }
+                }
+                self.decision_vectors = Some((decision.id.clone(), vectors.clone()));
+                vectors
+            }
+        };
+        let u = match embedder.audio(audio).await {
+            Ok(u) => u,
+            Err(e) => {
+                info!("Decision by embedding unavailable: {}", e);
+                return None;
+            }
+        };
+        let scores: Vec<f32> = options
+            .iter()
+            .map(|v| crate::command_mode::dot(v, &u))
+            .collect();
+        let pick = crate::decide::pick_by_scores(&scores);
+        info!("Decision by embedding: scores {:?} -> {:?}", scores, pick);
+        pick
     }
 
     /// Whether command mode is on.

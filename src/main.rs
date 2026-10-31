@@ -155,6 +155,16 @@ async fn main() -> Result<()> {
         Some(Commands::Teach { action }) => {
             handle_teach(&config, action.as_deref())?;
         }
+        Some(Commands::Decide {
+            question,
+            options,
+            timeout,
+            index,
+            other,
+        }) => {
+            let code = handle_decide(&config, &question, &options, other, timeout, index).await?;
+            std::process::exit(code);
+        }
         Some(Commands::Subtitles { state }) => {
             handle_subtitles(&config, state.as_deref())?;
         }
@@ -214,6 +224,59 @@ fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
         }
     );
     Ok(())
+}
+
+async fn handle_decide(
+    config: &ears::Config,
+    question: &str,
+    options: &[String],
+    other: bool,
+    timeout: Option<u64>,
+    index: bool,
+) -> Result<i32> {
+    let vad = std::fs::read_to_string(config.state_dir.join("vad.pid"))
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<i32>().ok())
+        // SAFETY: signal 0 only checks that the process exists.
+        .is_some_and(|pid| pid > 0 && unsafe { libc::kill(pid, 0) == 0 });
+    if !vad {
+        eprintln!("ears VAD is not running: nobody would hear the answer");
+        return Ok(3);
+    }
+    // A timeout needs both: the asker's, and the config allowing them.
+    let timeout = timeout
+        .filter(|_| config.decide_timeouts)
+        .map(std::time::Duration::from_secs);
+    let answer = ears::decide::ask(&config.state_dir, question, options, other, timeout).await?;
+    Ok(match answer {
+        None => {
+            eprintln!("No answer");
+            2
+        }
+        Some(ears::decide::Answer {
+            choice: Some(choice),
+            index: Some(i),
+            ..
+        }) => {
+            if index {
+                println!("{i}");
+            } else {
+                println!("{choice}");
+            }
+            0
+        }
+        Some(ears::decide::Answer {
+            custom: Some(custom),
+            ..
+        }) => {
+            println!("{}", if index { "other" } else { custom.as_str() });
+            0
+        }
+        Some(_) => {
+            eprintln!("Cancelled");
+            1
+        }
+    })
 }
 
 fn handle_subtitles(config: &ears::Config, state: Option<&str>) -> Result<()> {

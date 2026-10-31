@@ -74,6 +74,10 @@ fn default_bash_terminal() -> bool {
     true
 }
 
+fn default_decide_timeouts() -> bool {
+    true
+}
+
 fn default_subtitle_modes() -> Vec<crate::subtitles::Mode> {
     crate::subtitles::Mode::ALL.to_vec()
 }
@@ -248,6 +252,11 @@ pub struct Config {
     /// yellow), "command" (violet). Default: all three.
     #[serde(default = "default_subtitle_modes")]
     pub subtitle_modes: Vec<crate::subtitles::Mode>,
+    /// `ears decide --timeout`: honour an asker's timeout (a quick time
+    /// event, its bar draining). Off: every decision waits for an answer.
+    /// Default: true.
+    #[serde(default = "default_decide_timeouts")]
+    pub decide_timeouts: bool,
     /// Audio cue volume (0-100, default: 100)
     #[serde(default = "default_cue_volume")]
     pub cue_volume: u8,
@@ -345,6 +354,7 @@ impl Config {
             bash_terminal: default_bash_terminal(),
             subtitles: false,
             subtitle_modes: default_subtitle_modes(),
+            decide_timeouts: default_decide_timeouts(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
@@ -502,6 +512,7 @@ impl Config {
             bash_terminal: default_bash_terminal(),
             subtitles: false,
             subtitle_modes: default_subtitle_modes(),
+            decide_timeouts: default_decide_timeouts(),
             cue_volume: default_cue_volume(),
             language_servers: HashMap::new(),
             vad: VadSettings::default(),
