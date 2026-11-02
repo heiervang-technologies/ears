@@ -17,10 +17,34 @@ pub const CLIP_LEVEL: f32 = 0.99;
 
 /// `pw-record` capturing `device` as mono 16 kHz s16 into `output` (`-`:
 /// stdout). The caller adds stdio settings or wraps it.
+///
+/// To stdout it asks for raw samples (`--raw`): since PipeWire 1.6.10 it
+/// otherwise writes a Sun/AU container there, big-endian, which reads as
+/// full-scale noise (#226). A pw-record without `--raw` still writes raw.
 pub fn pw_record(device: &str, output: impl AsRef<std::ffi::OsStr>) -> Command {
+    let output = output.as_ref();
     let mut cmd = Command::new("pw-record");
-    cmd.args(pw_record_args(device)).arg(output);
+    cmd.args(pw_record_args(device));
+    if output == "-" && pw_record_has_raw() {
+        cmd.arg("--raw");
+    }
+    cmd.arg(output);
     cmd
+}
+
+/// Whether this pw-record knows `--raw` (asked once).
+fn pw_record_has_raw() -> bool {
+    static HAS_RAW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS_RAW.get_or_init(|| {
+        Command::new("pw-record")
+            .arg("--help")
+            .output()
+            .map(|o| {
+                let help = [o.stdout, o.stderr].concat();
+                String::from_utf8_lossy(&help).contains("--raw")
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// The `pw-record` arguments before the output path.
@@ -210,15 +234,17 @@ mod tests {
         assert_eq!(peak(&[0.2, -0.7]), 0.7);
     }
 
+    fn args(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
     fn pw_record_asks_for_mono_16k_s16() {
-        let cmd = pw_record("mic", "-");
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
+        let args = args(&pw_record("mic", "-"));
         assert_eq!(
-            args,
+            args[..8],
             [
                 "--target",
                 "mic",
@@ -227,9 +253,18 @@ mod tests {
                 "--channels",
                 "1",
                 "--format",
-                "s16",
-                "-"
+                "s16"
             ]
         );
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        // Raw samples on stdout wherever pw-record can be asked (#226).
+        assert_eq!(args.contains(&"--raw".to_string()), pw_record_has_raw());
+    }
+
+    #[test]
+    fn a_file_keeps_its_container() {
+        let args = args(&pw_record("mic", "/tmp/x.wav"));
+        assert!(!args.contains(&"--raw".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/x.wav"));
     }
 }
