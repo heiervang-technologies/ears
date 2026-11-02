@@ -10,7 +10,7 @@ use ghost_preview::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, DeviceAction};
+use cli::{Cli, Commands, DeviceAction, VadAction};
 use ears::audio;
 use ears::Config;
 use ears::{
@@ -87,15 +87,20 @@ async fn main() -> Result<()> {
         }) => {
             run_ghost_preview(&config, recorder_pid, recorder_start).await?;
         }
-        Some(Commands::Vad) => {
-            if config.vad.ghost {
+        Some(Commands::Vad { action }) => {
+            if action == Some(VadAction::Status) {
+                let running = vad_running(&config);
+                println!("vad: {}", if running { "running" } else { "stopped" });
+                std::process::exit(if running { 0 } else { 1 });
+            }
+            if config.vad.ghost && action != Some(VadAction::Stop) {
                 ears::ghost_style::apply(&config.ghost);
             }
-            handle_vad(&config, config.vad.ghost).await?;
+            handle_vad(&config, config.vad.ghost, action).await?;
         }
         Some(Commands::Ghost) => {
             ears::ghost_style::apply(&config.ghost);
-            handle_vad(&config, true).await?;
+            handle_vad(&config, true, None).await?;
         }
         Some(Commands::GhostWatch { json }) => {
             watch_ghost(json).await?;
@@ -555,12 +560,39 @@ async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
 // Use shared StateResetGuard from ears::state
 
 /// Toggle VAD mode: start or stop headless voice activity detection
-async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
+/// A VAD process is alive (its pid file names one).
+fn vad_running(config: &Config) -> bool {
+    std::fs::read_to_string(config.state_dir.join("vad.pid"))
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<i32>().ok())
+        .is_some_and(|pid| {
+            pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+        })
+}
+
+/// Start, stop or toggle (`action` None) VAD.
+async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> Result<()> {
     AudioFeedback::set_volume(config.cue_volume);
     let vad_pid_file = config.state_dir.join("vad.pid");
     let vad_lock_path = config.state_dir.join("vad.lock");
+    match action {
+        Some(VadAction::Start) if vad_running(config) => {
+            eprintln!("VAD already running");
+            return Ok(());
+        }
+        Some(VadAction::Stop) if !vad_running(config) => {
+            eprintln!("VAD not running");
+            return Ok(());
+        }
+        _ => {}
+    }
     let mut vad_lock = FileLock::new(&vad_lock_path).context("Failed to create VAD lock")?;
     if !vad_lock.try_lock().context("Failed to check VAD lock")? {
+        if action == Some(VadAction::Start) {
+            // Another VAD is starting (or restarting itself): leave it be.
+            eprintln!("VAD already starting");
+            return Ok(());
+        }
         // Another VAD instance is starting up — just try to kill it via PID
         tracing::info!("VAD lock held by another process, attempting stop via PID");
     }

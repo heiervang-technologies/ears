@@ -13,6 +13,14 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+/// What `ears vad` does; without one it toggles.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VadAction {
+    Start,
+    Stop,
+    Status,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Toggle recording/transcription (for keyboard shortcuts)
@@ -24,9 +32,14 @@ pub enum Commands {
         ghost: bool,
     },
 
-    /// Toggle VAD (Voice Activity Detection) mode (for keyboard shortcuts)
+    /// Toggle VAD (Voice Activity Detection) mode (for keyboard shortcuts).
+    /// Scripts should say what they mean: `start` never stops a running VAD,
+    /// `stop` never starts one, `status` exits 0 while it runs.
     #[command(alias = "v")]
-    Vad,
+    Vad {
+        #[arg(value_enum)]
+        action: Option<VadAction>,
+    },
 
     /// Toggle VAD with ghost completion: while you speak, the transcript is
     /// shown as inline preedit ("ghost text") in the focused app via the

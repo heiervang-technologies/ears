@@ -399,10 +399,13 @@ chosen, 1 cancelled, 2 timed out, 3 VAD not running.
 ### VAD Mode (headless)
 
 ```bash
-ears vad    # Start VAD (or stop if already running)
+ears vad          # Start VAD (or stop if already running)
+ears vad start    # start; never stops a running VAD (for scripts)
+ears vad stop     # stop; never starts one
+ears vad status   # exit 0 while VAD runs
 ```
 
-Continuously listens and auto-transcribes when speech is detected. Toggle on/off by running the command again.
+Continuously listens and auto-transcribes when speech is detected. Toggle on/off by running the command again; scripts should use `start`/`stop`, since a toggle fired while VAD restarts (or by a second caller) turns it off. When the microphone capture is lost (a WirePlumber restart, a replugged device), VAD starts again by itself with a short backoff.
 
 ### Ghost Completion (inline preview)
 
