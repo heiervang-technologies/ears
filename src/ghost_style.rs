@@ -41,6 +41,49 @@ pub struct GhostStyle {
     /// `color`. None: drawn like the rest.
     #[serde(default)]
     pub frozen_color: Option<String>,
+    /// Which Alacritty reads `alacritty.toml`: "preedit" (the patched build,
+    /// which takes `[colors.preedit]`), "stock" (which warns about it in
+    /// every window), or "auto" (look at the `alacritty` on PATH).
+    #[serde(default, skip_serializing_if = "AlacrittyBuild::is_auto")]
+    pub alacritty: AlacrittyBuild,
+}
+
+/// See [`GhostStyle::alacritty`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AlacrittyBuild {
+    #[default]
+    Auto,
+    Preedit,
+    Stock,
+}
+
+impl AlacrittyBuild {
+    fn is_auto(&self) -> bool {
+        *self == AlacrittyBuild::Auto
+    }
+}
+
+/// Text only the preedit-colours build of Alacritty contains (its config
+/// error for the section, and its wrapped-preedit renderer). Stock reports
+/// the same version line, so the binary is the only tell.
+const PREEDIT_BUILD_MARKS: &[&[u8]] = &[b"Config error: preedit: ", b"draw_wrapped_preedit"];
+
+/// Whether the first `alacritty` on PATH is the preedit-colours build. None
+/// when there is none.
+fn path_alacritty_reads_preedit() -> Option<bool> {
+    let path = std::env::var_os("PATH")?;
+    let exe = std::env::split_paths(&path)
+        .map(|dir| dir.join("alacritty"))
+        .find(|p| p.is_file())?;
+    let bytes = std::fs::read(&exe).ok()?;
+    Some(binary_reads_preedit(&bytes))
+}
+
+fn binary_reads_preedit(bytes: &[u8]) -> bool {
+    PREEDIT_BUILD_MARKS
+        .iter()
+        .any(|mark| bytes.windows(mark.len()).any(|w| w == *mark))
 }
 
 impl GhostStyle {
@@ -136,7 +179,30 @@ pub struct Applied {
 /// Missing applications are skipped; errors are logged and skipped.
 pub fn apply(style: &GhostStyle) -> Vec<Applied> {
     let mut applied = Vec::new();
-    if let Some(path) = alacritty_config() {
+    let preedit_build = match style.alacritty {
+        AlacrittyBuild::Preedit => true,
+        AlacrittyBuild::Stock => false,
+        AlacrittyBuild::Auto => path_alacritty_reads_preedit().unwrap_or(false),
+    };
+    if let (Some(path), false) = (alacritty_config(), preedit_build) {
+        // Stock Alacritty warns about the section in every window: take
+        // down a block ears wrote, and leave ghost text to its own style.
+        match remove_ears_section(&path, "colors.preedit") {
+            Ok(true) => {
+                tracing::info!(
+                    "Stock Alacritty: removed [colors.preedit] from {} (it draws ghost text in its own style)",
+                    path.display()
+                );
+                applied.push(Applied {
+                    app: "alacritty (stock: block removed)",
+                    path,
+                    changed: true,
+                });
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("Ghost style for Alacritty ({}): {}", path.display(), e),
+        }
+    } else if let Some(path) = alacritty_config() {
         match apply_alacritty(&path, style) {
             Ok(changed) => applied.push(Applied {
                 app: "alacritty",
@@ -326,6 +392,44 @@ fn set_toml_keys(text: &str, section: &str, keys: &[(&str, String)]) -> String {
     result
 }
 
+/// Remove a `[section]` table ears wrote (with the comment line it puts
+/// above it). True if the file changed.
+fn remove_ears_section(path: &Path, section: &str) -> std::io::Result<bool> {
+    let old = std::fs::read_to_string(path)?;
+    let new = without_section(&old, section);
+    write_if_changed(path, &old, &new)
+}
+
+fn without_section(text: &str, section: &str) -> String {
+    let header = format!("[{section}]");
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.trim() == header) else {
+        return text.to_string();
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| start + 1 + i);
+    let mut from = start;
+    if from > 0 && lines[from - 1].starts_with("# Ghost text style, written by ears") {
+        from -= 1;
+    }
+    let mut kept: Vec<&str> = lines[..from].to_vec();
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    let rest = &lines[end..];
+    if !kept.is_empty() && !rest.is_empty() {
+        kept.push("");
+    }
+    kept.extend(rest);
+    let mut out = kept.join("\n");
+    if text.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
 /// Replace the file (through symlinks, e.g. into a dotfiles repo) in one step.
 fn write_if_changed(path: &Path, old: &str, new: &str) -> std::io::Result<bool> {
     if old == new {
@@ -341,6 +445,38 @@ fn write_if_changed(path: &Path, old: &str, new: &str) -> std::io::Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_preedit_build_is_told_from_stock_by_its_binary() {
+        assert!(binary_reads_preedit(b"..\0Config error: preedit: \0.."));
+        assert!(binary_reads_preedit(b"xx draw_wrapped_preedit yy"));
+        assert!(!binary_reads_preedit(
+            b"preedit_string preeditStartCallback"
+        ));
+    }
+
+    #[test]
+    fn removing_the_section_keeps_the_rest() {
+        let text = "[font]\nsize = 11\n\n# Ghost text style, written by ears (`[ghost]` in its config).\n[colors.preedit]\nforeground = \"#111111\"\n\n[window]\nopacity = 0.9\n";
+        assert_eq!(
+            without_section(text, "colors.preedit"),
+            "[font]\nsize = 11\n\n[window]\nopacity = 0.9\n"
+        );
+        let tail = "[font]\nsize = 11\n\n[colors.preedit]\nwrap = true\n";
+        assert_eq!(
+            without_section(tail, "colors.preedit"),
+            "[font]\nsize = 11\n"
+        );
+        assert_eq!(without_section("[font]\n", "colors.preedit"), "[font]\n");
+    }
+
+    #[test]
+    fn the_build_setting_parses() {
+        let style: GhostStyle = toml::from_str("alacritty = \"stock\"").unwrap();
+        assert_eq!(style.alacritty, AlacrittyBuild::Stock);
+        let style: GhostStyle = toml::from_str("").unwrap();
+        assert_eq!(style.alacritty, AlacrittyBuild::Auto);
+    }
 
     #[test]
     fn colors_normalize() {
