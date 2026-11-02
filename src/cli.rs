@@ -181,6 +181,15 @@ pub enum Commands {
         action: String,
     },
 
+    /// Standby: on (only the wake phrase is acted on), off (resume), toggle
+    /// or status. The same switch as the spoken wake and standby phrases, for
+    /// tools, e.g. a voice call that needs the words.
+    Standby {
+        /// on | off | toggle | status (default: status)
+        #[arg(default_value = "status", value_parser = ["on", "off", "toggle", "status"])]
+        action: String,
+    },
+
     /// Command mode: teach an action your phrasing. The next utterance in
     /// command mode becomes one of its anchors (it is not fired). Without
     /// ACTION, list the actions and how many anchors each has.

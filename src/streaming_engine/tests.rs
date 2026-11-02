@@ -1689,3 +1689,24 @@ async fn test_ghost_stream_sends_the_shell_grammar_and_cleans_partials() {
     server.say(stream_partial(id, "ls dash la.", 2));
     assert_eq!(next_cmd_ticking(&mut engine, &lines).await, "F 2 ls -la");
 }
+
+#[tokio::test]
+async fn test_request_wake_switches_standby_like_the_phrases() {
+    let (mut engine, _rx, _server, dir) = command_engine("unused").await;
+    let marker = dir.path().join("vad.standby");
+    engine.set_standby_marker(marker.clone());
+
+    engine.request_wake(crate::wake::Wake::Off);
+    assert!(engine.is_standby());
+    assert!(marker.exists());
+
+    engine.request_wake(crate::wake::Wake::Off);
+    assert!(engine.is_standby(), "standing by again stays in standby");
+
+    engine.request_wake(crate::wake::Wake::On);
+    assert!(!engine.is_standby());
+    assert!(!marker.exists());
+
+    engine.request_wake(crate::wake::Wake::Toggle);
+    assert!(engine.is_standby());
+}

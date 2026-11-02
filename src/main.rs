@@ -157,6 +157,9 @@ async fn main() -> Result<()> {
         Some(Commands::Typing { action }) => {
             handle_typing(&action).await?;
         }
+        Some(Commands::Standby { action }) => {
+            handle_standby(&action, &config.state_dir).await?;
+        }
         Some(Commands::Teach { action }) => {
             handle_teach(&config, action.as_deref())?;
         }
@@ -316,6 +319,41 @@ async fn handle_typing(action: &str) -> Result<()> {
             println!("{}", typing_switch::describe(enabled));
             Ok(())
         }
+    }
+}
+
+/// `ears standby on|off|toggle|status`: on stands VAD by (only the wake
+/// phrase is acted on), off resumes it, as the spoken phrases do. Status reads
+/// the marker VAD keeps while in standby.
+async fn handle_standby(action: &str, state_dir: &std::path::Path) -> Result<()> {
+    let marker = state_dir.join(ears::prompt::STANDBY_MARKER);
+    let status = || {
+        println!("standby:{}", if marker.exists() { "on" } else { "off" });
+    };
+    match action {
+        "status" => {
+            status();
+            Ok(())
+        }
+        "on" | "off" | "toggle" => match ears::ipc::send_command(&format!("standby-{}", action))
+            .await
+        {
+            Ok(resp) if resp.starts_with("standby:") => {
+                // the engine applies it on its next turn; give it a moment so status is current
+                for _ in 0..20 {
+                    let on = marker.exists();
+                    if (action == "on" && on) || (action == "off" && !on) || action == "toggle" {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                status();
+                Ok(())
+            }
+            Ok(resp) => anyhow::bail!("Running ears does not support standby control: {}", resp),
+            Err(_) => anyhow::bail!("VAD is not running"),
+        },
+        other => anyhow::bail!("Unknown standby action: {}", other),
     }
 }
 
@@ -668,6 +706,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
             guided_grammar: config.active_grammar(),
             ghost,
             claimed,
+            wake: None,
         }
     };
 
@@ -692,6 +731,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
     // Track mutable settings for command updates
     let mut auto_enter = config.auto_enter;
     let mut claims: usize = 0;
+    let mut wake_seq: u64 = 0;
 
     let save_to_clipboard = config.save_to_clipboard;
     let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
@@ -802,6 +842,13 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
                                 if claims > 0 { "claimed: publishing instead of typing" } else { "released: typing again" }
                             );
                         }
+                    }
+                    ears::ipc::EarsCommand::Standby { wake } => {
+                        wake_seq += 1;
+                        let mut settings = make_settings(auto_enter, typing, claims > 0);
+                        settings.wake = Some((wake_seq, wake));
+                        let _ = settings_tx.send(settings);
+                        tracing::info!("Standby switch asked for over IPC: {:?}", wake);
                     }
                     ears::ipc::EarsCommand::Typing { request, respond } => {
                         let next = request.apply(typing);
@@ -1004,6 +1051,7 @@ async fn handle_ws_listen(
                 guided_grammar: config.active_grammar(),
                 ghost: false,
                 claimed: false,
+                wake: None,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();
