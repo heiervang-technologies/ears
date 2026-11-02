@@ -718,13 +718,31 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
+    // A lost capture (WirePlumber restarted, the device came back) starts
+    // VAD again from scratch, unless it keeps failing (#220).
+    let mut restart_capture = false;
     loop {
         tokio::select! {
             _ = sigterm.recv() => break,
             _ = sigint.recv() => break,
             _ = capture_dead.notified() => {
-                AudioFeedback::beep_vad_close().ok();
-                eprintln!("VAD stopped: no audio input");
+                let Some(delay) = capture_restart_delay(
+                    std::env::var(CAPTURE_RESTARTS_ENV).ok().as_deref(),
+                    unix_now(),
+                ) else {
+                    AudioFeedback::beep_vad_close().ok();
+                    eprintln!("VAD stopped: no audio input (it kept failing)");
+                    break;
+                };
+                eprintln!("Microphone capture lost: listening again in {:?}", delay);
+                tracing::warn!("Capture lost; restarting VAD in {:?}", delay);
+                // Wait while still owning the pid file, so `ears vad` meanwhile
+                // stops this one rather than starting a second.
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => restart_capture = true,
+                    _ = sigterm.recv() => {}
+                    _ = sigint.recv() => {}
+                }
                 break;
             }
             Some(cmd) = cmd_rx.recv() => {
@@ -790,8 +808,93 @@ async fn handle_vad(config: &Config, ghost: bool) -> Result<()> {
     if let Err(e) = state_mgr.transition(StateEnum::Idle) {
         tracing::warn!("Failed to transition to Idle on shutdown: {}", e);
     }
+    if restart_capture {
+        drop(vad_lock);
+        restart_self();
+    }
 
     Ok(())
+}
+
+/// Carries "restarts in a row, last at (unix s)" across a capture restart.
+const CAPTURE_RESTARTS_ENV: &str = "EARS_CAPTURE_RESTARTS";
+/// Restarts within this many seconds of the last count as in a row.
+const CAPTURE_RESTART_WINDOW_S: u64 = 120;
+/// In a row, VAD gives up after this many (the device is really gone).
+const CAPTURE_RESTARTS_MAX: u32 = 8;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// How long to wait before restarting after a lost capture, given the
+/// carried-over count (`"n,at"`); None to give up. Sets the count for the
+/// restarted process.
+fn capture_restart_delay(carried: Option<&str>, now: u64) -> Option<Duration> {
+    let (count, at) = carried
+        .and_then(|c| c.split_once(','))
+        .and_then(|(n, at)| Some((n.parse::<u32>().ok()?, at.parse::<u64>().ok()?)))
+        .unwrap_or((0, 0));
+    let count = if now.saturating_sub(at) <= CAPTURE_RESTART_WINDOW_S {
+        count + 1
+    } else {
+        1
+    };
+    if count > CAPTURE_RESTARTS_MAX {
+        return None;
+    }
+    std::env::set_var(CAPTURE_RESTARTS_ENV, format!("{count},{now}"));
+    Some(Duration::from_secs((1u64 << count).min(30)))
+}
+
+/// Replace this process with a fresh `ears` with the same arguments.
+fn restart_self() {
+    use std::os::unix::process::CommandExt;
+    let mut args = std::env::args_os();
+    let argv0 = args.next().unwrap_or_else(|| "ears".into());
+    // A reinstalled binary leaves current_exe() pointing at "(deleted)".
+    let program = std::env::current_exe()
+        .ok()
+        .filter(|p| p.exists())
+        .map(std::ffi::OsString::from)
+        .unwrap_or(argv0);
+    let err = std::process::Command::new(&program).args(args).exec();
+    AudioFeedback::beep_vad_close().ok();
+    eprintln!("VAD stopped: cannot restart {:?}: {}", program, err);
+}
+
+#[cfg(test)]
+mod capture_restart_tests {
+    use super::*;
+
+    #[test]
+    fn backs_off_in_a_row_and_resets_after_a_quiet_spell() {
+        assert_eq!(
+            capture_restart_delay(None, 1000),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            capture_restart_delay(Some("2,990"), 1000),
+            Some(Duration::from_secs(8))
+        );
+        assert_eq!(
+            capture_restart_delay(Some("6,990"), 1000),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(capture_restart_delay(Some("8,990"), 1000), None);
+        assert_eq!(
+            capture_restart_delay(Some("8,100"), 1000),
+            Some(Duration::from_secs(2)),
+            "an old run of failures is forgotten"
+        );
+        assert_eq!(
+            capture_restart_delay(Some("junk"), 1000),
+            Some(Duration::from_secs(2))
+        );
+    }
 }
 
 /// Run WebSocket audio input mode: starts a WS server that feeds audio into the VAD pipeline
