@@ -28,16 +28,19 @@ pub enum Mode {
     Dictation,
     /// Violet: command mode.
     Command,
+    /// Red: a decision is open (`ears decide`).
+    Decide,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 3] = [Mode::Standby, Mode::Dictation, Mode::Command];
+    pub const ALL: [Mode; 4] = [Mode::Standby, Mode::Dictation, Mode::Command, Mode::Decide];
 
     pub fn name(self) -> &'static str {
         match self {
             Mode::Standby => "standby",
             Mode::Dictation => "dictation",
             Mode::Command => "command",
+            Mode::Decide => "decide",
         }
     }
 }

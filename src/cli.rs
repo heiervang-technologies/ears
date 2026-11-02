@@ -176,6 +176,32 @@ pub enum Commands {
         action: Option<String>,
     },
 
+    /// Ask Markus a question with discrete options, out loud: ears VAD turns
+    /// red, shows them above its line, and the option he reads out (or its
+    /// number) is printed. Heard by its words and, when those are unclear or
+    /// ASR is down, by embeddinggemma2. Exit 0 chosen, 1 cancelled ("cancel", "none of
+    /// these"), 2 timed out, 3 VAD not running.
+    Decide {
+        /// The question, shown above the options.
+        question: String,
+        /// The options (2 to 6), read out as they are written.
+        #[arg(required = true, num_args = 2..=6)]
+        options: Vec<String>,
+        /// Give up after this many seconds, a quick time event: the overlay
+        /// drains a bar meanwhile. Ignored when config `decide_timeouts` is
+        /// false. Default: wait.
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Print the option's index (0-based) instead of its text ("other"
+        /// for an answer of your own).
+        #[arg(long)]
+        index: bool,
+        /// Leave room for an answer of your own: what is not an option is
+        /// printed as said.
+        #[arg(long)]
+        other: bool,
+    },
+
     /// Live subtitles of what VAD hears, drawn above the ears LED line
     /// (for a stream). Without on|off, say whether they are on.
     Subtitles {

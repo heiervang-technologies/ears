@@ -279,7 +279,7 @@ pub fn normalized(mut v: Vec<f32>) -> Vec<f32> {
     v
 }
 
-fn dot(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 

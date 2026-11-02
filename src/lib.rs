@@ -9,6 +9,7 @@ pub mod audio;
 pub mod colour_mode;
 pub mod command_mode;
 pub mod commands;
+pub mod decide;
 
 // Iteration 1: Configuration
 pub mod config;
