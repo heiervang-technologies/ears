@@ -100,6 +100,11 @@ pub struct ActionSpec {
     pub keys: Option<String>,
     /// Program and arguments to start.
     pub run: Option<Vec<String>>,
+    /// Fire only on its exact words, never on how it sounds or what it
+    /// means: for actions a misfire would quietly leave changed (keyboard
+    /// layout, touchpad, notifications off).
+    #[serde(default)]
+    pub exact: bool,
 }
 
 /// What firing an action does.
@@ -122,10 +127,13 @@ pub struct Action {
     pub name: String,
     pub effect: Effect,
     pub text: Vec<String>,
+    /// Fires only by its exact words (see [`ActionSpec::exact`]).
+    pub exact: bool,
 }
 
 fn builtins() -> Vec<Action> {
     let a = |name: &str, effect, text: &[&str]| Action {
+        exact: false,
         name: name.into(),
         effect,
         text: text.iter().map(|t| t.to_string()).collect(),
@@ -210,6 +218,7 @@ pub fn parse_actions(text: &str) -> std::result::Result<(ActionsFile, Vec<Action
             }
         };
         let action = Action {
+            exact: spec.exact,
             name: spec.name.clone(),
             effect,
             text: spec.text.clone(),
@@ -416,6 +425,7 @@ impl Router {
             nearest >= self.floor
                 && margin >= self.margin
                 && self.actions[w].effect != Effect::Nothing
+                && !self.actions[w].exact
         });
         Decision {
             votes: ranked
@@ -889,6 +899,21 @@ run = ["playerctl", "next"]
             r.decide(&unit(&[0.1, 1.0, 0.0, 0.0, 0.0])).fired.as_deref(),
             Some("next")
         );
+    }
+
+    #[test]
+    fn an_exact_action_fires_on_its_words_only() {
+        let mut r = router();
+        let next = r.index("next").unwrap();
+        r.actions[next].exact = true;
+        let d = r.decide(&unit(&[0.1, 1.0, 0.0, 0.0, 0.0]));
+        assert_eq!(d.fired, None, "never by sound or meaning");
+        assert_eq!(d.votes[0].0, "next", "still shown as the nearest");
+        assert_eq!(r.by_words("Next."), Some(next));
+        let (_, actions) =
+            parse_actions("[[action]]\nname = \"layout\"\nrun = [\"true\"]\nexact = true\n")
+                .unwrap();
+        assert!(actions.iter().any(|a| a.name == "layout" && a.exact));
     }
 
     #[test]
