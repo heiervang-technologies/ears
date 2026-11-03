@@ -78,9 +78,11 @@ pub enum StreamingEvent {
     },
 
     /// The utterance in progress as heard so far, published instead of drawn
-    /// as ghost text while a client holds the input claim (`ears claim`), so
-    /// it can show its own preview.
-    Partial { text: String },
+    /// as ghost text while a client holds the input claim (`ears claim`) or
+    /// `ws-listen --live` is on, so it can show its own preview. The first
+    /// `settled` bytes of `text` will not change; the rest may still be
+    /// revised (0 when the decoder does not say).
+    Partial { text: String, settled: usize },
 
     /// Transcription segment completed. `audio_path` is the utterance as a
     /// 16 kHz mono WAV, present only when the engine keeps audio

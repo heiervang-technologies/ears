@@ -110,6 +110,13 @@ pub enum Commands {
         /// config sets the log and window; off for ws-listen without this)
         #[arg(long)]
         say_echo: bool,
+
+        /// Publish the utterance in progress as `Partial { text, settled }`
+        /// events while the speaker is still talking (the same live decoding
+        /// the desktop ghost uses; `live_decoding = "continuous"` streams it),
+        /// so a remote client can draw words as they are heard
+        #[arg(long)]
+        live: bool,
     },
 
     /// Audio device management
