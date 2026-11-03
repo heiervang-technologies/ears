@@ -139,6 +139,9 @@ pub enum EarsCommand {
     /// Switch standby (`standby-on|off|toggle`): `on` stands by, `off`
     /// resumes, as the wake phrases do.
     Standby { wake: crate::wake::Wake },
+    /// Switch command mode (`command-on|off|toggle`), as saying "command"
+    /// does; `None` toggles.
+    CommandMode { on: Option<bool> },
 }
 
 /// Start the command server at the default socket path.
@@ -214,6 +217,15 @@ pub fn start_cmd_server_at(
                                         };
                                         let _ = tx.send(EarsCommand::Standby { wake });
                                         "standby:requested".to_string()
+                                    }
+                                    "command-on" | "command-off" | "command-toggle" => {
+                                        let on = match verb {
+                                            "command-on" => Some(true),
+                                            "command-off" => Some(false),
+                                            _ => None,
+                                        };
+                                        let _ = tx.send(EarsCommand::CommandMode { on });
+                                        "command:requested".to_string()
                                     }
                                     "toggle-auto-enter" => {
                                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();

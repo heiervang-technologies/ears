@@ -152,6 +152,9 @@ pub struct StreamingStats {
 /// running. On a current-thread runtime (tests) it just runs inline.
 /// The children themselves are bounded by `desktop::run_bounded`, so the
 /// closure is guaranteed to return.
+/// Command mode waits this long for the words; after it, the embedding decides alone.
+const COMMAND_ASR_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
+
 fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -1633,6 +1636,22 @@ impl StreamingEngine {
         }
     }
 
+    /// Command mode: the words that fired `action`.
+    fn subtitle_fired(&mut self, heard: &str, action: &str) {
+        let mode = self.subtitle_mode();
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.fired(mode, heard, action);
+        }
+    }
+
+    /// Command mode: words that fired nothing, and what they came close to.
+    fn subtitle_missed(&mut self, heard: &str, nearest: Option<&str>) {
+        let mode = self.subtitle_mode();
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.missed(mode, heard, nearest);
+        }
+    }
+
     /// Show a committed transcript.
     fn subtitle_finished(&mut self, heard: &str) {
         let mode = self.subtitle_mode();
@@ -1860,6 +1879,22 @@ impl StreamingEngine {
         self.command_mode.is_some()
     }
 
+    /// Switch command mode as saying "command" would, asked for over IPC
+    /// (`ears command on|off|toggle`; `None` toggles), e.g. by a voice call
+    /// that needs the words. Asking for the current mode does nothing.
+    pub async fn request_command_mode(&mut self, on: Option<bool>) {
+        let on = on.unwrap_or(self.command_mode.is_none());
+        if on == self.command_mode.is_some() {
+            return;
+        }
+        if on {
+            self.enter_command_mode("").await;
+        } else {
+            crate::desktop::AudioFeedback::beep_done().ok();
+            self.leave_command_mode();
+        }
+    }
+
     async fn enter_command_mode(&mut self, heard: &str) {
         let Some(paths) = self.command_paths.clone() else {
             return;
@@ -1916,35 +1951,70 @@ impl StreamingEngine {
             self.discard("segment audio unreadable");
             return;
         };
+        let Some(embedder) = self.command_mode.as_ref().map(|m| m.embedder.clone()) else {
+            return;
+        };
+        // Heard both ways at once: the words, and the audio's embedding.
+        // The words only count if they come back in time.
+        let started = Instant::now();
+        let asr = tokio::time::timeout(
+            COMMAND_ASR_BUDGET,
+            self.whisper_client.transcribe_checked(wav, None, false),
+        );
+        let (asr, audio) = tokio::join!(asr, embedder.audio(&bytes));
+        let words = match asr {
+            Ok(Ok(text)) => text,
+            Ok(Err(crate::whisper::WhisperError::EmptyTranscription)) => String::new(),
+            Ok(Err(e)) => {
+                warn!("Command mode: no words ({}), by embedding only", e);
+                String::new()
+            }
+            Err(_) => {
+                warn!(
+                    "Command mode: the ASR took over {:?}, by embedding only",
+                    COMMAND_ASR_BUDGET
+                );
+                String::new()
+            }
+        };
+        let audio = match audio {
+            Ok(u) => Some(u),
+            Err(e) => {
+                warn!("Command mode: {}", e);
+                None
+            }
+        };
+        if audio.is_none() && words.trim().is_empty() {
+            crate::desktop::AudioFeedback::beep_error().ok();
+            self.discard("neither words nor embedding");
+            return;
+        }
         let Some(mode) = self.command_mode.as_mut() else {
             return;
         };
-        let started = Instant::now();
-        let (outcome, decision) = match mode.hear(&bytes).await {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Command mode: {}", e);
-                crate::desktop::AudioFeedback::beep_error().ok();
-                self.discard("embedding failed");
-                return;
-            }
+        let (outcome, hearing) = mode.hear_with(audio, &words).await;
+        let top = |d: &Option<crate::command_mode::Decision>| {
+            d.as_ref().map_or("-".to_string(), |d| {
+                d.votes
+                    .iter()
+                    .take(3)
+                    .map(|(name, share)| format!("{name} {:.0}%", share * 100.0))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
         };
-        let top: Vec<String> = decision
-            .votes
-            .iter()
-            .take(3)
-            .map(|(name, share)| format!("{name} {:.0}%", share * 100.0))
-            .collect();
         info!(
-            "Command mode: {:?} in {:?} (nearest {:.3}; {})",
+            "Command mode: {:?} by {} in {:?} (heard {:?}; audio: {}; text: {})",
             outcome,
+            hearing.by.unwrap_or("-"),
             started.elapsed(),
-            decision.nearest,
-            top.join(", ")
+            hearing.words,
+            top(&hearing.audio),
+            top(&hearing.text)
         );
         match outcome {
             Outcome::Fire { name, effect } => {
-                self.subtitle_command(&name);
+                self.subtitle_fired(&hearing.words, &name);
                 match effect {
                     Effect::Keys(combo) => {
                         self.run_command(&crate::commands::Command::Keys(combo), &name)
@@ -1966,14 +2036,21 @@ impl StreamingEngine {
                 }
             }
             Outcome::Taught(name) => {
+                self.subtitle_fired(&hearing.words, &name);
                 info!("Command mode: learned a new way to say {}", name);
                 crate::desktop::AudioFeedback::beep_done().ok();
             }
             Outcome::Forgot(name) => {
+                self.subtitle_fired(&hearing.words, "wrong");
                 info!("Command mode: forgot the last recording of {:?}", name);
                 crate::desktop::AudioFeedback::beep_done().ok();
             }
-            Outcome::Nothing => self.discard("no action is a confident match"),
+            Outcome::Nothing => {
+                // Say what was heard, so a command that does not exist (or
+                // was misheard) is plain to see.
+                self.discard("no action is a confident match");
+                self.subtitle_missed(&hearing.words, hearing.nearest.as_deref());
+            }
         }
     }
 
