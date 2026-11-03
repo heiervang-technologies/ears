@@ -1529,7 +1529,7 @@ fn test_run_command_partial_is_frozen_or_withheld_from_the_claimant() {
     engine.ghost_poll_partials();
     assert_eq!(
         drain(&mut rx),
-        ["Partial { text: \"Hello there\" }"],
+        ["Partial { text: \"Hello there\", settled: 0 }"],
         "run command partial withheld"
     );
 }

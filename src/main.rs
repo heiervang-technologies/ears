@@ -118,8 +118,9 @@ async fn main() -> Result<()> {
             port,
             socket,
             keep_audio,
+            live,
         }) => {
-            handle_ws_listen(&config, &host, port, socket, keep_audio).await?;
+            handle_ws_listen(&config, &host, port, socket, keep_audio, live).await?;
         }
         Some(Commands::Device { action }) => match action {
             Some(DeviceAction::List) => list_devices()?,
@@ -1032,6 +1033,7 @@ async fn handle_ws_listen(
     port: u16,
     socket: Option<String>,
     keep_audio: Option<std::path::PathBuf>,
+    live: bool,
 ) -> Result<()> {
     // Use a custom socket path to avoid conflicting with the desktop ears instance
     let socket_path = socket.map(std::path::PathBuf::from).unwrap_or_else(|| {
@@ -1045,6 +1047,18 @@ async fn handle_ws_listen(
     // Build the VAD pipeline components manually (like start_vad_pipeline but without pw-record)
     let language = ears::KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let (server_url, model) = config.resolve_server(language.as_deref());
+    // Live partials decode the growing utterance the way the desktop ghost
+    // does; with `live_decoding = "continuous"` the server streams them.
+    let continuous = (live && config.live_decoding == ears::config::LiveDecoding::Continuous)
+        .then(|| ears::continuous::ContinuousSpec {
+            server_url: server_url.to_string(),
+            api_key: config.api_key.clone(),
+            model: model.clone(),
+            language: language.clone(),
+            context: config.prompt.clone(),
+            rollback_words: config.live_rollback_words,
+            min_step_ms: config.min_step_ms(),
+        });
     let whisper_client = std::sync::Arc::new(
         ears::WhisperClient::new(server_url.to_string())
             .with_language(language)
@@ -1086,6 +1100,14 @@ async fn handle_ws_listen(
         tokio::sync::mpsc::unbounded_channel::<ears::streaming_engine::StreamingEvent>();
     engine.set_event_sender(event_tx.clone());
     engine.set_keep_audio_dir(keep_audio);
+    if live {
+        // Typing is off below and the claim is held, so the ghost machinery
+        // never draws into a window: every partial is published as an event
+        // instead (`ghost_poll_partials`, the muted + claimed branch).
+        engine.set_continuous(continuous);
+        engine.set_ghost(true);
+        engine.set_claimed(true);
+    }
 
     // Disable typing for ws-listen — only emit IPC events, never type into windows
     {
