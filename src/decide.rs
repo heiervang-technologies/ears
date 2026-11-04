@@ -47,6 +47,12 @@ pub struct Decision {
     /// Room for an answer of your own: what is not an option is returned.
     #[serde(default)]
     pub other: bool,
+    /// Only an option said exactly, on its own, chooses it: no numbers, no
+    /// option within a sentence, no start of one, no embedding. For options
+    /// that act (a click), where a near miss must not count; everything
+    /// else, even one word, comes back as an answer of your own.
+    #[serde(default)]
+    pub exact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,6 +168,9 @@ impl Decision {
         }
         if CANCEL.contains(&said.as_str()) {
             return Heard::Cancel;
+        }
+        if self.exact {
+            return Heard::Unclear;
         }
         if let Some(i) = ORDINALS
             .iter()
@@ -300,6 +309,7 @@ pub async fn ask(
     question: &str,
     options: &[String],
     other: bool,
+    exact: bool,
     timeout: Option<Duration>,
 ) -> std::io::Result<Option<Answer>> {
     let started = Instant::now();
@@ -339,6 +349,7 @@ pub async fn ask(
         }),
         timeout_ms: left.map(|t| t.as_millis() as u64),
         other,
+        exact,
     };
     std::fs::create_dir_all(state_dir)?;
     let tmp = state_dir.join(format!("{FILE}.tmp"));
@@ -390,7 +401,25 @@ mod tests {
             opened_ms: None,
             timeout_ms: None,
             other: false,
+            exact: false,
         }
+    }
+
+    #[test]
+    fn exact_hears_only_an_option_said_on_its_own() {
+        let mut d = decision(&["yes", "click", "right click", "middle click", "next"]);
+        d.exact = true;
+        assert_eq!(d.hear("Click."), Heard::Chose(1));
+        assert_eq!(d.hear("right click"), Heard::Chose(2));
+        assert_eq!(d.hear("cancel"), Heard::Cancel);
+        // A number picks a candidate, not the option in that place.
+        for said in ["two", "number two", "first", "one"] {
+            assert_eq!(d.hear(said), Heard::Unclear, "{said}");
+        }
+        // Neither within a sentence nor by its start.
+        assert_eq!(d.hear("click the second send button"), Heard::Unclear);
+        assert_eq!(d.hear("right"), Heard::Unclear);
+        assert_eq!(d.hear("middle"), Heard::Unclear);
     }
 
     #[test]
@@ -434,6 +463,7 @@ mod tests {
                     "Ship it?",
                     &["yes".into(), "no".into()],
                     false,
+                    false,
                     Some(Duration::from_secs(5)),
                 )
                 .await
@@ -471,6 +501,7 @@ mod tests {
             dir.path(),
             "?",
             &["a".into(), "b".into()],
+            false,
             false,
             Some(Duration::from_millis(150)),
         )

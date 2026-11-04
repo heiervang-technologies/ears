@@ -111,6 +111,9 @@ pub enum StreamingEvent {
 
 /// How many utterances "scratch that" can delete in a row.
 const UNDO_DEPTH: usize = 20;
+/// Marker of vision mode in the state dir, for the LED.
+pub const VISION_MARKER: &str = "vad.vision";
+
 /// Segments scoring from this fraction of `min_mean_probability` up to it are
 /// transcribed and kept only if the ASR model hears speech (0.4 -> 0.24).
 pub const BORDERLINE_FRACTION: f32 = 0.6;
@@ -223,6 +226,13 @@ pub struct StreamingEngine {
     /// Command mode while it is on: utterances route to actions by
     /// embedding instead of being transcribed.
     command_mode: Option<crate::command_mode::CommandMode>,
+    /// Vision mode (pink): utterances go to `ears look`, not the cursor.
+    vision_mode: bool,
+    /// Its marker for the LED (`vad.vision` in the state dir).
+    vision_marker: Option<std::path::PathBuf>,
+    /// Pink is a mode only when `[vision] enabled`: otherwise "look" and
+    /// "pink" are just words.
+    vision_enabled: bool,
     /// Decisions asked by `ears decide` (the red mode); None until VAD sets
     /// a runtime dir.
     decisions: Option<crate::decide::Decisions>,
@@ -333,6 +343,9 @@ impl StreamingEngine {
             shell_probe: crate::shell_focus::focused_shell,
             command_paths: None,
             command_mode: None,
+            vision_mode: false,
+            vision_marker: None,
+            vision_enabled: false,
             subtitles: None,
             decisions: None,
             decision_vectors: None,
@@ -385,8 +398,9 @@ impl StreamingEngine {
 
         let segment = self.handle_vad_outcome(outcome);
 
-        // While a decision is open nothing is typed, not even a ghost.
-        if self.ghost.is_some() && !self.standby && !self.deciding() {
+        // While a decision is open nothing is typed, not even a ghost; nor
+        // in vision mode, where words describe what to find.
+        if self.ghost.is_some() && !self.standby && !self.deciding() && !self.vision_mode {
             self.ghost_poll_partials();
             if segment.is_none() {
                 self.ghost_maybe_start_partial();
@@ -685,7 +699,9 @@ impl StreamingEngine {
             return Ok(());
         }
         // A colour said alone switches to the mode the LED shows in it.
-        if let Some(colour) = crate::colour_mode::Colour::parse(&transcript) {
+        if let Some(colour) = crate::colour_mode::Colour::parse(&transcript)
+            .filter(|c| *c != crate::colour_mode::Colour::Pink || self.vision_enabled)
+        {
             self.subtitle_command(&transcript);
             self.switch_to_colour(colour, &transcript).await;
             return Ok(());
@@ -727,6 +743,11 @@ impl StreamingEngine {
         info!("Transcribed: {}", transcript);
         // What was said, commands included: viewers see why a key was pressed.
         self.subtitle_finished(&transcript);
+
+        if self.vision_mode {
+            self.look(&transcript);
+            return Ok(());
+        }
 
         let guided_command = self.guided_grammar.is_some();
         let transcript = match self.commands.parse(&transcript) {
@@ -1592,6 +1613,14 @@ impl StreamingEngine {
     pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
         let _ = std::fs::remove_file(state_dir.join(crate::command_mode::MARKER));
         self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
+        let vision = state_dir.join(VISION_MARKER);
+        let _ = std::fs::remove_file(&vision);
+        self.vision_marker = Some(vision);
+    }
+
+    /// Allow vision mode (pink), from `[vision] enabled`.
+    pub fn set_vision_enabled(&mut self, enabled: bool) {
+        self.vision_enabled = enabled;
     }
 
     /// Write live subtitles to `state_dir` while they are on
@@ -1666,6 +1695,15 @@ impl StreamingEngine {
     async fn switch_to_colour(&mut self, colour: crate::colour_mode::Colour, heard: &str) {
         use crate::colour_mode::Colour;
         info!("Colour word {:?}: switching to {}", heard, colour.name());
+        if colour == Colour::Pink {
+            if self.standby {
+                self.apply_wake(crate::wake::Wake::On, heard);
+            }
+            self.leave_command_mode();
+            self.enter_vision_mode();
+            return;
+        }
+        self.leave_vision_mode();
         match colour {
             Colour::Orange => {
                 self.apply_wake(crate::wake::Wake::Off, heard);
@@ -1682,7 +1720,7 @@ impl StreamingEngine {
                 }
                 return;
             }
-            Colour::Blue | Colour::Yellow => {}
+            Colour::Blue | Colour::Yellow | Colour::Pink => {}
         }
         if self.standby {
             self.apply_wake(crate::wake::Wake::On, heard);
@@ -1751,7 +1789,8 @@ impl StreamingEngine {
             decision.hear(said)
         };
         let mut via = "words";
-        if heard == Heard::Unclear {
+        // An exact decision acts (a click): a guess by sound must not.
+        if heard == Heard::Unclear && !decision.exact {
             if let Some(i) = self
                 .decision_by_embedding(&decision, audio.as_deref())
                 .await
@@ -1762,10 +1801,16 @@ impl StreamingEngine {
         }
         // An answer of your own is at least two words: a lone word or a
         // stray sound ("I.") is more likely noise than an answer.
+        // An exact decision takes one word too ("three", "down"): its asker
+        // reads those itself.
+        let words = crate::commands::normalize(said)
+            .split(' ')
+            .filter(|w| !w.is_empty())
+            .count();
         let custom = (heard == Heard::Unclear
             && decision.other
-            && crate::commands::normalize(said).split(' ').count() >= 2)
-            .then(|| said.to_string());
+            && words >= if decision.exact { 1 } else { 2 })
+        .then(|| said.to_string());
         info!(
             "Decision {:?}: heard {:?} as {:?} by {}{}",
             decision.question,
@@ -1897,10 +1942,76 @@ impl StreamingEngine {
         }
     }
 
+    fn enter_vision_mode(&mut self) {
+        self.ghost_clear();
+        if !self.vision_mode {
+            info!("Vision mode on: say what to find on screen");
+            self.vision_mode = true;
+            if let Some(marker) = &self.vision_marker {
+                if let Err(e) = std::fs::write(marker, "") {
+                    warn!("Cannot write the vision mode marker: {}", e);
+                }
+            }
+        }
+        crate::desktop::AudioFeedback::beep_done().ok();
+    }
+
+    fn leave_vision_mode(&mut self) {
+        if !std::mem::take(&mut self.vision_mode) {
+            return;
+        }
+        if let Some(marker) = &self.vision_marker {
+            let _ = std::fs::remove_file(marker);
+        }
+        // A look still asking would take the next words as its answer.
+        self.stop_look();
+        info!("Vision mode off");
+    }
+
+    /// Stop the look still running, if any: one waiting for SAM, or whose
+    /// guess was not answered. Only a process that is an `ears look`: the
+    /// pid in a stale state file may belong to someone else by now.
+    fn stop_look(&self) {
+        let Some(dir) = self.vision_marker.as_ref().and_then(|m| m.parent()) else {
+            return;
+        };
+        let running = std::fs::read_to_string(dir.join(crate::vision::FILE))
+            .ok()
+            .and_then(|s| serde_json::from_str::<crate::vision::State>(&s).ok())
+            .and_then(|v| v.id.parse::<i32>().ok())
+            .filter(|p| *p > 0 && *p != std::process::id() as i32);
+        let Some(pid) = running else {
+            return;
+        };
+        if !crate::vision::is_look(pid) {
+            crate::vision::clear(dir);
+            return;
+        }
+        // SAFETY: plain kill(2) of a pid just checked to be an ears look.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    }
+
+    /// Hand an utterance to `ears look`, replacing a look still running
+    /// (one that is waiting for SAM, or whose guess was not answered).
+    fn look(&mut self, heard: &str) {
+        self.stop_look();
+        let ears = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "ears".into());
+        match crate::commands::spawn_detached(&[ears, "look".into(), heard.to_string()]) {
+            Ok(pid) => info!("Looking for {:?} (pid {})", heard, pid),
+            Err(e) => {
+                warn!("Cannot start ears look: {}", e);
+                crate::desktop::AudioFeedback::beep_error().ok();
+            }
+        }
+    }
+
     async fn enter_command_mode(&mut self, heard: &str) {
         let Some(paths) = self.command_paths.clone() else {
             return;
         };
+        self.leave_vision_mode();
         let started = Instant::now();
         match crate::command_mode::CommandMode::start(paths.clone()).await {
             Ok(mode) => {

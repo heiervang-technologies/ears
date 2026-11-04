@@ -177,6 +177,21 @@ async fn main() -> Result<()> {
             let code = handle_decide(&config, &question, &options, other, timeout, index).await?;
             std::process::exit(code);
         }
+        Some(Commands::Look { words, yes, json }) => {
+            // Vision mode replaces a look still running with SIGTERM: leave
+            // no overlay or state behind (the guard in handle_look drops).
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            let said = words.join(" ");
+            let code = tokio::select! {
+                code = handle_look(&config, &said, yes, json) => code?,
+                _ = term.recv() => {
+                    ears::vision::clear(&config.state_dir);
+                    143
+                }
+            };
+            std::process::exit(code);
+        }
         Some(Commands::Subtitles { state }) => {
             handle_subtitles(&config, state.as_deref())?;
         }
@@ -238,6 +253,209 @@ fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// `ears look`: one round of vision mode (docs/VISION_MODE.md).
+/// Act at `target` only if the screen is still the one SAM saw (same
+/// output, workspace and focused window): otherwise the point may now sit
+/// on something else, and a click there is the one thing not to do.
+fn act_on_same_screen(
+    compositor: ears::pointer::Compositor,
+    output: &ears::pointer::Output,
+    target: &ears::vision::Shown,
+    action: ears::vision::Action,
+    scene: &Option<String>,
+) -> Result<()> {
+    let now = ears::pointer::scene(compositor);
+    if scene.is_some() && now != *scene {
+        ears::desktop::AudioFeedback::beep_error().ok();
+        anyhow::bail!("the screen changed since the screenshot ({scene:?} -> {now:?}): not acting");
+    }
+    ears::vision::act(compositor, output, target, action)
+}
+
+async fn handle_look(config: &ears::Config, said: &str, yes: bool, json: bool) -> Result<i32> {
+    use ears::pointer::{self, Compositor};
+    use ears::vision::{self, Action, ButtonName, Request, State};
+
+    let mut req = Request::parse(said);
+    if req.target.is_empty() {
+        anyhow::bail!("nothing to look for in {said:?}");
+    }
+    let compositor = Compositor::detect()?;
+    let output = pointer::focused_output(compositor)?;
+    let dir = &config.state_dir;
+    let server = &config.vision.server;
+    let image = vision::image_path(dir);
+    let id = format!("{}", std::process::id());
+    let state = |s: &str, hint: String, shown: Vec<vision::Shown>, picked: usize| State {
+        id: id.clone(),
+        state: s.to_string(),
+        prompt: String::new(),
+        output: output.name.clone(),
+        width: output.width,
+        height: output.height,
+        image: if shown.is_empty() {
+            String::new()
+        } else {
+            image.display().to_string()
+        },
+        picked,
+        candidates: shown,
+        hint,
+    };
+    // Gone with the process, whatever path it leaves by.
+    struct Clear<'a>(&'a std::path::Path);
+    impl Drop for Clear<'_> {
+        fn drop(&mut self) {
+            ears::vision::clear(self.0);
+        }
+    }
+    let _clear = Clear(dir);
+
+    let t0 = std::time::Instant::now();
+    let mut jpeg = pointer::screenshot(&output)?;
+    let mut scene = pointer::scene(compositor);
+    let shot_ms = t0.elapsed().as_millis();
+    vision::write_state(
+        dir,
+        &state("looking", format!("looking for {}", req.target), vec![], 0),
+    )?;
+    let t1 = std::time::Instant::now();
+    let (found, mut size) = vision::segment(server, &jpeg, &req.target).await?;
+    let mut cands = vision::rank(found, req.which);
+    tracing::info!(
+        "look {:?}: screenshot {} ms, SAM {} ms, {} candidates",
+        req.target,
+        shot_ms,
+        t1.elapsed().as_millis(),
+        cands.len()
+    );
+    if json {
+        let shown = vision::shown(&cands, size, &output, &req.target);
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+        return Ok(0);
+    }
+    let mut picked = 0usize;
+    let mut action = req.action;
+    let vad = vad_running(config);
+    loop {
+        if cands.is_empty() {
+            vision::write_state(
+                dir,
+                &state("none", format!("no {} found", req.target), vec![], 0),
+            )?;
+            eprintln!("No {} found", req.target);
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            return Ok(1);
+        }
+        picked = picked.min(cands.len() - 1);
+        vision::render(&cands, picked, &image)?;
+        let shown = vision::shown(&cands, size, &output, &req.target);
+        let target = &shown[picked];
+        if yes && action != Action::Outline {
+            vision::write_state(
+                dir,
+                &state("acting", req.target.clone(), shown.clone(), picked),
+            )?;
+            act_on_same_screen(compositor, &output, target, action, &scene)?;
+            return Ok(0);
+        }
+        let hint = format!("{} {}/{}", req.target, picked + 1, shown.len());
+        vision::write_state(dir, &state("pick", hint.clone(), shown.clone(), picked))?;
+        if !vad {
+            for s in &shown {
+                println!(
+                    "[{}] score={:.2} at {:.0},{:.0}",
+                    s.n, s.score, s.point[0], s.point[1]
+                );
+            }
+            eprintln!(
+                "ears VAD is not running: nobody would hear the answer (use --yes with a verb)"
+            );
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            return Ok(0);
+        }
+        // A verb said up front still waits for a yes.
+        let mut options: Vec<String> = ["click", "right click", "middle click", "next"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if let Action::Click(_) | Action::DoubleClick | Action::Move = action {
+            options.insert(0, "yes".to_string());
+        }
+        let timeout = Some(Duration::from_secs(config.vision.confirm_s));
+        let answer = ears::decide::ask(dir, &hint, &options, true, true, timeout).await?;
+        let Some(answer) = answer else {
+            return Ok(2);
+        };
+        let chosen = answer.choice.as_deref();
+        let custom = answer.custom.as_deref().unwrap_or("");
+        let act = |a: Action| act_on_same_screen(compositor, &output, target, a, &scene);
+        match chosen {
+            Some("yes") => {
+                act(action)?;
+                return Ok(0);
+            }
+            Some("click") => {
+                act(Action::Click(ButtonName::Left))?;
+                return Ok(0);
+            }
+            Some("right click") => {
+                act(Action::Click(ButtonName::Right))?;
+                return Ok(0);
+            }
+            Some("middle click") => {
+                act(Action::Click(ButtonName::Middle))?;
+                return Ok(0);
+            }
+            Some("next") => {
+                picked = (picked + 1) % cands.len();
+                continue;
+            }
+            Some(_) => {}
+            None if custom.is_empty() => return Ok(1), // cancelled
+            None => {}
+        }
+        // An answer of its own.
+        if let Some(n) = vision::parse_scroll(custom) {
+            act(Action::Scroll(n))?;
+            // The page moved: look again for the same thing.
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            jpeg = pointer::screenshot(&output)?;
+            scene = pointer::scene(compositor);
+            let (found, s) = vision::segment(server, &jpeg, &req.target).await?;
+            cands = vision::rank(found, req.which);
+            size = s;
+            picked = 0;
+            continue;
+        }
+        let said = Request::parse(custom);
+        let only_number = custom
+            .split_whitespace()
+            .filter_map(vision::number)
+            .next()
+            .filter(|_| custom.split_whitespace().count() <= 2);
+        if let Some(n) = only_number.filter(|n| *n >= 1 && (*n as usize) <= cands.len()) {
+            picked = n as usize - 1;
+            continue;
+        }
+        if said.target.is_empty() && said.action != Action::Outline {
+            act(said.action)?;
+            return Ok(0);
+        }
+        if !said.target.is_empty() {
+            // Something else on the same screen.
+            if said.action != Action::Outline {
+                action = said.action;
+            }
+            req = said;
+            let (found, s) = vision::segment(server, &jpeg, &req.target).await?;
+            cands = vision::rank(found, req.which);
+            size = s;
+            picked = 0;
+        }
+    }
+}
+
 async fn handle_decide(
     config: &ears::Config,
     question: &str,
@@ -259,7 +477,8 @@ async fn handle_decide(
     let timeout = timeout
         .filter(|_| config.decide_timeouts)
         .map(std::time::Duration::from_secs);
-    let answer = ears::decide::ask(&config.state_dir, question, options, other, timeout).await?;
+    let answer =
+        ears::decide::ask(&config.state_dir, question, options, other, false, timeout).await?;
     Ok(match answer {
         None => {
             eprintln!("No answer");

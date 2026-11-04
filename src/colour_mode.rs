@@ -10,6 +10,7 @@
 //! Blue and yellow go through `haios-voice-route cursor|stick`, which owns
 //! the talking stick listener it starts, so blue always stops it again.
 //! | purple, violet    | command mode: routed to actions by embedding |
+//! | pink, magenta, vision, look | vision mode: what is said is found on screen (`ears look`) |
 
 /// A mode, by the colour the LED shows for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub enum Colour {
     Blue,
     Yellow,
     Purple,
+    Pink,
 }
 
 impl Colour {
@@ -30,6 +32,7 @@ impl Colour {
             "blue" | "cyan" => Some(Self::Blue),
             "yellow" => Some(Self::Yellow),
             "purple" | "violet" => Some(Self::Purple),
+            "pink" | "magenta" | "vision" | "look" => Some(Self::Pink),
             _ => None,
         }
     }
@@ -40,6 +43,7 @@ impl Colour {
             Self::Blue => "blue",
             Self::Yellow => "yellow",
             Self::Purple => "purple",
+            Self::Pink => "pink",
         }
     }
 }
@@ -68,6 +72,8 @@ mod tests {
         assert_eq!(Colour::parse("cyan"), Some(Colour::Blue));
         assert_eq!(Colour::parse("Yellow mode"), Some(Colour::Yellow));
         assert_eq!(Colour::parse("violet!"), Some(Colour::Purple));
+        assert_eq!(Colour::parse("Pink."), Some(Colour::Pink));
+        assert_eq!(Colour::parse("vision mode"), Some(Colour::Pink));
         assert_eq!(Colour::parse("a blue car"), None);
         assert_eq!(Colour::parse("blue blue"), None);
     }
