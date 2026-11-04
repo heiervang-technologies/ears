@@ -11,6 +11,7 @@ pub mod command_mode;
 pub mod commands;
 pub mod decide;
 pub mod pointer;
+pub mod say_echo;
 pub mod vision;
 
 // Iteration 1: Configuration
