@@ -685,7 +685,7 @@ impl StreamingEngine {
                 // The claimant draws it, not fcitx. A run command's words are
                 // never text, not even partially.
                 if !matches!(parsed, Some(crate::commands::Command::Run { .. })) {
-                    published.push(text);
+                    published.push((text, frozen_bytes));
                 }
                 continue;
             }
@@ -706,8 +706,8 @@ impl StreamingEngine {
                 ghost.showing = true;
             }
         }
-        for text in published {
-            self.send_event(StreamingEvent::Partial { text });
+        for (text, settled) in published {
+            self.send_event(StreamingEvent::Partial { text, settled });
         }
     }
 
