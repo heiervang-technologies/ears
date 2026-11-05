@@ -1,0 +1,9 @@
+# cargo audit (CI: dependency-audit.yml, --deny warnings)
+
+[advisories]
+ignore = [
+    # pin-utils is unmaintained (archived 2026-10-01). Informational only, no
+    # patched release: it reaches us through hyper (reqwest), not our code.
+    # Drop once hyper moves to core::pin::pin!.
+    "RUSTSEC-2026-0441",
+]
