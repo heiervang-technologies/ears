@@ -122,19 +122,49 @@ pub enum Delivery {
 /// How long to wait for `hyprctl` before treating focus as unknown.
 const FOCUS_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// Class of the window Hyprland has focused, if it can be asked in time.
+/// Class of the focused window, if the compositor can be asked in time:
+/// Hyprland's `class`, or on niri (`NIRI_SOCKET` set) the window's `app_id`.
+/// The ghost addon reports the focused program by the same name, so without
+/// this every ghost commit on niri was refused and fell back to typing.
 pub fn hyprland_active_class() -> Option<String> {
     let mut cmd = std::process::Command::new("hyprctl");
     cmd.args(["activewindow", "-j"]);
-    active_class_from(cmd)
+    active_class_from(cmd).or_else(|| niri_focused_field("app_id"))
 }
 
-/// Address of the window Hyprland has focused, if it can be asked in
-/// time. Unlike the class it tells two terminals apart.
+/// Address of the focused window, if it can be asked in time. Unlike the
+/// class it tells two terminals apart. On niri: `niri:<window id>`.
 pub fn hyprland_active_address() -> Option<String> {
     let mut cmd = std::process::Command::new("hyprctl");
     cmd.args(["activewindow", "-j"]);
     active_field_from(cmd, "address")
+        .or_else(|| niri_focused_field("id").map(|id| format!("niri:{id}")))
+}
+
+/// A field of niri's focused window (`niri msg --json focused-window`), only
+/// when running under niri.
+fn niri_focused_field(field: &str) -> Option<String> {
+    std::env::var_os("NIRI_SOCKET")?;
+    let mut cmd = std::process::Command::new("niri");
+    cmd.args(["msg", "--json", "focused-window"]);
+    cmd.stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let out = crate::desktop::output_bounded(cmd, FOCUS_PROBE_TIMEOUT).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    niri_field_from(&out.stdout, field)
+}
+
+/// `app_id` (string) or `id` (number) from niri's focused-window JSON;
+/// `null` (nothing focused) gives None.
+fn niri_field_from(json: &[u8], field: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(json).ok()?;
+    match v.get(field)? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 /// Run a Hyprland `activewindow -j` style command and read its `class`.
@@ -894,5 +924,19 @@ mod tests {
         let rx = fake_addon(path);
         assert_eq!(client.preedit("y").unwrap(), GhostDisplay::Preedit);
         assert_eq!(commands(&rx), ["P y"]);
+    }
+    #[test]
+    fn niri_focused_window_fields() {
+        let json = br#"{"id":8,"title":"ears-typing-test","app_id":"Alacritty","pid":1607,"is_focused":true}"#;
+        assert_eq!(
+            niri_field_from(json, "app_id").as_deref(),
+            Some("Alacritty")
+        );
+        assert_eq!(niri_field_from(json, "id").as_deref(), Some("8"));
+        assert_eq!(niri_field_from(b"null", "app_id"), None);
+        assert_eq!(
+            niri_field_from(br#"{"id":3,"app_id":null}"#, "app_id"),
+            None
+        );
     }
 }
