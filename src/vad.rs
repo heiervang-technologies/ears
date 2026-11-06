@@ -15,6 +15,56 @@ pub const SILERO_FRAME_SIZE: usize = 512;
 /// Silero VAD sample rate
 pub const SILERO_SAMPLE_RATE: usize = 16000;
 
+/// Where a system ONNX Runtime may be, in order (`ort-dynamic` builds).
+#[cfg(feature = "ort-dynamic")]
+const SYSTEM_ORT: &[&str] = &[
+    "/usr/lib/libonnxruntime.so",
+    "/usr/lib/libonnxruntime.so.1",
+    "/usr/local/lib/libonnxruntime.so",
+    "/usr/lib/arm-linux-gnueabihf/libonnxruntime.so",
+];
+
+/// Point ort at the system ONNX Runtime unless ORT_DYLIB_PATH already does.
+/// ort reads the variable when the first session is built, so this runs
+/// before the first detector. A runtime that is not there is an error here
+/// rather than a panic inside ort.
+#[cfg(feature = "ort-dynamic")]
+fn system_ort() -> Result<(), VadError> {
+    static FOUND: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    let found = FOUND.get_or_init(|| {
+        if let Some(path) = std::env::var_os("ORT_DYLIB_PATH") {
+            let path = path.to_string_lossy().into_owned();
+            return if std::path::Path::new(&path).exists() {
+                Ok(path)
+            } else {
+                Err(format!("ORT_DYLIB_PATH={path} does not exist"))
+            };
+        }
+        let path = SYSTEM_ORT
+            .iter()
+            .map(|p| p.to_string())
+            .find(|p| std::path::Path::new(p).exists())
+            .or_else(|| {
+                // a versioned file only, e.g. libonnxruntime.so.1.24.4
+                std::fs::read_dir("/usr/lib").ok()?.flatten().find_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    name.starts_with("libonnxruntime.so.")
+                        .then(|| format!("/usr/lib/{name}"))
+                })
+            })
+            .ok_or_else(|| {
+                "no ONNX Runtime found (install onnxruntime, or set ORT_DYLIB_PATH)".to_string()
+            })?;
+        info!("ONNX Runtime from {}", path);
+        std::env::set_var("ORT_DYLIB_PATH", &path);
+        Ok(path)
+    });
+    found
+        .as_ref()
+        .map(|_| ())
+        .map_err(|e| VadError::ModelError(e.clone()))
+}
+
 /// Errors that can occur during VAD processing
 #[derive(Error, Debug)]
 pub enum VadError {
@@ -149,6 +199,8 @@ pub struct SileroVad {
 impl SileroVad {
     /// Create a new SileroVad with the given configuration
     pub fn new(config: VadConfig) -> Result<Self, VadError> {
+        #[cfg(feature = "ort-dynamic")]
+        system_ort()?;
         let vad = VoiceActivityDetector::builder()
             .sample_rate(config.sample_rate as i64)
             .chunk_size(SILERO_FRAME_SIZE)
@@ -619,8 +671,135 @@ impl VadSegmentDetector {
     }
 }
 
+/// Speech found in a WAV file by the Silero VAD alone: no device, no server.
+/// For checking a build on a new machine (`ears vad-file`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WavScan {
+    /// Length of the audio in seconds.
+    pub seconds: f32,
+    /// Spans whose frames scored at or above the threshold: (start s, end s, peak probability).
+    pub spans: Vec<(f32, f32, f32)>,
+}
+
+/// Run the Silero VAD over a 16 kHz 16-bit PCM WAV (channels are averaged).
+pub fn scan_wav(path: &std::path::Path, threshold: f32) -> Result<WavScan, VadError> {
+    let bytes = std::fs::read(path).map_err(|e| VadError::InvalidAudio(e.to_string()))?;
+    let samples = wav_mono_f32(&bytes).map_err(VadError::InvalidAudio)?;
+    let mut vad = SileroVad::new(VadConfig::default())?;
+    let frame_s = SILERO_FRAME_SIZE as f32 / SILERO_SAMPLE_RATE as f32;
+    let mut spans: Vec<(f32, f32, f32)> = Vec::new();
+    let mut open: Option<(f32, f32)> = None;
+    for (i, frame) in samples
+        .as_chunks::<SILERO_FRAME_SIZE>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        vad.process_frame(frame)?;
+        let p = vad.last_probability();
+        let t = i as f32 * frame_s;
+        match (&mut open, p >= threshold) {
+            (Some((_, peak)), true) => *peak = peak.max(p),
+            (None, true) => open = Some((t, p)),
+            (Some((start, peak)), false) => {
+                spans.push((*start, t, *peak));
+                open = None;
+            }
+            (None, false) => {}
+        }
+    }
+    let seconds = samples.len() as f32 / SILERO_SAMPLE_RATE as f32;
+    if let Some((start, peak)) = open {
+        spans.push((start, seconds, peak));
+    }
+    Ok(WavScan { seconds, spans })
+}
+
+/// The samples of a 16 kHz 16-bit PCM WAV, channels averaged, as f32 in [-1, 1].
+fn wav_mono_f32(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("not a RIFF/WAVE file".into());
+    }
+    let (mut pos, mut channels, mut fmt_ok) = (12usize, 0u16, false);
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let len = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let body = &bytes[pos + 8..(pos + 8 + len).min(bytes.len())];
+        if id == b"fmt " && body.len() >= 16 {
+            let format = u16::from_le_bytes([body[0], body[1]]);
+            channels = u16::from_le_bytes([body[2], body[3]]);
+            let rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let bits = u16::from_le_bytes([body[14], body[15]]);
+            if format != 1 || bits != 16 || rate != SILERO_SAMPLE_RATE as u32 || channels == 0 {
+                return Err(format!(
+                    "need 16 kHz 16-bit PCM, got format {format}, {rate} Hz, {bits} bit, {channels} ch"
+                ));
+            }
+            fmt_ok = true;
+        } else if id == b"data" {
+            if !fmt_ok {
+                return Err("data before fmt".into());
+            }
+            let ch = channels as usize;
+            return Ok(body
+                .chunks_exact(2 * ch)
+                .map(|f| {
+                    let sum: f32 = f
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|s| i16::from_le_bytes(*s) as f32 / 32768.0)
+                        .sum();
+                    sum / ch as f32
+                })
+                .collect());
+        }
+        pos += 8 + len + (len & 1);
+    }
+    Err("no data chunk".into())
+}
+
 #[cfg(test)]
 mod tests {
+
+    fn wav(samples: &[i16], channels: u16) -> Vec<u8> {
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&channels.to_le_bytes());
+        w.extend_from_slice(&16000u32.to_le_bytes());
+        w.extend_from_slice(&(16000 * 2 * channels as u32).to_le_bytes());
+        w.extend_from_slice(&(2 * channels).to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        w.extend_from_slice(&data);
+        w
+    }
+
+    #[test]
+    fn wav_reader_averages_channels_and_checks_format() {
+        let s = wav_mono_f32(&wav(&[16384, -16384, 8192, 8192], 2)).unwrap();
+        assert_eq!(s, vec![0.0, 0.25]);
+        let mut bad = wav(&[0; 4], 1);
+        bad[24..28].copy_from_slice(&48000u32.to_le_bytes());
+        assert!(wav_mono_f32(&bad).unwrap_err().contains("48000"));
+        assert!(wav_mono_f32(b"nope").is_err());
+    }
+
+    #[test]
+    fn silence_has_no_speech() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("silence.wav");
+        std::fs::write(&path, wav(&vec![0i16; 16000], 1)).unwrap();
+        let scan = scan_wav(&path, 0.5).unwrap();
+        assert!((scan.seconds - 1.0).abs() < 1e-3);
+        assert!(scan.spans.is_empty());
+    }
     use super::*;
 
     fn generate_sine_wave(frequency: f32, duration_ms: u64, sample_rate: usize) -> Vec<f32> {
