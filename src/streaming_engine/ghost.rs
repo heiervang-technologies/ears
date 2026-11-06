@@ -850,7 +850,7 @@ impl StreamingEngine {
                 let mode = self.typing_mode;
                 let typing_start = Instant::now();
                 let outcome = run_blocking(|| TextInput::type_text(&spaced, mode))
-                    .map(|_| 0)
+                    .map(|_| spaced.chars().count())
                     .map_err(|e| {
                         crate::progressive_typing::ProgressiveTypingError::TextInputError(
                             e.to_string(),
