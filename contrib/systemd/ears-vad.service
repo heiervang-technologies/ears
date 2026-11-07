@@ -1,0 +1,43 @@
+# ears VAD (always-on voice typing) as a systemd user service.
+# Install and waybar notes: README, "Supervised by systemd".
+#
+#   install -Dm644 contrib/systemd/ears-vad.service ~/.config/systemd/user/ears-vad.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ears-vad.service
+
+[Unit]
+Description=ears VAD (voice typing)
+Documentation=https://github.com/heiervang-technologies/ears
+# Typing needs the compositor (WAYLAND_DISPLAY, and Hyprland's socket for the
+# keyboard layout), which the session manager (uwsm) exports to systemd before
+# it starts graphical-session.target. Stop with the session.
+PartOf=graphical-session.target
+After=graphical-session.target
+# Ordered after PipeWire, not bound to it: ears restarts its own capture when
+# PipeWire or WirePlumber restarts, and BindsTo= would stop it for good.
+After=pipewire.service pipewire-pulse.service wireplumber.service
+# Give up after 8 failed starts in 5 minutes (then: systemctl --user
+# reset-failed ears-vad.service).
+StartLimitIntervalSec=300
+StartLimitBurst=8
+
+[Service]
+Type=exec
+# `start`, never the bare toggle: when a VAD already runs (started by hand or
+# by a keybind), `ears vad` would stop it; `ears vad start` leaves it alone
+# and exits 0, and this unit then just ends inactive.
+ExecStart=%h/.cargo/bin/ears vad start
+# A crash, a failed start or a kill is restarted, 2 s later at first and up to
+# 30 s apart. A clean exit is not: `ears vad stop` (and the bare toggle) ends
+# VAD with SIGTERM, ears exits 0, and it stays off until started again.
+Restart=on-failure
+RestartSec=2
+RestartSteps=5
+RestartMaxDelaySec=30
+# Programs started by spoken run commands are children of ears; stopping or
+# restarting VAD must not close them. ears stops its own recorder.
+KillMode=process
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

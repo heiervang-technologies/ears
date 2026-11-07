@@ -2,7 +2,7 @@
 //!
 //! The atomically replaced sidecar is additive: the legacy state file and IPC
 //! events retain their formats. No audio or transcript text is retained here.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 pub const HEALTH_FILE: &str = "vad-health.json";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Listening,
@@ -276,13 +276,28 @@ impl MicLevels {
     }
 }
 
-impl HealthSnapshot {
+/// The fields a diagnosis reads, so that a reader of the published JSON
+/// (`ears health`) judges it by the same rules as the writer.
+#[derive(Clone, Copy, Debug)]
+pub struct Progress {
+    /// None: a stage this build does not know (a newer writer).
+    pub stage: Option<Stage>,
+    pub stage_since_ms: u64,
+    pub capture_last_ms: Option<u64>,
+    pub detector_last_ms: Option<u64>,
+    pub audio_backlog_ms: u64,
+    pub capture_failed: bool,
+    pub typing_paused: bool,
+    pub asr_down: bool,
+}
+
+impl Progress {
     /// Diagnose progress, not the amount of sound: zero-valued audio is alive.
     pub fn problem(&self, now: u64) -> Option<&'static str> {
-        if self.stage == Stage::Stopped {
+        if self.stage == Some(Stage::Stopped) {
             return Some("pipeline stopped");
         }
-        if self.capture_error.is_some() {
+        if self.capture_failed {
             return Some("capture stopped");
         }
         if self
@@ -295,28 +310,47 @@ impl HealthSnapshot {
         if self.typing_paused {
             return Some("typing paused after output error");
         }
-        if self.asr.state == AsrState::Down {
+        if self.asr_down {
             return Some("transcription server unreachable");
         }
-        let slow_after_ms = if self.stage == Stage::Transcribing {
+        let slow_after_ms = if self.stage == Some(Stage::Transcribing) {
             20_000
         } else {
             5_000
         };
-        if self.stage != Stage::Listening && now.saturating_sub(self.stage_since_ms) > slow_after_ms
+        if self.stage.is_some_and(|s| s != Stage::Listening)
+            && now.saturating_sub(self.stage_since_ms) > slow_after_ms
         {
             return Some("slow pipeline stage");
         }
-        if self.stage == Stage::Listening
+        if self.stage == Some(Stage::Listening)
             && now.saturating_sub(self.detector_last_ms.unwrap_or(self.stage_since_ms)) > 3000
         {
             return Some("voice detection stalled");
         }
-        if matches!(self.stage, Stage::Listening | Stage::Detecting) && self.audio_backlog_ms > 2000
+        if matches!(self.stage, Some(Stage::Listening | Stage::Detecting))
+            && self.audio_backlog_ms > 2000
         {
             return Some("audio backlog");
         }
         None
+    }
+}
+
+impl HealthSnapshot {
+    /// See [`Progress::problem`].
+    pub fn problem(&self, now: u64) -> Option<&'static str> {
+        Progress {
+            stage: Some(self.stage),
+            stage_since_ms: self.stage_since_ms,
+            capture_last_ms: self.capture_last_ms,
+            detector_last_ms: self.detector_last_ms,
+            audio_backlog_ms: self.audio_backlog_ms,
+            capture_failed: self.capture_error.is_some(),
+            typing_paused: self.typing_paused,
+            asr_down: self.asr.state == AsrState::Down,
+        }
+        .problem(now)
     }
 }
 
@@ -530,7 +564,7 @@ pub struct HealthMonitor {
     _owner_lock: crate::lock::FileLock,
 }
 
-fn process_start_ticks(stat: &str) -> io::Result<String> {
+pub(crate) fn process_start_ticks(stat: &str) -> io::Result<String> {
     // comm can contain spaces and parentheses. Fields after the final ')' begin
     // with field 3; starttime is field 22 (index 19 in this remainder).
     stat.rsplit_once(')')
