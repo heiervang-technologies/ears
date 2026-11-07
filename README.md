@@ -115,6 +115,7 @@ device = "alsa_input.usb-..."
 # model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
 # prompt = "vLLM, PyTorch" # Optional (context biasing: names, acronyms, jargon)
 filter_silence_artifacts = true # Set false to retain exact phrases such as "Thank you"
+speech_check_overlap_ms = 3000  # Send the no-speech check with the transcription for audio this short (0 = after it)
 
 [text_filters]
 lowercase = false
@@ -145,7 +146,10 @@ the server is Qwen3-ASR on vLLM, ears asks the model once more without
 forcing the language. Forced to a language, it writes "Okay." or "Oh." for
 silence, a breath or a click; left to itself it answers `language None`, and
 the result is dropped. Real short words still come back as words. The check
-is part of the silence-artifact filter (`filter_silence_artifacts`). For a noisy room, see
+is part of the silence-artifact filter (`filter_silence_artifacts`). For segments up to
+`speech_check_overlap_ms` (default 3000) long the check is sent together with the
+transcription rather than after it, so a short command waits for one round trip
+instead of two (see [docs/perf/asr-tail.md](docs/perf/asr-tail.md)). For a noisy room, see
 [voice isolation](docs/VOICE_ISOLATION.md).
 
 > **Server URL:** ears sends requests to `{server}/v1/audio/transcriptions`,

@@ -22,6 +22,10 @@ fn default_filter_silence_artifacts() -> bool {
     true
 }
 
+fn default_speech_check_overlap_ms() -> u64 {
+    3000
+}
+
 fn default_server() -> Url {
     Url::parse("http://127.0.0.1:8178").expect("Default server URL is valid")
 }
@@ -247,6 +251,14 @@ pub struct Config {
     /// Suppress known whole-transcript silence hallucinations in HTTP transcription.
     #[serde(default = "default_filter_silence_artifacts")]
     pub filter_silence_artifacts: bool,
+    /// Segments up to this long (ms) send the no-speech check (the second
+    /// request that drops "Okay." heard in a click) together with the
+    /// transcription instead of after it: a short utterance then waits for
+    /// one round trip, not two. Longer audio rarely comes back short enough
+    /// to need the check, so it stays serial there. 0 = always serial.
+    /// Timing: "No-speech check took ... (overlapped|serial)" in debug.log.
+    #[serde(default = "default_speech_check_overlap_ms")]
+    pub speech_check_overlap_ms: u64,
     /// Text filters for transcription output
     #[serde(default)]
     pub text_filters: TextFilters,
@@ -477,6 +489,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            speech_check_overlap_ms: default_speech_check_overlap_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
@@ -639,6 +652,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            speech_check_overlap_ms: default_speech_check_overlap_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
