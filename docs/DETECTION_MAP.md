@@ -116,7 +116,11 @@ description (`src/audio.rs:16-96`), for `ears device list/select` and the TUI
 ### 2.2 Device selection
 
 `config.device` (default `"default"`), overridden by `EARS_DEVICE`. Passed as
-`pw-record --target <device>`; nothing validates it exists. The TUI blocks the
+`pw-record --target <device>`. Each capture start checks it against `pw-dump`
+(2 s bound): if absent, the first present entry of `device_fallbacks` is
+targeted instead, else PipeWire picks its default source; either way a warning
+is logged and `vad-health.json` reports it. If `pw-dump` fails the device is
+used unverified. The TUI blocks the
 picker when `EARS_DEVICE` is set. Note: a sink *monitor* is not accepted as a
 target; remap it into a source first (`pactl load-module module-remap-source`).
 
@@ -228,7 +232,8 @@ stale `recording` with dead PID reset, VAD-active blocks toggle, external VAD
 via `vad.pid` + `kill(pid,0)`.
 
 `vad-health.json` fields: identity (`pid`, `process_start_ticks`, `boot_id`,
-`session_id`, `session_kind`, `device`), progress (`stage`, `stage_since_ms`,
+`session_id`, `session_kind`, `device`), capture source (`device_configured`,
+`device_opened`, `device_missing`), progress (`stage`, `stage_since_ms`,
 `capture_last_ms`, `captured_samples`, `processed_frames`, `queue_chunks`,
 `audio_backlog_ms`), levels (`rms`, `peak`), detector (`probability`,
 `threshold`, `candidate_frames`, `speaking`, `rejected_candidates`,

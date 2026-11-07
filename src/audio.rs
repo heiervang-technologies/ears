@@ -12,6 +12,10 @@ pub struct AudioDevice {
 
 /// List audio sources from PipeWire's structured snapshot.
 pub fn list_devices() -> Result<Vec<AudioDevice>> {
+    parse_pw_dump_output(&pw_dump()?)
+}
+
+fn pw_dump() -> Result<Vec<u8>> {
     let mut command = Command::new("pw-dump");
     command.stdin(Stdio::null()).stderr(Stdio::null());
     let output = crate::desktop::output_bounded(command, std::time::Duration::from_secs(2))
@@ -19,7 +23,116 @@ pub fn list_devices() -> Result<Vec<AudioDevice>> {
     if !output.status.success() {
         anyhow::bail!("pw-dump failed with status: {}", output.status);
     }
-    parse_pw_dump_output(&output.stdout)
+    Ok(output.stdout)
+}
+
+/// The audio sources PipeWire has right now, and which one is its default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Sources {
+    /// Node names of every `Audio/Source`.
+    pub names: Vec<String>,
+    /// Node name of the default source, when PipeWire reports one.
+    pub default: Option<String>,
+}
+
+/// Query PipeWire for its current sources.
+pub fn sources() -> Result<Sources> {
+    parse_sources(&pw_dump()?)
+}
+
+fn parse_sources(output: &[u8]) -> Result<Sources> {
+    let names = parse_pw_dump_output(output)?
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    let nodes: Vec<serde_json::Value> =
+        serde_json::from_slice(output).context("Invalid PipeWire JSON snapshot")?;
+    let default = nodes.iter().find_map(|object| {
+        if object.get("type")?.as_str()? != "PipeWire:Interface:Metadata" {
+            return None;
+        }
+        object
+            .get("metadata")?
+            .as_array()?
+            .iter()
+            .find_map(|entry| {
+                if entry.get("key")?.as_str()? != "default.audio.source" {
+                    return None;
+                }
+                let name = entry.get("value")?.get("name")?.as_str()?;
+                (!name.is_empty()).then(|| name.to_string())
+            })
+    });
+    Ok(Sources { names, default })
+}
+
+/// Which source a capture will open, decided before `pw-record` starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptureDevice {
+    /// The device the configuration asked for.
+    pub configured: String,
+    /// What to pass to `pw-record --target`.
+    pub target: String,
+    /// The source expected to deliver the audio; `None` when unknown.
+    pub opened: Option<String>,
+    /// The configured device is not present in PipeWire.
+    pub missing: bool,
+}
+
+impl CaptureDevice {
+    /// The source for a log line or a report.
+    pub fn opened_label(&self) -> String {
+        match (&self.opened, self.missing && self.target == self.configured) {
+            (Some(name), true) => format!("PipeWire default source ({name})"),
+            (Some(name), false) => name.clone(),
+            (None, true) => "PipeWire default source".to_string(),
+            (None, false) => self.target.clone(),
+        }
+    }
+}
+
+/// `default` (or nothing) asks PipeWire for its default source.
+fn is_default(device: &str) -> bool {
+    device.is_empty() || device == "default"
+}
+
+/// Decide which source to capture from.
+///
+/// `sources` is `None` when PipeWire could not be asked; the configured device
+/// is then used unverified. A configured device that is absent gives way to
+/// the first of `fallbacks` that is present; with none present `pw-record`
+/// still gets the configured name and PipeWire links its default source.
+pub fn choose_capture_device(
+    configured: &str,
+    fallbacks: &[String],
+    sources: Option<&Sources>,
+) -> CaptureDevice {
+    let choice = |target: &str, opened: Option<String>, missing| CaptureDevice {
+        configured: configured.to_string(),
+        target: target.to_string(),
+        opened,
+        missing,
+    };
+    let Some(sources) = sources else {
+        return choice(configured, None, false);
+    };
+    if is_default(configured) {
+        return choice(configured, sources.default.clone(), false);
+    }
+    // `--target` also takes an object serial, which names no node.
+    let has = |name: &str| sources.names.iter().any(|n| n == name);
+    if has(configured) || configured.parse::<u64>().is_ok() {
+        return choice(configured, Some(configured.to_string()), false);
+    }
+    for fallback in fallbacks {
+        if is_default(fallback) {
+            break;
+        }
+        if has(fallback) {
+            return choice(fallback, Some(fallback.clone()), true);
+        }
+    }
+    choice(configured, sources.default.clone(), true)
 }
 
 fn parse_pw_dump_output(output: &[u8]) -> Result<Vec<AudioDevice>> {
@@ -177,6 +290,101 @@ mod tests {
                 }
             ]
         );
+    }
+
+    fn sources(names: &[&str], default: Option<&str>) -> Sources {
+        Sources {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            default: default.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn reads_the_default_source_from_the_snapshot() {
+        let snapshot = serde_json::json!([
+            {"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":"rode"}}},
+            {"type":"PipeWire:Interface:Metadata","props":{"metadata.name":"default"},"metadata":[
+                {"subject":0,"key":"default.configured.audio.source","value":{"name":"jbl"}},
+                {"subject":0,"key":"default.audio.source","value":{"name":"rode"}},
+                {"subject":0,"key":"default.audio.sink","value":{"name":"speaker"}}
+            ]}
+        ]);
+        assert_eq!(
+            parse_sources(&serde_json::to_vec(&snapshot).unwrap()).unwrap(),
+            sources(&["rode"], Some("rode"))
+        );
+        assert_eq!(parse_sources(b"[]").unwrap(), Sources::default());
+        assert!(parse_sources(b"not json").is_err());
+    }
+
+    #[test]
+    fn a_present_device_is_used_as_configured() {
+        let pw = sources(&["ears_aec_mic", "rode"], Some("rode"));
+        let choice = choose_capture_device("ears_aec_mic", &["rode".into()], Some(&pw));
+        assert_eq!(choice.target, "ears_aec_mic");
+        assert_eq!(choice.opened.as_deref(), Some("ears_aec_mic"));
+        assert!(!choice.missing);
+        assert_eq!(choice.opened_label(), "ears_aec_mic");
+    }
+
+    #[test]
+    fn a_missing_device_gives_way_to_the_first_fallback_present() {
+        let pw = sources(&["ears_aec_mic", "rode"], Some("rode"));
+        let fallbacks = ["gone-too".to_string(), "ears_aec_mic".into(), "rode".into()];
+        let choice = choose_capture_device("jbl", &fallbacks, Some(&pw));
+        assert_eq!(choice.configured, "jbl");
+        assert_eq!(choice.target, "ears_aec_mic");
+        assert_eq!(choice.opened.as_deref(), Some("ears_aec_mic"));
+        assert!(choice.missing);
+        assert_eq!(choice.opened_label(), "ears_aec_mic");
+    }
+
+    #[test]
+    fn with_nothing_present_the_default_source_is_named() {
+        let pw = sources(&["rode"], Some("rode"));
+        for fallbacks in [vec![], vec!["ears_aec_mic".to_string()]] {
+            let choice = choose_capture_device("jbl", &fallbacks, Some(&pw));
+            // As before the check existed: pw-record gets the configured name.
+            assert_eq!(choice.target, "jbl");
+            assert_eq!(choice.opened.as_deref(), Some("rode"));
+            assert!(choice.missing);
+            assert_eq!(choice.opened_label(), "PipeWire default source (rode)");
+        }
+
+        let choice = choose_capture_device("jbl", &[], Some(&sources(&[], None)));
+        assert!(choice.missing);
+        assert_eq!(choice.opened, None);
+        assert_eq!(choice.opened_label(), "PipeWire default source");
+    }
+
+    #[test]
+    fn a_default_in_the_fallbacks_ends_the_chain() {
+        let pw = sources(&["rode", "later"], Some("rode"));
+        let fallbacks = ["default".to_string(), "later".into()];
+        let choice = choose_capture_device("jbl", &fallbacks, Some(&pw));
+        assert_eq!(choice.target, "jbl");
+        assert_eq!(choice.opened.as_deref(), Some("rode"));
+        assert!(choice.missing);
+    }
+
+    #[test]
+    fn the_default_device_and_an_unknown_pipewire_are_never_missing() {
+        let pw = sources(&["rode"], Some("rode"));
+        let choice = choose_capture_device("default", &["rode".into()], Some(&pw));
+        assert_eq!(choice.target, "default");
+        assert_eq!(choice.opened.as_deref(), Some("rode"));
+        assert!(!choice.missing);
+
+        // An object serial names no node; it cannot be checked by name.
+        let choice = choose_capture_device("142", &[], Some(&pw));
+        assert_eq!((choice.target.as_str(), choice.missing), ("142", false));
+
+        // PipeWire could not be asked: nothing is claimed either way.
+        let choice = choose_capture_device("jbl", &["rode".into()], None);
+        assert_eq!(choice.target, "jbl");
+        assert_eq!(choice.opened, None);
+        assert!(!choice.missing);
+        assert_eq!(choice.opened_label(), "jbl");
     }
 
     #[test]

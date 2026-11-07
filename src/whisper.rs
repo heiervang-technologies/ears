@@ -340,7 +340,7 @@ impl WhisperClient {
         // Validate audio file exists and has content
         self.validate_audio_file(path).await?;
 
-        info!(
+        debug!(
             "Transcribing audio file: {} (grammar: {})",
             path.display(),
             grammar.is_some()

@@ -138,6 +138,27 @@ pub enum Commands {
         url: Option<String>,
     },
 
+    /// Report whether desktop VAD is working, from its health snapshot
+    ///
+    /// Reads $XDG_RUNTIME_DIR/ears/vad-health.json (published once per second
+    /// by `ears vad`) and checks it against the running process: is the
+    /// process that wrote it alive, is the snapshot fresh, is the pipeline
+    /// making progress, and is the microphone or the server worth a look.
+    ///
+    /// Exit status:
+    ///   0  healthy
+    ///   1  not running (never started, stopped, or the process is gone)
+    ///   2  stale or stuck (the process is alive but stopped reporting, or
+    ///      reports no audio, a stalled stage or an unreachable server)
+    ///   3  running with warnings (microphone quality, degraded server)
+    ///   4  the snapshot cannot be read
+    #[command(verbatim_doc_comment)]
+    Health {
+        /// Print the verdict and the snapshot as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run the Silero VAD over a 16 kHz 16-bit WAV and print where speech is:
     /// no microphone, no server, no sound. For checking a build on a new machine.
     VadFile {
@@ -439,6 +460,18 @@ mod tests {
             }
             _ => panic!("Expected Server command"),
         }
+    }
+
+    #[test]
+    fn test_cli_health() {
+        let cli = Cli::try_parse_from(["ears", "health"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Health { json: false })
+        ));
+        let cli = Cli::try_parse_from(["ears", "health", "--json"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Health { json: true })));
+        assert!(Cli::try_parse_from(["ears", "health", "extra"]).is_err());
     }
 
     #[test]
