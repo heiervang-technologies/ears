@@ -322,8 +322,9 @@ pub struct Config {
     /// them while running; see [`crate::subtitles`]). Default: false.
     #[serde(default)]
     pub subtitles: bool,
-    /// Modes subtitles show in: "standby" (orange), "dictation" (cyan,
-    /// yellow), "command" (violet). Default: all three.
+    /// Modes subtitles show in: "standby" (orange, also "passive"),
+    /// "dictation" (cyan, yellow; also "write"), "command" (violet), "decide"
+    /// (red; also "decision" or "reply"). Default: all four.
     #[serde(default = "default_subtitle_modes")]
     pub subtitle_modes: Vec<crate::subtitles::Mode>,
     /// `ears decide --timeout`: honour an asker's timeout (a quick time

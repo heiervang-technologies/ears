@@ -27,13 +27,16 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Orange: only the wake phrase acts.
+    /// Orange, passive mode: only the wake phrase acts.
+    #[serde(alias = "passive")]
     Standby,
-    /// Cyan, yellow, pale blue: dictation, wherever the words go.
+    /// Cyan, yellow, pale blue: write mode (dictation), wherever the words go.
+    #[serde(alias = "write")]
     Dictation,
     /// Violet: command mode.
     Command,
-    /// Red: a decision is open (`ears decide`).
+    /// Red, decision mode: a decision is open (`ears decide`).
+    #[serde(alias = "decision", alias = "reply")]
     Decide,
 }
 
@@ -205,6 +208,28 @@ mod tests {
 
     fn read(dir: &Path) -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn modes_by_name_in_config() {
+        let modes: Vec<Mode> =
+            serde_json::from_str(r#"["passive", "write", "command", "reply", "decision"]"#)
+                .unwrap();
+        assert_eq!(
+            modes,
+            [
+                Mode::Standby,
+                Mode::Dictation,
+                Mode::Command,
+                Mode::Decide,
+                Mode::Decide
+            ]
+        );
+        // Written as before, for the overlay.
+        assert_eq!(
+            serde_json::to_string(&Mode::Standby).unwrap(),
+            r#""standby""#
+        );
     }
 
     #[test]
