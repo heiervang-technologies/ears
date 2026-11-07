@@ -37,6 +37,35 @@ python spoken.py py < py-heard.txt
 
 ## Try it in Neovim
 
+Load it from `init.lua` (warn rather than skip silently when the checkout is
+gone, or it just stops working with no sign why):
+
+```lua
+local ears_code = vim.fn.expand "~/worktrees/code-dictation-qol/experiments/code-dictation/ears_code.lua"
+if vim.uv.fs_stat(ears_code) then
+  vim.schedule(function() dofile(ears_code) end)
+else
+  vim.notify("ears code dictation: " .. ears_code .. " is gone", vim.log.levels.WARN)
+end
+```
+
+`ears: connected` shows once when the VAD is found, and `ears: lost the VAD`
+when it goes. For a statusline, `_G.ears_status()` is `""` without ears,
+`"ears"` while connected and `"ears ●"` while this Neovim takes the speech.
+
+Another machine's ears (Termux on a phone, ears on centurion): forward the
+event socket and point the plugin at it. Without a command socket the plugin
+treats focus as the claim.
+
+```bash
+ssh -N -L $PREFIX/tmp/ears.sock:/run/user/1000/ears.sock centurion &
+EARS_SOCKET=$PREFIX/tmp/ears.sock nvim file.py   # or vim.g.ears_socket
+```
+
+`EARS_CMD_SOCKET` / `vim.g.ears_cmd_socket` override the command socket the
+same way. The translator (`dictate.py --serve`) runs locally and needs only
+`python3`.
+
 ```bash
 ./try.sh some_file.py      # or a .sh file; any other filetype gets plain text
 ```

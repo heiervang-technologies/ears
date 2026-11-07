@@ -428,6 +428,12 @@ end
 -- VAD path: the ears input claim ---------------------------------------------
 
 local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
+-- Where ears' sockets are. Override for a forwarded ears on another machine,
+-- e.g. on a phone: ssh -L $PREFIX/tmp/ears.sock:/run/user/1000/ears.sock ...
+-- then EARS_SOCKET=$PREFIX/tmp/ears.sock (or vim.g.ears_socket).
+local function socket_path(var, name)
+  return vim.g[var:lower()] or os.getenv(var) or (runtime .. "/" .. name)
+end
 -- Terminals and pickers keep ordinary ears typing.
 local SKIP_BUFTYPES = { terminal = true, prompt = true }
 -- Whether `pid` or one of its ancestors is `target`.
@@ -478,17 +484,22 @@ if _G.ears_code_vad then
 end
 _G.ears_code_vad = vad
 
+-- Partials ask several times a second; rescan only when the buffer changed.
+local scope_cache = {}
 local function scope_names()
+  local key = vim.api.nvim_get_current_buf() .. ":" .. vim.b.changedtick
+  if scope_cache.key == key then return scope_cache.names end
   local path = scope_file()
   local names = vim.split(vim.fn.readfile(path)[1] or "", " ", { trimempty = true })
   os.remove(path)
+  scope_cache = { key = key, names = names }
   return names
 end
 
 -- One translator process for all utterances: no startup cost per partial.
 local function translate(text, mode, on_reply)
   if not vad.translator then
-    local buffered = ""
+    local buffered, stderr = "", ""
     vad.translator = vim.system({ "python3", here .. "dictate.py", "--serve" }, {
       cwd = here,
       stdin = true,
@@ -505,7 +516,17 @@ local function translate(text, mode, on_reply)
         end
         buffered = buffered:match("[^\n]*$")
       end,
-    }, function() vad.translator = nil end)
+      stderr = function(_, data) if data then stderr = (stderr .. data):sub(-2000) end end,
+    }, function(out)
+      vad.translator = nil
+      -- Nothing will answer what is still pending: say why, drop the ghost.
+      vad.pending = {}
+      if vad.dead or out.signal == 15 then return end
+      vim.schedule(function()
+        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+        vim.notify("ears: translator exited (" .. out.code .. ")\n" .. stderr, vim.log.levels.ERROR)
+      end)
+    end)
   end
   vad.next_id = vad.next_id + 1
   vad.pending[vad.next_id] = on_reply
@@ -615,14 +636,15 @@ local function on_event(ev)
 end
 
 -- Newline-delimited JSON from a socket, until it closes.
-local function connect(path, on_line, on_close)
+local function connect(path, on_line, on_close, on_open)
   local pipe = vim.uv.new_pipe(false)
   local buffered = ""
   pipe:connect(path, function(err)
     if err then
       pipe:close()
-      return vim.schedule(function() on_close(pipe) end)
+      return vim.schedule(function() on_close(pipe, err) end)
     end
+    if on_open then vim.schedule(on_open) end
     pipe:read_start(function(_, data)
       if not data then
         if not pipe:is_closing() then pipe:close() end
@@ -640,19 +662,39 @@ end
 
 local resolve
 
+-- For a statusline: "" without ears, "ears" while connected, "ears ●" while
+-- this Neovim holds the claim (speech comes here, not typed).
+function _G.ears_status()
+  if not vad.events then return "" end
+  return vad.claim and "ears ●" or "ears"
+end
+
+local function announce(connected)
+  if vad.announced == connected then return end
+  vad.announced = connected
+  vim.notify(connected and "ears: connected, speech goes to Neovim while it has focus"
+    or "ears: lost the VAD, retrying", connected and vim.log.levels.INFO or vim.log.levels.WARN)
+  vim.cmd("redrawstatus")
+end
+
 -- Keep listening to ears events; retry while the VAD is not running.
 local function listen()
-  vad.events = connect(runtime .. "/ears.sock", function(line)
+  vad.events = connect(socket_path("EARS_SOCKET", "ears.sock"), function(line)
     local ok, ev = pcall(vim.json.decode, line)
     if ok then on_event(ev) end
   end, function(pipe)
     if vad.events ~= pipe then return end
     vad.events = nil
+    -- Never connected since loading: stay quiet, ears may just be off.
+    if vad.announced ~= nil then announce(false) end
     if vad.claim then
       if not vad.claim:is_closing() then vad.claim:close() end
       vad.claim = nil
     end
     if not vad.dead then vim.defer_fn(function() listen(); resolve() end, 3000) end
+  end, function()
+    announce(true)
+    resolve()
   end)
 end
 
@@ -661,15 +703,21 @@ resolve = function()
   local want = vad.focused and vad.events ~= nil and not SKIP_BUFTYPES[vim.bo.buftype]
     and vim.api.nvim_get_mode().mode ~= "t"
   if want and not vad.claim then
-    local pipe = connect(runtime .. "/ears-cmd.sock", function() end, function(pipe)
-      if vad.claim == pipe then vad.claim = nil end
+    local pipe = connect(socket_path("EARS_CMD_SOCKET", "ears-cmd.sock"), function() end, function(pipe, err)
+      if vad.claim ~= pipe then return end
+      -- No command socket (a forwarded event stream, fay's phone ears): there
+      -- is no typing to keep out of the way, so focus alone is the claim.
+      vad.claim = err and { is_closing = function() return false end, close = function() end } or nil
+      vim.cmd("redrawstatus")
     end)
     pipe:write("claim\n")
     vad.claim = pipe
+    vim.cmd("redrawstatus")
   elseif not want and vad.claim then
     local pipe = vad.claim
     vad.claim = nil
     if not pipe:is_closing() then pipe:close() end -- closing releases it
+    vim.cmd("redrawstatus")
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
   end
 end
