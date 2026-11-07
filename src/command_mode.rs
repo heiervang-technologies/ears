@@ -31,6 +31,9 @@ pub const MARKER: &str = "vad.command";
 /// `ears teach ACTION` writes the action's name here; the next command-mode
 /// utterance becomes one of its voice anchors.
 pub const TEACH: &str = "command.teach";
+/// Marker beside [`MARKER`] while the text anchors are still being embedded:
+/// the mode is on, but only an action's exact words fire it.
+pub const LOADING: &str = "vad.command.loading";
 /// Last routing decision, for displays.
 pub const LAST: &str = "command-last.json";
 
@@ -42,6 +45,12 @@ pub const ENTER_PHRASES: &[&str] = &["command", "commands", "command mode"];
 const MAX_VOICE_ANCHORS: usize = 24;
 /// Text inputs get the same task prefix on both sides (symmetric task).
 const TEXT_PREFIX: &str = "task: sentence similarity | query: ";
+/// Texts embedded per request when filling the text anchor cache.
+const EMBED_BATCH: usize = 32;
+/// Requests in flight when the server takes one text at a time.
+const EMBED_CONCURRENCY: usize = 4;
+/// New vectors between saves of the text anchor cache while it fills.
+const CACHE_SAVE_EVERY: usize = 96;
 
 const DEFAULT_ACTIONS: &str = include_str!("../contrib/actions.toml");
 
@@ -331,6 +340,9 @@ pub struct Router {
     pub margin: f32,
     /// Nearest anchors that vote.
     pub k: usize,
+    /// The text anchors are not in yet: nothing is scored, so only an
+    /// action's exact words fire it.
+    pub words_only: bool,
 }
 
 /// One routing decision.
@@ -356,6 +368,7 @@ impl Router {
             floor,
             margin,
             k: k.max(1),
+            words_only: false,
         }
     }
 
@@ -379,6 +392,9 @@ impl Router {
 
     /// (z-score, action) of every scorable anchor.
     fn scored(&self, utterance: &[f32]) -> Vec<(f32, usize)> {
+        if self.words_only {
+            return Vec::new();
+        }
         let mut out = Vec::with_capacity(self.anchors.len());
         for kind in [false, true] {
             let sims: Vec<(f32, usize)> = self
@@ -495,7 +511,34 @@ impl Embedder {
             .map(String::as_str)
     }
 
+    /// The model the server runs (the first id in `/v1/models`), if it says.
+    pub async fn model(&self) -> Option<String> {
+        let reply: serde_json::Value = self
+            .http
+            .get(format!("{}/v1/models", self.url))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        reply["data"][0]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
     async fn embed(&self, content: serde_json::Value) -> Result<Vec<f32>> {
+        let value = self.post(content).await?;
+        parse_embedding(&value)
+            .map(normalized)
+            .ok_or_else(|| CommandModeError::Embed("no embedding in the reply".into()))
+    }
+
+    async fn post(&self, content: serde_json::Value) -> Result<serde_json::Value> {
         let response = self
             .http
             .post(format!("{}/embeddings", self.url))
@@ -511,13 +554,22 @@ impl Embedder {
                 crate::continuous::truncate(&body, 200)
             )));
         }
-        let value: serde_json::Value = response
+        response
             .json()
             .await
-            .map_err(|e| CommandModeError::Embed(e.to_string()))?;
-        parse_embedding(&value)
-            .map(normalized)
-            .ok_or_else(|| CommandModeError::Embed("no embedding in the reply".into()))
+            .map_err(|e| CommandModeError::Embed(e.to_string()))
+    }
+
+    /// Several texts in one request (llama-server takes a list as
+    /// `content`), in the order given.
+    pub async fn texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let content: Vec<String> = texts.iter().map(|t| format!("{TEXT_PREFIX}{t}")).collect();
+        let value = self.post(serde_json::json!(content)).await?;
+        parse_embeddings(&value, texts.len())
+            .map(|all| all.into_iter().map(normalized).collect())
+            .ok_or_else(|| {
+                CommandModeError::Embed("not one embedding per text in the reply".into())
+            })
     }
 
     pub async fn text(&self, text: &str) -> Result<Vec<f32>> {
@@ -541,7 +593,11 @@ fn parse_embedding(value: &serde_json::Value) -> Option<Vec<f32>> {
     let first = value
         .get(0)
         .or_else(|| value.get("data").and_then(|d| d.get(0)))?;
-    let mut e = first.get("embedding")?;
+    parse_item(first)
+}
+
+fn parse_item(item: &serde_json::Value) -> Option<Vec<f32>> {
+    let mut e = item.get("embedding")?;
     if e.get(0).is_some_and(|x| x.is_array()) {
         e = e.get(0)?;
     }
@@ -551,12 +607,215 @@ fn parse_embedding(value: &serde_json::Value) -> Option<Vec<f32>> {
         .collect()
 }
 
+/// The reply to a list of `n` inputs, in input order (by each item's
+/// `index` when it has one). None unless there is one embedding per input.
+fn parse_embeddings(value: &serde_json::Value, n: usize) -> Option<Vec<Vec<f32>>> {
+    let items = value
+        .as_array()
+        .or_else(|| value.get("data").and_then(|d| d.as_array()))?;
+    if items.len() != n {
+        return None;
+    }
+    let mut out = vec![None; n];
+    for (at, item) in items.iter().enumerate() {
+        let i = item
+            .get("index")
+            .and_then(|i| i.as_u64())
+            .map_or(at, |i| i as usize);
+        *out.get_mut(i)? = Some(parse_item(item)?);
+    }
+    out.into_iter().collect()
+}
+
 /// Text anchor vectors, cached on disk by text so entering the mode costs
 /// one embedding call per new phrasing, not per anchor.
 #[derive(Default, Serialize, Deserialize)]
 struct TextCache {
+    /// The server the vectors came from, as `actions.toml` spells it.
     server: String,
+    /// Its model (`/v1/models`): what the vectors depend on, so the same
+    /// model reached at another address reuses them. Absent in caches
+    /// written before it was recorded; those are matched by `server`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     vectors: std::collections::HashMap<String, Vec<f32>>,
+}
+
+impl TextCache {
+    fn load(path: &Path) -> Option<Self> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    }
+
+    fn save(&self, path: &Path) {
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let tmp = path.with_extension("json.tmp");
+            std::fs::write(&tmp, serde_json::to_vec(self)?)?;
+            std::fs::rename(tmp, path)
+        };
+        if let Err(e) = write() {
+            tracing::warn!("Cannot save the text anchor cache: {}", e);
+        }
+    }
+}
+
+/// Text anchors as the router takes them: (action index, vector).
+type TextAnchors = Vec<(usize, Vec<f32>)>;
+
+/// The text anchors still to get: from the cache, else the server.
+struct AnchorLoad {
+    embedder: Embedder,
+    server: String,
+    path: PathBuf,
+    /// (action index, phrasing) of every text anchor.
+    texts: Vec<(usize, String)>,
+    cache: Option<TextCache>,
+}
+
+impl AnchorLoad {
+    fn anchors(&self, cache: &TextCache) -> Option<TextAnchors> {
+        self.texts
+            .iter()
+            .map(|(i, text)| cache.vectors.get(text).map(|v| (*i, v.clone())))
+            .collect()
+    }
+
+    /// Every anchor, if the cache written for this server address has them
+    /// all: nothing to ask the server, which need not even be up.
+    fn cached(&self) -> Option<TextAnchors> {
+        let cache = self.cache.as_ref().filter(|c| c.server == self.server)?;
+        self.anchors(cache)
+    }
+
+    /// Embed what the cache lacks, saving it as it fills (and on failure),
+    /// so an interrupted load is resumed rather than started over.
+    async fn run(mut self) -> Result<TextAnchors> {
+        // The cache is kept if it is this model's; by server address, as
+        // before, when either side does not name its model.
+        let model = self.embedder.model().await;
+        let mut cache = match self.cache.take() {
+            Some(c)
+                if match (&model, &c.model) {
+                    (Some(now), Some(then)) => now == then,
+                    _ => c.server == self.server,
+                } =>
+            {
+                c
+            }
+            Some(_) => {
+                tracing::info!(
+                    "Command mode: the text anchor cache is of another model or server, starting a new one"
+                );
+                TextCache::default()
+            }
+            None => TextCache::default(),
+        };
+        let model = model.or(cache.model.take());
+        // Kept under another address, or newly known to be this model's:
+        // written back even if nothing is missing.
+        let mut unsaved = usize::from(cache.server != self.server || cache.model != model);
+        cache.server = self.server.clone();
+        cache.model = model;
+        let missing: Vec<String> = self
+            .texts
+            .iter()
+            .map(|(_, text)| text)
+            .filter(|text| !cache.vectors.contains_key(*text))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut batched = true;
+        let mut failed = None;
+        for chunk in missing.chunks(EMBED_BATCH) {
+            let (vectors, error) = self.embed(chunk, &mut batched).await;
+            unsaved += vectors.len();
+            cache.vectors.extend(chunk.iter().cloned().zip(vectors));
+            if error.is_some() {
+                failed = error;
+                break;
+            }
+            if unsaved >= CACHE_SAVE_EVERY {
+                cache.save(&self.path);
+                unsaved = 0;
+            }
+        }
+        if unsaved > 0 {
+            cache.save(&self.path);
+        }
+        match failed {
+            Some(e) => Err(e),
+            None => self
+                .anchors(&cache)
+                .ok_or_else(|| CommandModeError::Embed("a text anchor was not embedded".into())),
+        }
+    }
+
+    /// The vectors of the first of `texts` that could be embedded, and the
+    /// error that stopped the rest. One request for all of them; a server
+    /// that does not take a list is asked one text at a time from then on,
+    /// a few at once.
+    async fn embed(
+        &self,
+        texts: &[String],
+        batched: &mut bool,
+    ) -> (Vec<Vec<f32>>, Option<CommandModeError>) {
+        use futures_util::StreamExt;
+        if *batched {
+            match self.embedder.texts(texts).await {
+                Ok(vectors) => return (vectors, None),
+                Err(e) => {
+                    tracing::debug!("Command mode: no batch embedding ({}), one by one", e);
+                    *batched = false;
+                }
+            }
+        }
+        let mut vectors = Vec::with_capacity(texts.len());
+        let mut replies = futures_util::stream::iter(texts.to_vec())
+            .map(|text| {
+                let embedder = self.embedder.clone();
+                async move { embedder.text(&text).await }
+            })
+            .buffered(EMBED_CONCURRENCY);
+        while let Some(reply) = replies.next().await {
+            match reply {
+                Ok(v) => vectors.push(v),
+                Err(e) => return (vectors, Some(e)),
+            }
+        }
+        (vectors, None)
+    }
+}
+
+/// The task embedding the text anchors, stopped when command mode is left.
+struct LoadTask {
+    task: tokio::task::JoinHandle<()>,
+    marker: PathBuf,
+}
+
+impl Drop for LoadTask {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_file(&self.marker);
+    }
+}
+
+/// Where the text anchors are.
+enum Anchors {
+    /// In the router.
+    Ready,
+    /// Not asked for yet.
+    Pending(Box<AnchorLoad>),
+    /// A task is getting them ([`CommandMode::start_loading`]).
+    Loading {
+        done: tokio::sync::oneshot::Receiver<Result<TextAnchors>>,
+        _task: LoadTask,
+    },
+    /// The server did not give them: words only until the mode is entered
+    /// again.
+    Failed,
 }
 
 /// Where command mode keeps things.
@@ -591,6 +850,7 @@ impl Paths {
 
 /// Command mode while it is on.
 pub struct CommandMode {
+    anchors: Anchors,
     pub router: Router,
     pub embedder: Embedder,
     pub paths: Paths,
@@ -717,40 +977,103 @@ fn nearest(hearing: &Hearing) -> Option<String> {
 impl CommandMode {
     /// Load actions and anchors, embedding text anchors not in the cache.
     pub async fn start(paths: Paths) -> Result<Self> {
+        let mut mode = Self::open(paths)?;
+        if let Anchors::Pending(load) = std::mem::replace(&mut mode.anchors, Anchors::Ready) {
+            let anchors = load.run().await?;
+            mode.add_text_anchors(anchors);
+        }
+        Ok(mode)
+    }
+
+    /// As [`CommandMode::start`], without waiting for the embedding server:
+    /// text anchors missing from the cache are embedded by a task, and until
+    /// they are in ([`CommandMode::ready`]; the [`LOADING`] marker is up
+    /// meanwhile) only an action's exact words fire it.
+    pub fn start_loading(paths: Paths) -> Result<Self> {
+        let mut mode = Self::open(paths)?;
+        if let Anchors::Pending(load) = std::mem::replace(&mut mode.anchors, Anchors::Ready) {
+            let marker = mode.paths.state_dir.join(LOADING);
+            if let Err(e) = std::fs::write(&marker, "") {
+                tracing::warn!("Cannot write the command mode loading marker: {}", e);
+            }
+            let (tx, done) = tokio::sync::oneshot::channel();
+            let finished = marker.clone();
+            let task = tokio::spawn(async move {
+                let started = std::time::Instant::now();
+                let result = load.run().await;
+                match &result {
+                    Ok(anchors) => tracing::info!(
+                        "Command mode: {} text anchors ready in {:?}",
+                        anchors.len(),
+                        started.elapsed()
+                    ),
+                    Err(e) => tracing::warn!(
+                        "Command mode: no text anchors ({}), exact words only until it is entered again",
+                        e
+                    ),
+                }
+                let _ = std::fs::remove_file(finished);
+                let _ = tx.send(result);
+            });
+            mode.anchors = Anchors::Loading {
+                done,
+                _task: LoadTask { task, marker },
+            };
+        }
+        Ok(mode)
+    }
+
+    /// Whether the text anchors are in, taking them from the loading task
+    /// if it has finished. Until then nothing fires by embedding.
+    pub fn ready(&mut self) -> bool {
+        if let Anchors::Loading { done, .. } = &mut self.anchors {
+            use tokio::sync::oneshot::error::TryRecvError;
+            match done.try_recv() {
+                Ok(Ok(anchors)) => {
+                    self.add_text_anchors(anchors);
+                    self.anchors = Anchors::Ready;
+                }
+                Ok(Err(_)) | Err(TryRecvError::Closed) => self.anchors = Anchors::Failed,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        matches!(self.anchors, Anchors::Ready)
+    }
+
+    fn add_text_anchors(&mut self, anchors: TextAnchors) {
+        for (action, vec) in anchors {
+            self.router.add_anchor(action, vec, false);
+        }
+        self.router.words_only = false;
+    }
+
+    /// Actions, voice anchors, and the text anchors the cache already has
+    /// (all of them, or none until the rest are embedded).
+    fn open(paths: Paths) -> Result<Self> {
         let (file, actions) = load_actions(&paths.actions)?;
         let embedder = Embedder::new(&file.server);
         let mut router = Router::new(actions, file.floor, file.margin, file.k);
-        let mut cache: TextCache = std::fs::read_to_string(&paths.text_cache)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .filter(|c: &TextCache| c.server == file.server)
-            .unwrap_or_else(|| TextCache {
-                server: file.server.clone(),
-                ..Default::default()
-            });
-        let mut dirty = false;
-        for i in 0..router.actions.len() {
-            for text in router.actions[i].text.clone() {
-                let vec = match cache.vectors.get(&text) {
-                    Some(v) => v.clone(),
-                    None => {
-                        let v = embedder.text(&text).await?;
-                        cache.vectors.insert(text.clone(), v.clone());
-                        dirty = true;
-                        v
-                    }
-                };
-                router.add_anchor(i, vec, false);
+        let load = AnchorLoad {
+            embedder: embedder.clone(),
+            server: file.server.clone(),
+            path: paths.text_cache.clone(),
+            texts: (router.actions.iter().enumerate())
+                .flat_map(|(i, a)| a.text.iter().map(move |text| (i, text.clone())))
+                .collect(),
+            cache: TextCache::load(&paths.text_cache),
+        };
+        let anchors = match load.cached() {
+            Some(anchors) => {
+                for (action, vec) in anchors {
+                    router.add_anchor(action, vec, false);
+                }
+                Anchors::Ready
             }
-        }
-        if dirty {
-            if let Some(dir) = paths.text_cache.parent() {
-                let _ = std::fs::create_dir_all(dir);
+            None => {
+                router.words_only = true;
+                Anchors::Pending(Box::new(load))
             }
-            if let Ok(bytes) = serde_json::to_vec(&cache) {
-                let _ = std::fs::write(&paths.text_cache, bytes);
-            }
-        }
+        };
         let voice = VoiceAnchors::load(&paths.voice);
         for anchor in &voice.anchors {
             if let Some(i) = router.index(&anchor.action) {
@@ -758,6 +1081,7 @@ impl CommandMode {
             }
         }
         Ok(Self {
+            anchors,
             router,
             embedder,
             paths,
@@ -776,6 +1100,7 @@ impl CommandMode {
     /// embedding worked) and its transcript (`words`, "" if the ASR did not
     /// answer in time). See [`combine`].
     pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
+        let ready = self.ready();
         let rest = self.router.by_rest(words);
         let by_words = self
             .router
@@ -788,7 +1113,7 @@ impl CommandMode {
             ..Default::default()
         };
         // What the words mean, unless they already name an action.
-        if by_words.is_none() && !plain(words).is_empty() {
+        if ready && by_words.is_none() && !plain(words).is_empty() {
             match self.embedder.text(words.trim()).await {
                 Ok(v) => hearing.text = Some(self.router.decide(&v)),
                 Err(e) => tracing::warn!("Command mode: cannot embed the transcript: {}", e),
@@ -1091,6 +1416,294 @@ run = ["playerctl", "next"]
         );
         assert_eq!(combine(None, None, Some(&next)), (n, Some("meaning")));
         assert_eq!(combine(None, Some(&unsure), None), (None, None));
+    }
+
+    /// An embedding server: `/v1/models` names `model` (404 without one),
+    /// `/embeddings` answers a text or a list of texts after `delay`, and
+    /// fails once `fail_after` requests have been answered.
+    async fn server(
+        model: Option<&str>,
+        delay: Duration,
+        fail_after: usize,
+    ) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+        let server = MockServer::start().await;
+        if let Some(model) = model {
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"data": [{"id": model}]})),
+                )
+                .mount(&server)
+                .await;
+        }
+        let answered = std::sync::atomic::AtomicUsize::new(0);
+        Mock::given(method("POST"))
+            .and(path("/embeddings"))
+            .respond_with(move |request: &Request| {
+                if answered.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= fail_after {
+                    return ResponseTemplate::new(500);
+                }
+                let body: serde_json::Value = request.body_json().unwrap();
+                let n = body["content"].as_array().map_or(1, Vec::len);
+                let items: Vec<_> = (0..n)
+                    .map(|i| serde_json::json!({"index": i, "embedding": [[1.0, i as f32]]}))
+                    .collect();
+                ResponseTemplate::new(200)
+                    .set_body_json(items)
+                    .set_delay(delay)
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Paths in `dir`, with an actions file of `phrases` phrasings on `server`.
+    fn paths(dir: &Path, server: &str, phrases: usize) -> Paths {
+        let text: Vec<String> = (0..phrases).map(|i| format!("\"phrase {i}\"")).collect();
+        let actions = format!(
+            "server = \"{server}\"\n[[action]]\nname = \"enter\"\nkeys = \"enter\"\ntext = [{}]\n",
+            text.join(", ")
+        );
+        std::fs::write(dir.join("actions.toml"), actions).unwrap();
+        Paths {
+            actions: dir.join("actions.toml"),
+            voice: dir.join("command-anchors.json"),
+            text_cache: dir.join("command-text-anchors.json"),
+            state_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn text_anchors(paths: &Paths) -> usize {
+        let (_, actions) = load_actions(&paths.actions).unwrap();
+        actions.iter().map(|a| a.text.len()).sum()
+    }
+
+    /// Requests it takes to embed `texts` texts.
+    fn batches(texts: usize) -> usize {
+        texts.div_ceil(EMBED_BATCH)
+    }
+
+    fn cache(paths: &Paths) -> TextCache {
+        TextCache::load(&paths.text_cache).expect("a cache file that parses")
+    }
+
+    /// POSTs to `/embeddings` so far, and the texts they asked for.
+    async fn embedded(server: &wiremock::MockServer) -> (usize, usize) {
+        let requests = server.received_requests().await.unwrap();
+        let posts: Vec<_> = (requests.iter())
+            .filter(|r| r.url.path() == "/embeddings")
+            .collect();
+        let texts = (posts.iter())
+            .map(|r| {
+                let body: serde_json::Value = r.body_json().unwrap();
+                body["content"].as_array().map_or(1, Vec::len)
+            })
+            .sum();
+        (posts.len(), texts)
+    }
+
+    #[tokio::test]
+    async fn entering_does_not_wait_for_the_embedding_server() {
+        let delay = Duration::from_millis(400);
+        let server = server(Some("gemma"), delay, usize::MAX).await;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path(), &server.uri(), 3);
+        let loading = dir.path().join(LOADING);
+
+        let started = std::time::Instant::now();
+        let mut mode = CommandMode::start_loading(paths.clone()).unwrap();
+        // Exact words fire while the anchors load, without the server.
+        let (outcome, hearing) = mode.hear_with(Some(unit(&[1.0, 0.0])), "Enter.").await;
+        assert!(started.elapsed() < delay, "{:?}", started.elapsed());
+        assert!(matches!(outcome, Outcome::Fire { ref name, .. } if name == "enter"));
+        assert_eq!(hearing.by, Some("words"));
+        // Nothing else does: no vote, and no request for the transcript.
+        let (outcome, hearing) = mode.hear_with(Some(unit(&[1.0, 0.0])), "phrase").await;
+        assert_eq!(outcome, Outcome::Nothing);
+        assert!(hearing.text.is_none() && hearing.audio.unwrap().votes.is_empty());
+        assert!(started.elapsed() < delay, "{:?}", started.elapsed());
+        assert!(!mode.ready() && loading.exists());
+
+        for _ in 0..100 {
+            if mode.ready() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(mode.ready() && !loading.exists());
+        assert!(!mode.router.words_only);
+        let (_, hearing) = mode.hear_with(Some(unit(&[1.0, 0.0])), "").await;
+        assert!(!hearing.audio.unwrap().votes.is_empty());
+        // A request per batch of text anchors, not one each.
+        let total = text_anchors(&paths);
+        assert_eq!(embedded(&server).await, (batches(total), total));
+        assert_eq!(cache(&paths).model.as_deref(), Some("gemma"));
+
+        // With the cache full, entering needs no server and no loading.
+        drop(server);
+        let mut again = CommandMode::start_loading(paths).unwrap();
+        assert!(again.ready() && !loading.exists());
+    }
+
+    #[tokio::test]
+    async fn leaving_stops_the_load_and_takes_the_marker_down() {
+        let server = server(Some("gemma"), Duration::from_secs(5), usize::MAX).await;
+        let dir = tempfile::tempdir().unwrap();
+        let mode = CommandMode::start_loading(paths(dir.path(), &server.uri(), 3)).unwrap();
+        assert!(dir.path().join(LOADING).exists());
+        drop(mode);
+        assert!(!dir.path().join(LOADING).exists());
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_load_keeps_what_it_embedded() {
+        let dir = tempfile::tempdir().unwrap();
+        // Three batches' worth; the server answers two, then fails.
+        let failing = server(Some("gemma"), Duration::ZERO, 2).await;
+        let paths = paths(dir.path(), &failing.uri(), 2 * EMBED_BATCH + 5);
+        let total = text_anchors(&paths);
+        assert!(CommandMode::start(paths.clone()).await.is_err());
+        assert_eq!(cache(&paths).vectors.len(), 2 * EMBED_BATCH);
+        assert!(!paths.text_cache.with_extension("json.tmp").exists());
+
+        // The next attempt embeds only the rest (same model, new address).
+        let working = server(Some("gemma"), Duration::ZERO, usize::MAX).await;
+        let paths = self::paths(dir.path(), &working.uri(), 2 * EMBED_BATCH + 5);
+        let mode = CommandMode::start(paths.clone()).await.unwrap();
+        assert!(matches!(mode.anchors, Anchors::Ready));
+        let rest = total - 2 * EMBED_BATCH;
+        assert_eq!(embedded(&working).await, (batches(rest), rest));
+        assert_eq!(cache(&paths).vectors.len(), total);
+    }
+
+    #[tokio::test]
+    async fn a_filling_cache_is_saved_before_the_load_ends() {
+        let server = server(Some("gemma"), Duration::from_millis(300), usize::MAX).await;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(
+            dir.path(),
+            &server.uri(),
+            CACHE_SAVE_EVERY + 2 * EMBED_BATCH,
+        );
+        let mut mode = CommandMode::start_loading(paths.clone()).unwrap();
+        for _ in 0..100 {
+            if paths.text_cache.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let saved = cache(&paths).vectors.len();
+        assert!(!mode.ready(), "saved while still loading");
+        assert!(saved >= CACHE_SAVE_EVERY && saved < text_anchors(&paths));
+        // Left mid-load: the file stays, whole.
+        drop(mode);
+        assert!(cache(&paths).vectors.len() >= saved);
+    }
+
+    #[tokio::test]
+    async fn a_server_without_batches_is_asked_one_text_at_a_time() {
+        use wiremock::matchers::{method, path};
+        let server = server(Some("gemma"), Duration::ZERO, usize::MAX).await;
+        // A list comes back as a single embedding.
+        wiremock::Mock::given(method("POST"))
+            .and(path("/embeddings"))
+            .and(|r: &wiremock::Request| {
+                r.body_json::<serde_json::Value>()
+                    .is_ok_and(|b| b["content"].is_array())
+            })
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{"index": 0, "embedding": [[1.0, 0.0]]}])),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path(), &server.uri(), EMBED_BATCH + 3);
+        let total = text_anchors(&paths);
+        CommandMode::start(paths.clone()).await.unwrap();
+        // One refused batch, then every text on its own.
+        assert_eq!(embedded(&server).await, (1 + total, EMBED_BATCH + total));
+        assert_eq!(cache(&paths).vectors.len(), total);
+    }
+
+    #[tokio::test]
+    async fn the_cache_is_keyed_by_model_and_an_old_one_is_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |paths: &Paths, server: &str, model: Option<&str>, skip: &str| {
+            let (_, actions) = load_actions(&paths.actions).unwrap();
+            let mut json = serde_json::json!({
+                "server": server,
+                "vectors": (actions.iter().flat_map(|a| &a.text))
+                    .filter(|t| *t != skip)
+                    .map(|t| (t.clone(), vec![0.0, 1.0]))
+                    .collect::<std::collections::HashMap<_, _>>(),
+            });
+            if let Some(model) = model {
+                json["model"] = model.into();
+            }
+            std::fs::write(&paths.text_cache, json.to_string()).unwrap();
+        };
+
+        // Old format (no model), this address: kept, and given the model.
+        let gemma = server(Some("gemma"), Duration::ZERO, usize::MAX).await;
+        let paths = paths(dir.path(), &gemma.uri(), 3);
+        let total = text_anchors(&paths);
+        write(&paths, &gemma.uri(), None, "phrase 1");
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&gemma).await, (1, 1));
+        let migrated = cache(&paths);
+        assert_eq!(migrated.model.as_deref(), Some("gemma"));
+        assert_eq!(migrated.vectors.len(), total);
+        assert_eq!(migrated.vectors["phrase 0"], vec![0.0, 1.0]);
+
+        // The same model at another address: reused whole, and adopted.
+        let elsewhere = server(Some("gemma"), Duration::ZERO, usize::MAX).await;
+        let paths = self::paths(dir.path(), &elsewhere.uri(), 3);
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&elsewhere).await, (0, 0));
+        assert_eq!(cache(&paths).server, elsewhere.uri());
+
+        // Another model at the same address, with a phrasing to embed: not this cache.
+        let other = server(Some("other"), Duration::ZERO, usize::MAX).await;
+        let paths = self::paths(dir.path(), &other.uri(), 3);
+        write(&paths, &other.uri(), Some("gemma"), "phrase 1");
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&other).await, (batches(total), total));
+        assert_eq!(cache(&paths).model.as_deref(), Some("other"));
+
+        // A server that names no model: by address, as before.
+        let nameless = server(None, Duration::ZERO, usize::MAX).await;
+        let paths = self::paths(dir.path(), &nameless.uri(), 3);
+        write(&paths, &nameless.uri(), None, "phrase 1");
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&nameless).await, (1, 1));
+        write(&paths, "http://elsewhere:1", None, "phrase 1");
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&nameless).await, (1 + batches(total), 1 + total));
+        // An old cache of another address is of an unknown model: not used.
+        write(&paths, "http://elsewhere:1", None, "phrase 1");
+        let paths = self::paths(dir.path(), &gemma.uri(), 3);
+        CommandMode::start(paths.clone()).await.unwrap();
+        assert_eq!(embedded(&gemma).await, (1 + batches(total), 1 + total));
+    }
+
+    #[test]
+    fn a_batch_reply_parses_in_input_order() {
+        let reply = serde_json::json!([
+            {"index": 1, "embedding": [[0.0, 2.0]]},
+            {"index": 0, "embedding": [[1.0, 0.0]]},
+        ]);
+        assert_eq!(
+            parse_embeddings(&reply, 2),
+            Some(vec![vec![1.0, 0.0], vec![0.0, 2.0]])
+        );
+        assert_eq!(parse_embeddings(&reply, 3), None);
+        let openai = serde_json::json!({"data": [{"embedding": [3.0, 4.0]}]});
+        assert_eq!(parse_embeddings(&openai, 1), Some(vec![vec![3.0, 4.0]]));
     }
 
     #[test]
