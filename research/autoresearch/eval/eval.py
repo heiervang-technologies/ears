@@ -30,13 +30,47 @@ BYTES_PER_MS = RATE * 2 // 1000
 
 # ---------- text normalization and WER ----------
 
+ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+# Spellings that are the same words: written either way by people and models.
+SAME = {"ctrl": "control", "worktree": "work tree", "worktrees": "work trees",
+        "keybinding": "key binding", "keybindings": "key bindings", "dotfiles": "dot files",
+        "changelog": "change log", "ok": "okay", "mr": "mister", "mrs": "missus", "dr": "doctor"}
+
+
+def say_int(n: int) -> str:
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        return TENS[n // 10] + ("" if n % 10 == 0 else " " + ONES[n % 10])
+    if n < 1000:
+        return ONES[n // 100] + " hundred" + ("" if n % 100 == 0 else " " + say_int(n % 100))
+    if n < 10000 and n % 1000 and 1100 <= n < 2000 or 2010 <= n < 2100:
+        return say_int(n // 100) + " " + say_int(n % 100)  # years: nineteen eighty four
+    if n < 1_000_000:
+        return say_int(n // 1000) + " thousand" + ("" if n % 1000 == 0 else " " + say_int(n % 1000))
+    return " ".join(ONES[int(d)] for d in str(n))
+
+
+def say_number(m: re.Match) -> str:
+    whole, frac = m.group(1), m.group(2)
+    words = say_int(int(whole)) if len(whole) < 7 else " ".join(ONES[int(d)] for d in whole)
+    if frac:
+        words += " point " + " ".join(ONES[int(d)] for d in frac)
+    return f" {words} "
+
+
 def normalize(text: str) -> list[str]:
+    """Lowercase words without punctuation; digits as spoken words, so "0.3"
+    and "zero point three" (or "P50" and "p fifty") score the same."""
     t = unicodedata.normalize("NFKC", text or "").lower()
-    t = t.replace("’", "'")
+    t = t.replace("’", "'").replace("%", " percent ")
+    t = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", t)  # p50 -> p 50
+    t = re.sub(r"(\d+)(?:\.(\d+))?", say_number, t)
     t = re.sub(r"[^\w\s']", " ", t)       # punctuation out, keep apostrophes
     t = re.sub(r"(?<!\w)'|'(?!\w)", " ", t)  # quotes, not contractions
-    t = t.replace("_", " ")
-    return t.split()
+    t = t.replace("_", " ").replace("-", " ")
+    return " ".join(SAME.get(w, w) for w in t.split()).split()
 
 
 def edits(ref: list[str], hyp: list[str]) -> int:
