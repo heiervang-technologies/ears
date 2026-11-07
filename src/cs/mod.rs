@@ -124,6 +124,7 @@ pub struct Entry {
     /// The canonical phrase, exactly as configured.
     pub meant: String,
     /// The list it extends: "wake", "sleep", "enter"..., "run:<name>",
+    /// "keys" (a `[commands.keys]` phrase, named by `meant`),
     /// "action:<name>", "decide:<option>".
     pub target: String,
     /// What the ASR writes (compared as `commands::normalize` does).
@@ -440,6 +441,32 @@ fn extend(list: &mut Vec<String>, variants: Vec<&str>) {
     }
 }
 
+/// A `[commands.keys]` target: "keys" (what `ears cs check` lists them as)
+/// or "keys:<combo>" (what `ears cs mine` writes). Either way `meant` names
+/// the key phrase.
+fn is_keys_target(target: &str) -> bool {
+    target == "keys" || target.starts_with("keys:")
+}
+
+/// Map `heard` to the combo of the key phrase `meant`, as a whole
+/// utterance like any key phrase. Skipped when `meant` is not configured or
+/// `heard` is already a key phrase of its own.
+fn add_key_variant(keys: &mut std::collections::BTreeMap<String, String>, entry: &Entry) {
+    let meant = normalize(&entry.meant);
+    let Some(combo) = keys
+        .iter()
+        .find(|(phrase, _)| normalize(phrase) == meant)
+        .map(|(_, combo)| combo.clone())
+    else {
+        return;
+    };
+    let heard = normalize(&entry.heard);
+    if heard.is_empty() || keys.keys().any(|phrase| normalize(phrase) == heard) {
+        return;
+    }
+    keys.insert(entry.heard.clone(), combo);
+}
+
 /// The `[commands]` lists extended with their active variants: the phrase
 /// lists by key, run commands by `run:<name>`. The wake detector is built
 /// from the standby, wake and sleep lists, so it takes them from here.
@@ -466,6 +493,8 @@ pub fn apply_commands(mut commands: VoiceCommands, scaffold: &Scaffold) -> Voice
         if let Some(name) = entry.target.strip_prefix("run:") {
             let heard = commands.run.heard_as.entry(name.to_string()).or_default();
             extend(heard, vec![entry.heard.as_str()]);
+        } else if is_keys_target(&entry.target) {
+            add_key_variant(&mut commands.keys, entry);
         }
     }
     commands
