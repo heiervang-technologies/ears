@@ -168,6 +168,15 @@ const PARTIAL_LEAD_MS: u64 = 250;
 /// 40-60 ms, so a change (a last word still being decoded, a "the" or "uh"
 /// replacing the full stop) would have arrived by then.
 const SETTLE_MS: u64 = 250;
+/// A stream partial that trailed the audio sent by more than this when it
+/// arrived says the stream is not keeping pace: its silence after it proves
+/// nothing.
+const STREAM_PACE_MS: u64 = 300;
+/// Slack on top of a decode step and the stream's lag before a reading
+/// that stopped changing counts as decoded to the end unchanged.
+const PACE_MARGIN_MS: u64 = 100;
+/// The server's decode step when the config does not set one.
+const DEFAULT_MIN_STEP_MS: u64 = 150;
 /// Pauses shorter than this inside an utterance are not logged.
 const PAUSE_LOG_MS: u64 = 150;
 /// Between committing an utterance's text and pressing the key its closing
@@ -303,9 +312,16 @@ pub struct StreamingEngine {
     /// utterance, ending, when that partial arrived, and how much silence
     /// VAD had counted then ([`crate::endpoint`]).
     ending: Option<(u64, crate::endpoint::Ending, Instant, u64)>,
-    /// The early end currently asked of VAD: ending, silence (ms), and
-    /// whether it is the settled finish (`early_finish_ms`).
-    early_end: Option<(crate::endpoint::Ending, u64, bool)>,
+    /// The early end currently asked of VAD: ending, silence (ms), and the
+    /// rule beyond the ending's own wait, for the log: "settled"
+    /// (`early_finish_ms`), "unchanged" (a reading older than the pause that
+    /// the stream decoded to the end unchanged), or "".
+    early_end: Option<(crate::endpoint::Ending, u64, &'static str)>,
+    /// When the stream's last partial may stand in for its final.
+    final_from_partial: crate::config::FinalFromPartial,
+    /// Where the last dictated utterance's text came from
+    /// ([`crate::command_mode::Timing::final_by`]).
+    final_by: Option<&'static str>,
     /// Why no early end is asked of VAD right now, for the log line of an
     /// utterance that waits `max_silence_duration_ms`.
     no_early: &'static str,
@@ -408,6 +424,8 @@ impl StreamingEngine {
             wait_for_embedding: false,
             early_end: None,
             no_early: "no finished reading",
+            final_from_partial: crate::config::FinalFromPartial::Off,
+            final_by: None,
             pause: None,
             keep_audio_dir: None,
             claimed: false,
@@ -501,7 +519,12 @@ impl StreamingEngine {
         let chanting = self.chanting();
         let config = self.vad_detector.config();
         let mut why = "no finished reading";
-        // How the transcript ends now, whatever the configured waits.
+        // A reading older than the pause stopped changing before the speech
+        // ended: still the whole transcript once the stream, keeping pace,
+        // has had time to decode the end unchanged. This much silence.
+        let unchanged_after = self.unchanged_after();
+        // How the transcript ends now, whatever the configured waits, and
+        // the least silence it needs.
         let reading = match self.ending {
             _ if chanting => {
                 why = "chanting";
@@ -509,7 +532,9 @@ impl StreamingEngine {
             }
             Some((u, ending, at, heard)) if silence > 0 && Some(u) == utterance => {
                 if (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS {
-                    Some((ending, heard))
+                    Some((ending, heard, 0))
+                } else if let Some(floor) = unchanged_after {
+                    Some((ending, heard, floor))
                 } else {
                     why = "reading older than the pause";
                     None
@@ -518,7 +543,7 @@ impl StreamingEngine {
             _ => None,
         };
         let max = config.max_silence_duration_ms;
-        let early = reading.and_then(|(ending, heard)| {
+        let early = reading.and_then(|(ending, heard, floor)| {
             let (ms, settled) = match ending {
                 Ending::Exact if config.exact_silence_ms > 0 => (config.exact_silence_ms, false),
                 Ending::Exact | Ending::Command => (config.command_silence_ms, false),
@@ -527,7 +552,7 @@ impl StreamingEngine {
                         0 => max,
                         ms => ms,
                     };
-                    let settled = config.early_finish_ms.max(heard + SETTLE_MS);
+                    let settled = config.early_finish_ms.max(heard + SETTLE_MS).max(floor);
                     if config.early_finish_ms > 0 && settled < finished {
                         (settled, true)
                     } else {
@@ -538,7 +563,14 @@ impl StreamingEngine {
             if ms == 0 || ms >= max {
                 why = "early end off";
             }
-            (ms > 0 && ms < max).then_some((ending, ms, settled))
+            let rule = match (settled, floor > 0) {
+                (true, true) => "settled, unchanged",
+                (true, false) => "settled",
+                (false, true) => "unchanged",
+                (false, false) => "",
+            };
+            let ms = if ms > 0 { ms.max(floor) } else { ms };
+            (ms > 0 && ms < max).then_some((ending, ms, rule))
         });
         if early != self.early_end {
             debug!("Early end: {:?}", early);
@@ -546,7 +578,64 @@ impl StreamingEngine {
             self.vad_detector.end_early(early.map(|(_, ms, _)| ms));
         }
         self.no_early = why;
-        self.track_pause(silence, reading.map(|(ending, _)| ending));
+        self.track_pause(silence, reading.map(|(ending, ..)| ending));
+    }
+
+    /// The stream's decode step, in milliseconds.
+    fn min_step_ms(&self) -> u64 {
+        (self.continuous.as_ref())
+            .and_then(|spec| spec.min_step_ms)
+            .unwrap_or(DEFAULT_MIN_STEP_MS)
+    }
+
+    /// The silence after which the stream, if it kept pace at its latest
+    /// partial for this utterance, has decoded the end of speech: a decode
+    /// step, its lag then, and [`PACE_MARGIN_MS`]. Nothing pushed since
+    /// means nothing changed. None when it was not keeping pace.
+    fn unchanged_after(&self) -> Option<u64> {
+        let ghost = self.ghost.as_ref()?;
+        let tail = ghost.stream_tail.as_ref()?;
+        (tail.utterance == ghost.utterance && tail.lag_ms <= STREAM_PACE_MS)
+            .then(|| self.min_step_ms() + tail.lag_ms + PACE_MARGIN_MS)
+    }
+
+    /// The stream's last partial for stream utterance `id`, to commit
+    /// instead of waiting for its final (`final_from_partial`), with how it
+    /// covers the end of speech; `speech_end_ms` from the segment's start,
+    /// after `waited` ms of silence. None: wait for the final. Short
+    /// results never: they go through the full transcription's no-speech
+    /// check, as a short final does.
+    fn final_from_partial(
+        &self,
+        id: u64,
+        speech_end_ms: u64,
+        waited: u64,
+    ) -> Option<(String, &'static str)> {
+        use crate::config::FinalFromPartial as F;
+        if self.final_from_partial == F::Off {
+            return None;
+        }
+        let tail = self.ghost.as_ref()?.stream_tail.as_ref()?;
+        if tail.id != id
+            || tail.text.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS
+        {
+            return None;
+        }
+        let how = if tail.audio_ms >= speech_end_ms {
+            "decoded to the end of speech"
+        } else if self.final_from_partial == F::Settled
+            && tail.lag_ms <= STREAM_PACE_MS
+            && waited >= self.min_step_ms() + tail.lag_ms + PACE_MARGIN_MS
+        {
+            "unchanged to the end of speech"
+        } else {
+            debug!(
+                "Stream partial covers {} ms of {} ms of speech; waiting for the final",
+                tail.audio_ms, speech_end_ms
+            );
+            return None;
+        };
+        Some((tail.text.clone(), how))
     }
 
     /// Follow a pause inside the utterance; when speech goes on after one
@@ -585,11 +674,11 @@ impl StreamingEngine {
     fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
         if let Some(segment) = outcome {
             let waited = match self.early_end.take() {
-                Some((ending, ms, settled)) => {
-                    let rule = if settled { ", settled" } else { "" };
+                Some((ending, ms, rule)) => {
+                    let sep = if rule.is_empty() { "" } else { ", " };
                     info!(
-                        "Utterance ended after {} ms of silence ({:?}{})",
-                        ms, ending, rule
+                        "Utterance ended after {} ms of silence ({:?}{}{})",
+                        ms, ending, sep, rule
                     );
                     ms
                 }
@@ -692,6 +781,9 @@ impl StreamingEngine {
         // Skip segments with no audio data — sending an empty WAV crashes
         // some ASR backends (e.g., Qwen3-ASR ValueError on empty array).
         let mut streamed_id = None;
+        // Take what the stream pushed up to now: its last partial may stand
+        // in for the final (`final_from_partial`).
+        self.ghost_stream_events();
         if let Some(ghost) = self.ghost.as_mut() {
             streamed_id = ghost.stream_end(&segment.samples);
             // Partials still in flight belong to this finished utterance.
@@ -782,8 +874,36 @@ impl StreamingEngine {
         // With final_correction off, the live stream's final is the
         // committed text: no second decode, and nothing jumps at the end.
         // A bash utterance only streams when the server applies its grammar.
+        // The stream's last partial when it covers the end of speech:
+        // nothing to wait for (`final_from_partial`).
+        let waited = self.ended.map_or(0, |(_, ms)| ms);
+        let segment_ms = segment.samples.len() as u64 * 1000 / u64::from(crate::pcm::SAMPLE_RATE);
+        let speech_end_ms = segment_ms.saturating_sub(waited);
+        let mut final_by = "http";
         let live_final = match streamed_id {
-            Some(id) if !self.final_correction && !verify => self.ghost_stream_final(id).await,
+            Some(id) if !self.final_correction && !verify => {
+                match self.final_from_partial(id, speech_end_ms, waited) {
+                    Some((text, how)) => {
+                        info!(
+                            "Committing the stream's last partial ({}); its final not awaited",
+                            how
+                        );
+                        final_by = "partial";
+                        Some(text)
+                    }
+                    None => {
+                        let text = self.ghost_stream_final(id).await;
+                        if text.is_some() {
+                            info!(
+                                "The live stream's final came in {} ms",
+                                transcribe_start.elapsed().as_millis()
+                            );
+                            final_by = "final";
+                        }
+                        text
+                    }
+                }
+            }
             _ => None,
         };
         // A context written out is not what was said: transcribe in full,
@@ -795,13 +915,17 @@ impl StreamingEngine {
                     .is_some_and(|c| crate::cs::context::is_echo(&text, &c)) =>
             {
                 info!("The live stream wrote out the context; transcribing in full");
+                final_by = "http";
                 None
             }
             other => other,
         };
+        self.final_by = Some(final_by);
         let transcript = match live_final {
             Some(text) => {
-                info!("Committing the live stream's final");
+                if final_by == "final" {
+                    info!("Committing the live stream's final");
+                }
                 Ok(text)
             }
             None => {
@@ -1348,6 +1472,12 @@ impl StreamingEngine {
     /// segment again (`final_correction = false`). Default: true.
     pub fn set_final_correction(&mut self, enabled: bool) {
         self.final_correction = enabled;
+    }
+
+    /// When the stream's last partial may stand in for its final
+    /// (`final_from_partial`). Default: off.
+    pub fn set_final_from_partial(&mut self, mode: crate::config::FinalFromPartial) {
+        self.final_from_partial = mode;
     }
 
     /// Drop what agents said with `say` from what the mic heard.
@@ -2702,6 +2832,7 @@ impl StreamingEngine {
             asr_ms: Some(clock.ms(asr)),
             decision_ms: Some(clock.ms(decided)),
             action_ms: Some(clock.ms(Instant::now())),
+            final_by: self.final_by,
             ..clock.timing()
         };
         info!("Command timing: {} ({})", timing, label);
