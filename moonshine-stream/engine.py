@@ -21,7 +21,11 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from tokenizers import Tokenizer
+
+try:
+    from tokenizers import Tokenizer
+except ImportError:  # no wheel for armv7 musl (Alpine): decode in Python
+    Tokenizer = None
 
 SAMPLE_RATE = 16000
 # The exported frontend graphs need chunks in multiples of 80 samples (a
@@ -35,6 +39,53 @@ TOKENS_PER_SECOND = 6.5
 MAX_TOKENS = 448
 # The adapter's learned positions: 4096 frames, about 82 s.
 MAX_FRAMES = 4096
+
+
+class PieceDecoder:
+    """Decode-only stand-in for `tokenizers.Tokenizer` with this model's
+    tokenizer.json (SentencePiece-style BPE: "▁" for a space, <0xNN>
+    byte fallback, one leading space stripped, special tokens skipped).
+    Enough for the engine, which only decodes and reads the vocabulary."""
+
+    def __init__(self, path):
+        t = json.loads(Path(path).read_text())
+        self.vocab = dict(t["model"]["vocab"])
+        for added in t.get("added_tokens", []):
+            self.vocab.setdefault(added["content"], added["id"])
+        self.pieces = {i: p for p, i in self.vocab.items()}
+        self.special = {a["id"] for a in t.get("added_tokens", []) if a.get("special")}
+
+    @staticmethod
+    def _bytes(run):
+        """A run of <0xNN> pieces: its UTF-8 text, or (as tokenizers'
+        ByteFallback does) one U+FFFD per byte if the run is not valid."""
+        try:
+            return bytes(run).decode("utf-8")
+        except UnicodeDecodeError:
+            return "\ufffd" * len(run)
+
+    def get_vocab(self):
+        return dict(self.vocab)
+
+    def decode(self, ids):
+        out, pending = [], bytearray()
+        for i in ids:
+            if i in self.special:
+                continue
+            piece = self.pieces.get(i)
+            if piece is None:
+                continue
+            if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
+                pending.append(int(piece[3:5], 16))
+                continue
+            if pending:
+                out.append(self._bytes(pending))
+                pending.clear()
+            out.append(piece.replace("\u2581", " "))
+        if pending:
+            out.append(self._bytes(pending))
+        text = "".join(out)
+        return text.removeprefix(" ")
 
 
 class Model:
@@ -58,7 +109,8 @@ class Model:
         self.adapter = load("adapter")
         self.cross_kv = load("cross_kv")
         self.decoder = load("decoder_kv")
-        self.tok = Tokenizer.from_file(str(d / "tokenizer.json"))
+        path = d / "tokenizer.json"
+        self.tok = Tokenizer.from_file(str(path)) if Tokenizer else PieceDecoder(path)
         self.bos = self.cfg["bos_id"]
         self.eos = self.cfg["eos_id"]
         vocab = self.tok.get_vocab()
