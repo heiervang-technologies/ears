@@ -109,6 +109,7 @@ Configuration is stored in `~/.config/ears/config.toml`:
 ```toml
 server = "http://127.0.0.1:8178"
 device = "alsa_input.usb-..."
+# device_fallbacks = ["ears_aec_mic"]  # Optional: tried in order when `device` is absent
 # language = "en"          # Optional (auto-detects from keyboard layout)
 # api_key = "sk-..."       # Optional (for authenticated ASR services)
 # model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
@@ -840,6 +841,13 @@ utterances, `speech_dbfs` while speaking, and `clipped_samples`. When they
 cross the `ears mic-check` thresholds, `mic_warning` is set to `mic silent`,
 `mic clipping`, `speech too quiet` or `noisy background`, and `debug.log`
 records the change. Run `ears mic-check` for the full picture.
+
+Each time capture starts, `device` is checked against PipeWire. If it is not
+there, capture uses the first of `device_fallbacks` that is, or else
+PipeWire's default source, and says so: `debug.log` gets a warning naming
+both, `device_missing` is true, `device_opened` names the source in use
+(`device_configured` the one asked for), and `mic_warning` is
+`configured mic missing` until a capture start finds the device again.
 
 `asr` says whether the transcription server can be reached, so a desktop
 indicator can tell "the mic is fine but the server is gone" apart from a

@@ -168,6 +168,14 @@ pub struct HealthSnapshot {
     pub session_id: String,
     pub session_kind: &'static str,
     pub device: String,
+    /// The device the configuration asked capture to use.
+    pub device_configured: String,
+    /// The source capture opened; `None` until known. Differs from
+    /// `device_configured` when that device was missing.
+    pub device_opened: Option<String>,
+    /// The configured device was not present in PipeWire when capture
+    /// started, so `device_opened` is a fallback or the default source.
+    pub device_missing: bool,
     pub updated_monotonic_ms: u64,
     pub stage: Stage,
     pub stage_since_ms: u64,
@@ -211,6 +219,9 @@ pub struct HealthSnapshot {
     #[serde(skip)]
     asr_track: AsrTrack,
 }
+
+/// [`HealthSnapshot::mic_warning`] while the configured device is absent.
+pub const MIC_MISSING: &str = "configured mic missing";
 
 /// Smoothed input levels behind [`HealthSnapshot::mic_warning`].
 #[derive(Clone, Debug, Default)]
@@ -331,6 +342,15 @@ impl PipelineHealth {
 
     pub fn device(&self, device: &str) {
         self.update(|s| s.device = device.to_owned());
+    }
+
+    /// Record which source capture opened (on every capture start).
+    pub fn capture_device(&self, choice: &crate::audio::CaptureDevice) {
+        self.update(|s| {
+            s.device_configured = choice.configured.clone();
+            s.device_opened = choice.opened.clone();
+            s.device_missing = choice.missing;
+        });
     }
 
     pub fn captured(&self, samples: &[f32]) {
@@ -500,7 +520,12 @@ impl PipelineHealth {
             / 16;
         state.noise_dbfs = state.levels.noise_dbfs();
         state.speech_dbfs = state.levels.speech_dbfs();
-        state.mic_warning = state.levels.warning();
+        // The wrong microphone outranks how the one in use sounds.
+        state.mic_warning = if state.device_missing {
+            Some(MIC_MISSING)
+        } else {
+            state.levels.warning()
+        };
         state.asr = state.asr_track.report();
         state
     }
@@ -575,6 +600,9 @@ impl HealthMonitor {
             session_id: format!("{pid}-{now}"),
             session_kind: "desktop_vad",
             device: String::new(),
+            device_configured: String::new(),
+            device_opened: None,
+            device_missing: false,
             updated_monotonic_ms: now,
             stage: Stage::Listening,
             stage_since_ms: now,
@@ -772,6 +800,46 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&snap).unwrap();
         assert_eq!(value["mic_warning"], "mic clipping");
         assert!(value.get("levels").is_none());
+    }
+
+    #[test]
+    fn a_missing_device_is_reported_and_sets_the_mic_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        health.device("jbl");
+        let fresh = serde_json::to_value(health.snapshot()).unwrap();
+        assert_eq!(fresh["device_missing"], false);
+        assert_eq!(fresh["device_opened"], serde_json::Value::Null);
+
+        let pw = crate::audio::Sources {
+            names: vec!["ears_aec_mic".into()],
+            default: Some("rode".into()),
+        };
+        let fallbacks = ["ears_aec_mic".to_string()];
+        health.capture_device(&crate::audio::choose_capture_device(
+            "jbl",
+            &fallbacks,
+            Some(&pw),
+        ));
+        let value = serde_json::to_value(health.snapshot()).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["device"], "jbl");
+        assert_eq!(value["device_configured"], "jbl");
+        assert_eq!(value["device_opened"], "ears_aec_mic");
+        assert_eq!(value["device_missing"], true);
+        assert_eq!(value["mic_warning"], MIC_MISSING);
+
+        // A restart that finds the device again clears the warning.
+        health.capture_device(&crate::audio::choose_capture_device(
+            "ears_aec_mic",
+            &fallbacks,
+            Some(&pw),
+        ));
+        let snap = health.snapshot();
+        assert!(!snap.device_missing);
+        assert_eq!(snap.device_opened.as_deref(), Some("ears_aec_mic"));
+        assert_eq!(snap.mic_warning, None);
     }
 
     #[test]
