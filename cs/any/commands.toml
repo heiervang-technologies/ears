@@ -1,0 +1,10 @@
+# Compensating Scaffolding defaults for every ASR model (docs/rfc/0002).
+# Entries here apply whatever model the server runs; model-specific ones
+# live in cs/<model>/commands.toml. Every *.toml under cs/<dir>/ is embedded
+# into the binary at build time (see build.rs): adding a file needs no code.
+
+[meta]
+model = "any"
+domain = "commands"
+generated = "2026-11-13"
+generator = "hand"

@@ -10,7 +10,7 @@ use ghost_preview::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, DeviceAction, VadAction};
+use cli::{Cli, Commands, CsAction, DeviceAction, VadAction};
 use ears::audio;
 use ears::Config;
 use ears::{
@@ -255,6 +255,10 @@ async fn main() -> Result<()> {
         Some(Commands::Subtitles { state }) => {
             handle_subtitles(&config, state.as_deref())?;
         }
+        Some(Commands::Cs { action }) => {
+            let code = handle_cs(&config, action).await?;
+            std::process::exit(code);
+        }
         // Hidden backwards-compat aliases
         Some(Commands::Select) => select_device(&config)?,
         Some(Commands::List) => list_devices()?,
@@ -282,6 +286,32 @@ async fn handle_auto_enter() -> Result<()> {
 
 /// `ears typing on|off|toggle|status`: ask the running instance, or update the
 /// persisted switch directly when no ears is running.
+/// `ears cs ...`: Compensating Scaffolding. Returns the exit code.
+async fn handle_cs(config: &ears::Config, action: CsAction) -> Result<i32> {
+    match action {
+        CsAction::Check { model, file } => ears::cs::check::run(config, model, &file).await,
+        CsAction::Migrate {
+            out,
+            config: config_path,
+            actions,
+            model,
+        } => {
+            let config_path = config_path.unwrap_or_else(|| {
+                config
+                    .config_dir
+                    .join(match config.active_profile.as_deref() {
+                        Some(profile) => format!("config.{profile}.toml"),
+                        None => "config.toml".into(),
+                    })
+            });
+            let actions = actions
+                .unwrap_or_else(|| ears::command_mode::Paths::new(&config.state_dir).actions);
+            ears::cs::migrate::run(&config_path, &actions, &model, out.as_deref())?;
+            Ok(0)
+        }
+    }
+}
+
 /// `ears teach [ACTION]`.
 fn handle_teach(config: &ears::Config, action: Option<&str>) -> Result<()> {
     use ears::command_mode as cm;

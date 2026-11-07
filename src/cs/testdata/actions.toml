@@ -1,0 +1,1787 @@
+# Fixture: the action phrasings of actions.toml on centurion, 2026-11-13
+# (programs replaced by placeholders). Read by src/cs/migrate.rs tests.
+
+[[action]]
+name = "enter"
+text = ["enter", "press enter", "submit", "send it", "confirm"]
+keys = "enter"
+
+[[action]]
+name = "escape"
+text = ["escape", "cancel", "never mind", "dismiss"]
+keys = "enter"
+
+[[action]]
+name = "tab"
+text = ["tab", "next field", "complete"]
+keys = "enter"
+
+[[action]]
+name = "backspace"
+text = ["backspace", "delete a letter", "erase"]
+keys = "enter"
+
+[[action]]
+name = "up"
+text = ["up", "arrow up", "previous line", "go up"]
+keys = "enter"
+
+[[action]]
+name = "down"
+text = ["down", "arrow down", "next line", "go down"]
+keys = "enter"
+
+[[action]]
+name = "left"
+text = ["left", "arrow left", "go left"]
+keys = "enter"
+
+[[action]]
+name = "right"
+text = ["right", "arrow right", "go right"]
+keys = "enter"
+
+[[action]]
+name = "pause-music"
+text = ["pause music", "pause the music", "pause the video", "stop the music", "pause playback"]
+run = ["true"]
+
+[[action]]
+name = "play-pause"
+text = ["play", "resume playback", "resume music"]
+run = ["true"]
+
+[[action]]
+name = "next-track"
+text = ["next track", "skip this song", "next song"]
+run = ["true"]
+
+[[action]]
+name = "previous-track"
+text = ["previous track", "last song", "go back a song"]
+run = ["true"]
+
+[[action]]
+name = "volume-up"
+text = ["volume up", "louder", "turn it up"]
+run = ["true"]
+
+[[action]]
+name = "volume-down"
+text = ["volume down", "quieter", "turn it down"]
+run = ["true"]
+
+[[action]]
+name = "fullscreen"
+text = ["fullscreen", "toggle fullscreen", "full screen", "make it fullscreen", "exit fullscreen"]
+keys = "enter"
+
+[[action]]
+name = "close"
+text = ["close", "close window", "close it", "close this window", "kill window"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "call-agent"
+text = ["call", "call clanker", "call agent", "call the agent", "ring"]
+run = ["true"]
+rest = true
+
+[[action]]
+name = "move-left"
+text = ["move left", "move window left", "move it left"]
+run = ["true"]
+
+[[action]]
+name = "move-right"
+text = ["move right", "move window right", "move it right"]
+run = ["true"]
+
+[[action]]
+name = "move-up"
+text = ["move up", "move window up", "move it up"]
+run = ["true"]
+
+[[action]]
+name = "move-down"
+text = ["move down", "move window down", "move it down"]
+run = ["true"]
+
+[[action]]
+name = "left-monitor"
+text = ["left monitor", "left screen", "go to the left monitor"]
+run = ["true"]
+
+[[action]]
+name = "top-monitor"
+text = ["top monitor", "top screen", "upper monitor", "go to the top monitor"]
+run = ["true"]
+
+[[action]]
+name = "main-monitor"
+text = ["main monitor", "main screen", "big screen", "go to the main monitor"]
+run = ["true"]
+
+[[action]]
+name = "zoom-in"
+text = ["zoom in", "magnify", "closer"]
+run = ["true"]
+
+[[action]]
+name = "zoom-out"
+text = ["zoom out", "less zoom"]
+run = ["true"]
+
+[[action]]
+name = "zoom-reset"
+text = ["reset zoom", "no zoom", "unzoom"]
+run = ["true"]
+
+[[action]]
+name = "scroll-up"
+text = ["scroll up"]
+run = ["true"]
+
+[[action]]
+name = "scroll-down"
+text = ["scroll down"]
+run = ["true"]
+
+[[action]]
+name = "scroll-to-top"
+text = ["scroll to top", "scroll to the top", "go to the top"]
+run = ["true"]
+
+[[action]]
+name = "scroll-to-bottom"
+text = ["scroll to bottom", "scroll to the bottom", "go to the bottom"]
+run = ["true"]
+
+[[action]]
+name = "keep-scrolling-up"
+text = ["keep scrolling up", "auto scroll up"]
+run = ["true"]
+
+[[action]]
+name = "keep-scrolling-down"
+text = ["keep scrolling down", "keep scrolling", "auto scroll down"]
+run = ["true"]
+
+[[action]]
+name = "pan-up"
+text = ["pan up"]
+run = ["true"]
+
+[[action]]
+name = "pan-down"
+text = ["pan down"]
+run = ["true"]
+
+[[action]]
+name = "pan-left"
+text = ["pan left"]
+run = ["true"]
+
+[[action]]
+name = "pan-right"
+text = ["pan right"]
+run = ["true"]
+
+[[action]]
+name = "stop"
+text = ["stop", "stop moving", "stop scrolling", "that's enough"]
+run = ["true"]
+
+[[action]]
+name = "halt"
+text = ["halt", "halt everything", "emergency stop"]
+run = ["true"]
+
+[[action]]
+name = "voronoi"
+text = ["voronoi", "voronoi picker", "touch picker", "show targets"]
+run = ["true"]
+
+[[action]]
+name = "help"
+text = ["help", "help me", "i need help", "what can i say"]
+run = ["true"]
+
+[[action]]
+name = "show-commands"
+text = ["show commands", "show me the commands", "list commands", "commands list", "cheat sheet"]
+run = ["true"]
+
+[[action]]
+name = "hide-commands"
+text = ["hide commands", "close commands", "hide the commands"]
+run = ["true"]
+
+[[action]]
+name = "tmux-next-window"
+text = ["tmux next window", "next tmux window", "tmux select the next window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-next-layout"
+text = ["tmux next layout", "tmux select next layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-break-pane"
+text = ["tmux break pane", "tmux break pane to a new window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-split-down"
+text = ["tmux split down", "tmux split horizontal", "tmux split window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-list-all-paste-buffers"
+text = ["tmux list all paste buffers"]
+run = ["true"]
+
+[[action]]
+name = "tmux-rename-current-session"
+text = ["tmux rename current session"]
+run = ["true"]
+
+[[action]]
+name = "tmux-split"
+text = ["tmux split", "tmux split right", "tmux split vertical"]
+run = ["true"]
+
+[[action]]
+name = "tmux-kill-current-window"
+text = ["tmux kill current window"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-prompt-for-window-index-to-select"
+text = ["tmux prompt for window index to select"]
+run = ["true"]
+
+[[action]]
+name = "tmux-new-floating-pane"
+text = ["tmux new floating pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-command-prompt"
+text = ["tmux command prompt"]
+run = ["true"]
+
+[[action]]
+name = "tmux-delete-the-most-recent-paste-buffer"
+text = ["tmux delete the most recent paste buffer"]
+run = ["true"]
+
+[[action]]
+name = "tmux-move-the-current-window"
+text = ["tmux move the current window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-describe-key-binding"
+text = ["tmux describe key binding"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-0"
+text = ["tmux window 0", "tmux window zero", "tmux select window 0", "tmux select window zero"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-1"
+text = ["tmux window 1", "tmux window one", "tmux select window 1", "tmux select window one"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-2"
+text = ["tmux window 2", "tmux window two", "tmux select window 2", "tmux select window two"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-3"
+text = ["tmux window 3", "tmux window three", "tmux select window 3", "tmux select window three"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-4"
+text = ["tmux window 4", "tmux window four", "tmux select window 4", "tmux select window four"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-5"
+text = ["tmux window 5", "tmux window five", "tmux select window 5", "tmux select window five"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-6"
+text = ["tmux window 6", "tmux window six", "tmux select window 6", "tmux select window six"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-7"
+text = ["tmux window 7", "tmux window seven", "tmux select window 7", "tmux select window seven"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-8"
+text = ["tmux window 8", "tmux window eight", "tmux select window 8", "tmux select window eight"]
+run = ["true"]
+
+[[action]]
+name = "tmux-window-9"
+text = ["tmux window 9", "tmux window nine", "tmux select window 9", "tmux select window nine"]
+run = ["true"]
+
+[[action]]
+name = "tmux-prompt-for-a-command"
+text = ["tmux prompt for a command"]
+run = ["true"]
+
+[[action]]
+name = "tmux-last-pane"
+text = ["tmux last pane", "tmux previous pane", "tmux move to the previously active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-display-window-menu"
+text = ["tmux display window menu"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-choose-a-paste-buffer-from-a-list"
+text = ["tmux choose a paste buffer from a list"]
+run = ["true"]
+
+[[action]]
+name = "tmux-display-pane-menu"
+text = ["tmux display pane menu"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-list-key-bindings"
+text = ["tmux list key bindings"]
+run = ["true"]
+
+[[action]]
+name = "tmux-toggle-pane-between-floating-and-tiled"
+text = ["tmux toggle pane between floating and tiled"]
+run = ["true"]
+
+[[action]]
+name = "tmux-customize-options"
+text = ["tmux customize options"]
+run = ["true"]
+
+[[action]]
+name = "tmux-choose-and-detach-a-client-from-a-list"
+text = ["tmux choose and detach a client from a list"]
+run = ["true"]
+
+[[action]]
+name = "tmux-spread-panes-out-evenly"
+text = ["tmux spread panes out evenly"]
+run = ["true"]
+
+[[action]]
+name = "tmux-swap-pane"
+text = ["tmux swap pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-run-shell"
+text = ["tmux run shell"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-clear-the-marked-pane"
+text = ["tmux clear the marked pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-kill-the-active-pane"
+text = ["tmux kill the active pane"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-run-shell-ttmux-source-file"
+text = ["tmux run shell ttmux source file"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-change-the-pane-title"
+text = ["tmux change the pane title"]
+run = ["true"]
+
+[[action]]
+name = "tmux-choose-tree"
+text = ["tmux choose tree"]
+run = ["true"]
+
+[[action]]
+name = "tmux-copy-mode"
+text = ["tmux copy mode", "copy mode", "tmux scroll mode", "tmux enter copy mode"]
+run = ["true"]
+
+[[action]]
+name = "tmux-paste"
+text = ["tmux paste", "tmux paste the most recent paste buffer"]
+run = ["true"]
+
+[[action]]
+name = "tmux-new-window"
+text = ["tmux new window", "new tmux window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-detach"
+text = ["tmux detach", "detach", "detach tmux", "detach session", "tmux detach the current client"]
+run = ["true"]
+
+[[action]]
+name = "tmux-tile"
+text = ["tmux tile", "tmux tiled layout", "tmux select the tiled layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-search-for-a-pane"
+text = ["tmux search for a pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-move-a-floating-pane"
+text = ["tmux move a floating pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-pane-left"
+text = ["tmux pane left", "tmux left pane", "tmux select the pane to the left of the active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-display-window-information"
+text = ["tmux display window information"]
+run = ["true"]
+
+[[action]]
+name = "tmux-pane-down"
+text = ["tmux pane down", "tmux pane below", "tmux select the pane below the active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-pane-up"
+text = ["tmux pane up", "tmux pane above", "tmux select the pane above the active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-pane-right"
+text = ["tmux pane right", "tmux right pane", "tmux select the pane to the right of the active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-toggle-the-marked-pane"
+text = ["tmux toggle the marked pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-next-pane"
+text = ["tmux next pane", "tmux select the next pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-previous-window"
+text = ["tmux previous window", "previous tmux window", "tmux last window", "tmux select the previous window"]
+run = ["true"]
+
+[[action]]
+name = "tmux-source-file"
+text = ["tmux source file"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-redraw-the-current-client"
+text = ["tmux redraw the current client"]
+run = ["true"]
+
+[[action]]
+name = "tmux-sessions"
+text = ["tmux sessions", "tmux choose session", "tmux session list", "tmux choose a session from a list"]
+run = ["true"]
+
+[[action]]
+name = "tmux-show-a-clock"
+text = ["tmux show a clock"]
+run = ["true"]
+
+[[action]]
+name = "tmux-windows"
+text = ["tmux windows", "tmux choose window", "tmux window list", "tmux choose a window from a list"]
+run = ["true"]
+
+[[action]]
+name = "tmux-zoom"
+text = ["tmux zoom", "tmux zoom pane", "zoom pane", "tmux unzoom", "tmux zoom the active pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-swap-the-active-pane-with-the-pane-above"
+text = ["tmux swap the active pane with the pane above"]
+run = ["true"]
+
+[[action]]
+name = "tmux-swap-the-active-pane-with-the-pane-below"
+text = ["tmux swap the active pane with the pane below"]
+run = ["true"]
+
+[[action]]
+name = "tmux-show-messages"
+text = ["tmux show messages"]
+run = ["true"]
+
+[[action]]
+name = "tmux-reset-so-the-visible-part-of-the-window-follows-the-cursor"
+text = ["tmux reset so the visible part of the window follows the cursor"]
+run = ["true"]
+
+[[action]]
+name = "tmux-copy-mode-2"
+text = ["tmux enter copy mode and scroll up"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-even-horizontal-layout"
+text = ["tmux set the even-horizontal layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-even-vertical-layout"
+text = ["tmux set the even-vertical layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-main-horizontal-layout"
+text = ["tmux set the main-horizontal layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-main-vertical-layout"
+text = ["tmux set the main-vertical layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-main-horizontal-mirrored-layout"
+text = ["tmux set the main-horizontal-mirrored layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-set-the-main-vertical-mirrored-layout"
+text = ["tmux set the main-vertical-mirrored layout"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-pane"
+text = ["tmux resize pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-down-by-5"
+text = ["tmux resize the pane down by 5", "tmux resize the pane down by five"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-right-by-5"
+text = ["tmux resize the pane right by 5", "tmux resize the pane right by five"]
+run = ["true"]
+
+[[action]]
+name = "tmux-next-window-2"
+text = ["tmux select the next window with an alert"]
+run = ["true"]
+
+[[action]]
+name = "tmux-rotate-through-the-panes-in-reverse"
+text = ["tmux rotate through the panes in reverse"]
+run = ["true"]
+
+[[action]]
+name = "tmux-previous-window-2"
+text = ["tmux select the previous window with an alert"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-up-by-5"
+text = ["tmux resize the pane up by 5", "tmux resize the pane up by five"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-left-by-5"
+text = ["tmux resize the pane left by 5", "tmux resize the pane left by five"]
+run = ["true"]
+
+[[action]]
+name = "tmux-join-pane"
+text = ["tmux join pane"]
+run = ["true"]
+
+[[action]]
+name = "tmux-rotate-through-the-panes"
+text = ["tmux rotate through the panes"]
+run = ["true"]
+
+[[action]]
+name = "tmux-suspend-the-current-client"
+text = ["tmux suspend the current client"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "tmux-resize-the-pane-up"
+text = ["tmux resize the pane up"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-down"
+text = ["tmux resize the pane down"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-left"
+text = ["tmux resize the pane left"]
+run = ["true"]
+
+[[action]]
+name = "tmux-resize-the-pane-right"
+text = ["tmux resize the pane right"]
+run = ["true"]
+
+[[action]]
+name = "mute"
+text = ["mute"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "brightness-up"
+text = ["brightness up"]
+run = ["true"]
+
+[[action]]
+name = "brightness-down"
+text = ["brightness down"]
+run = ["true"]
+
+[[action]]
+name = "brightness-maximum"
+text = ["brightness maximum"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "brightness-minimum"
+text = ["brightness minimum"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "keyboard-brightness-up"
+text = ["keyboard brightness up"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "keyboard-brightness-down"
+text = ["keyboard brightness down"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "keyboard-backlight-cycle"
+text = ["keyboard backlight cycle"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-touchpad"
+text = ["toggle touchpad"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "enable-touchpad"
+text = ["enable touchpad"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "disable-touchpad"
+text = ["disable touchpad"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "volume-up-precise"
+text = ["volume up precise"]
+run = ["true"]
+
+[[action]]
+name = "volume-down-precise"
+text = ["volume down precise"]
+run = ["true"]
+
+[[action]]
+name = "brightness-up-precise"
+text = ["brightness up precise"]
+run = ["true"]
+
+[[action]]
+name = "brightness-down-precise"
+text = ["brightness down precise"]
+run = ["true"]
+
+[[action]]
+name = "switch-audio-output"
+text = ["switch audio output"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "universal-copy"
+text = ["universal copy", "super c"]
+run = ["true"]
+
+[[action]]
+name = "universal-paste"
+text = ["universal paste", "super v"]
+run = ["true"]
+
+[[action]]
+name = "universal-cut"
+text = ["universal cut", "super x"]
+run = ["true"]
+
+[[action]]
+name = "clipboard-manager"
+text = ["clipboard manager", "super control v", "super ctrl v"]
+run = ["true"]
+
+[[action]]
+name = "close-window"
+text = ["super w"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "pseudo-window"
+text = ["pseudo window", "super p"]
+run = ["true"]
+
+[[action]]
+name = "toggle-window-floating-tiling"
+text = ["toggle window floating/tiling", "float", "float window", "tile window", "super t"]
+run = ["true"]
+
+[[action]]
+name = "full-screen"
+text = ["super f"]
+run = ["true"]
+
+[[action]]
+name = "tiled-full-screen"
+text = ["tiled full screen", "super control f", "super ctrl f"]
+run = ["true"]
+
+[[action]]
+name = "full-width"
+text = ["full width", "super alt f"]
+run = ["true"]
+
+[[action]]
+name = "pop-window-out-float-pin"
+text = ["pop window out (float & pin)", "pop out", "pop window out", "super o"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-left-window"
+text = ["focus on left window", "move focus left", "super left", "super h", "left window", "window left", "window to the left", "focus left"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-right-window"
+text = ["focus on right window", "move focus right", "super right", "super l", "right window", "window right", "window to the right", "focus right"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-above-window"
+text = ["focus on above window", "move focus up", "super up", "super k", "up window", "window up", "window above", "upper window", "focus up"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-below-window"
+text = ["focus on below window", "move focus down", "super down", "super j", "down window", "window down", "window below", "lower window", "focus down"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-1"
+text = ["switch to workspace 1", "switch to workspace one", "workspace 1", "workspace one", "go to workspace 1", "go to workspace one", "super 1", "super one"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-2"
+text = ["switch to workspace 2", "switch to workspace two", "workspace 2", "workspace two", "go to workspace 2", "go to workspace two", "super 2", "super two"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-3"
+text = ["switch to workspace 3", "switch to workspace three", "workspace 3", "workspace three", "go to workspace 3", "go to workspace three", "super 3", "super three"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-4"
+text = ["switch to workspace 4", "switch to workspace four", "workspace 4", "workspace four", "go to workspace 4", "go to workspace four", "super 4", "super four"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-5"
+text = ["switch to workspace 5", "switch to workspace five", "workspace 5", "workspace five", "go to workspace 5", "go to workspace five", "super 5", "super five"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-6"
+text = ["switch to workspace 6", "switch to workspace six", "workspace 6", "workspace six", "go to workspace 6", "go to workspace six", "super 6", "super six"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-7"
+text = ["switch to workspace 7", "switch to workspace seven", "workspace 7", "workspace seven", "go to workspace 7", "go to workspace seven", "super 7", "super seven"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-8"
+text = ["switch to workspace 8", "switch to workspace eight", "workspace 8", "workspace eight", "go to workspace 8", "go to workspace eight", "super 8", "super eight"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-9"
+text = ["switch to workspace 9", "switch to workspace nine", "workspace 9", "workspace nine", "go to workspace 9", "go to workspace nine", "super 9", "super nine"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-workspace-10"
+text = ["switch to workspace 10", "switch to workspace ten", "workspace 10", "workspace ten", "go to workspace 10", "go to workspace ten", "super 0", "super zero"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-1"
+text = ["move window to workspace 1", "move window to workspace one", "super shift 1", "super shift one"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-2"
+text = ["move window to workspace 2", "move window to workspace two", "super shift 2", "super shift two"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-3"
+text = ["move window to workspace 3", "move window to workspace three", "super shift 3", "super shift three"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-4"
+text = ["move window to workspace 4", "move window to workspace four", "super shift 4", "super shift four"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-5"
+text = ["move window to workspace 5", "move window to workspace five", "super shift 5", "super shift five"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-6"
+text = ["move window to workspace 6", "move window to workspace six", "super shift 6", "super shift six"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-7"
+text = ["move window to workspace 7", "move window to workspace seven", "super shift 7", "super shift seven"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-8"
+text = ["move window to workspace 8", "move window to workspace eight", "super shift 8", "super shift eight"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-9"
+text = ["move window to workspace 9", "move window to workspace nine", "super shift 9", "super shift nine"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-workspace-10"
+text = ["move window to workspace 10", "move window to workspace ten", "super shift 0", "super shift zero"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-1"
+text = ["move window silently to workspace 1", "move window silently to workspace one", "super alt shift 1", "super alt shift one"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-2"
+text = ["move window silently to workspace 2", "move window silently to workspace two", "super alt shift 2", "super alt shift two"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-3"
+text = ["move window silently to workspace 3", "move window silently to workspace three", "super alt shift 3", "super alt shift three"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-4"
+text = ["move window silently to workspace 4", "move window silently to workspace four", "super alt shift 4", "super alt shift four"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-5"
+text = ["move window silently to workspace 5", "move window silently to workspace five", "super alt shift 5", "super alt shift five"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-6"
+text = ["move window silently to workspace 6", "move window silently to workspace six", "super alt shift 6", "super alt shift six"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-7"
+text = ["move window silently to workspace 7", "move window silently to workspace seven", "super alt shift 7", "super alt shift seven"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-8"
+text = ["move window silently to workspace 8", "move window silently to workspace eight", "super alt shift 8", "super alt shift eight"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-9"
+text = ["move window silently to workspace 9", "move window silently to workspace nine", "super alt shift 9", "super alt shift nine"]
+run = ["true"]
+
+[[action]]
+name = "move-window-silently-to-workspace-10"
+text = ["move window silently to workspace 10", "move window silently to workspace ten", "super alt shift 0", "super alt shift zero"]
+run = ["true"]
+
+[[action]]
+name = "toggle-scratchpad"
+text = ["toggle scratchpad", "scratchpad", "show scratchpad", "super s"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-scratchpad"
+text = ["move window to scratchpad", "super alt s"]
+run = ["true"]
+
+[[action]]
+name = "next-workspace"
+text = ["next workspace", "scroll active workspace forward"]
+run = ["true"]
+
+[[action]]
+name = "cycle-windows"
+text = ["cycle windows", "focus on next window"]
+run = ["true"]
+
+[[action]]
+name = "previous-workspace"
+text = ["previous workspace", "scroll active workspace backward", "super shift tab"]
+run = ["true"]
+
+[[action]]
+name = "former-workspace"
+text = ["former workspace", "last workspace", "go back a workspace", "super control tab", "super ctrl tab"]
+run = ["true"]
+
+[[action]]
+name = "move-workspace-to-left-monitor"
+text = ["move workspace to left monitor", "super alt shift left", "super alt shift h"]
+run = ["true"]
+
+[[action]]
+name = "move-workspace-to-right-monitor"
+text = ["move workspace to right monitor", "super alt shift right", "super alt shift l"]
+run = ["true"]
+
+[[action]]
+name = "move-workspace-to-up-monitor"
+text = ["move workspace to up monitor", "super alt shift up", "super alt shift k"]
+run = ["true"]
+
+[[action]]
+name = "move-workspace-to-down-monitor"
+text = ["move workspace to down monitor", "super alt shift down", "super alt shift j"]
+run = ["true"]
+
+[[action]]
+name = "swap-window-to-the-left"
+text = ["swap window to the left", "swap window left", "super shift left", "super shift h"]
+run = ["true"]
+
+[[action]]
+name = "swap-window-to-the-right"
+text = ["swap window to the right", "swap window right", "super shift right", "super shift l"]
+run = ["true"]
+
+[[action]]
+name = "swap-window-up"
+text = ["swap window up", "super shift up", "super shift k"]
+run = ["true"]
+
+[[action]]
+name = "swap-window-down"
+text = ["swap window down", "super shift down", "super shift j"]
+run = ["true"]
+
+[[action]]
+name = "reveal-active-window-on-top"
+text = ["reveal active window on top"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-previous-window"
+text = ["focus on previous window"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-next-monitor"
+text = ["focus on next monitor", "next monitor", "control alt tab", "ctrl alt tab"]
+run = ["true"]
+
+[[action]]
+name = "focus-on-previous-monitor"
+text = ["focus on previous monitor", "previous monitor", "control alt shift tab", "ctrl alt shift tab"]
+run = ["true"]
+
+[[action]]
+name = "expand-window-left"
+text = ["expand window left", "resize left", "super minus", "super alt h"]
+run = ["true"]
+
+[[action]]
+name = "shrink-window-left"
+text = ["shrink window left", "resize right", "super equals", "super alt l"]
+run = ["true"]
+
+[[action]]
+name = "shrink-window-up"
+text = ["shrink window up", "resize up", "super shift minus"]
+run = ["true"]
+
+[[action]]
+name = "expand-window-down"
+text = ["expand window down", "resize down", "super shift equals", "super alt j"]
+run = ["true"]
+
+[[action]]
+name = "toggle-window-grouping"
+text = ["toggle window grouping", "super g"]
+run = ["true"]
+
+[[action]]
+name = "move-active-window-out-of-group"
+text = ["move active window out of group", "super alt g"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-group-on-left"
+text = ["move window to group on left"]
+run = ["true"]
+
+[[action]]
+name = "group-smart-left"
+text = ["group smart left"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-group-on-right"
+text = ["move window to group on right"]
+run = ["true"]
+
+[[action]]
+name = "group-smart-right"
+text = ["group smart right"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-group-on-top"
+text = ["move window to group on top"]
+run = ["true"]
+
+[[action]]
+name = "group-smart-up"
+text = ["group smart up"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-group-on-bottom"
+text = ["move window to group on bottom"]
+run = ["true"]
+
+[[action]]
+name = "group-smart-down"
+text = ["group smart down"]
+run = ["true"]
+
+[[action]]
+name = "next-window-in-group"
+text = ["next window in group", "move grouped window focus right", "super alt tab", "super control right", "super ctrl right"]
+run = ["true"]
+
+[[action]]
+name = "previous-window-in-group"
+text = ["previous window in group", "move grouped window focus left", "super alt shift tab", "super control left", "super ctrl left"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-group-window-1"
+text = ["switch to group window 1", "switch to group window one", "super alt 1", "super alt one"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-group-window-2"
+text = ["switch to group window 2", "switch to group window two", "super alt 2", "super alt two"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-group-window-3"
+text = ["switch to group window 3", "switch to group window three", "super alt 3", "super alt three"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-group-window-4"
+text = ["switch to group window 4", "switch to group window four", "super alt 4", "super alt four"]
+run = ["true"]
+
+[[action]]
+name = "switch-to-group-window-5"
+text = ["switch to group window 5", "switch to group window five", "super alt 5", "super alt five"]
+run = ["true"]
+
+[[action]]
+name = "cycle-monitor-scaling"
+text = ["cycle monitor scaling", "super slash"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "cycle-monitor-scaling-backwards"
+text = ["cycle monitor scaling backwards", "super alt slash"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "emoji-picker"
+text = ["emoji picker", "super control e", "super ctrl e"]
+run = ["true"]
+
+[[action]]
+name = "capture-menu"
+text = ["capture menu", "super control c", "super ctrl c"]
+run = ["true"]
+
+[[action]]
+name = "toggle-menu"
+text = ["toggle menu", "super control o", "super ctrl o"]
+run = ["true"]
+
+[[action]]
+name = "hardware-menu"
+text = ["hardware menu"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-left-monitor"
+text = ["move window to left monitor"]
+run = ["true"]
+
+[[action]]
+name = "omarchy-menu"
+text = ["omarchy menu", "super alt space"]
+run = ["true"]
+
+[[action]]
+name = "power-menu"
+text = ["power menu"]
+run = ["true"]
+
+[[action]]
+name = "calculator"
+text = ["calculator"]
+run = ["true"]
+
+[[action]]
+name = "theme-menu"
+text = ["theme menu", "super control shift space", "super ctrl shift space"]
+run = ["true"]
+
+[[action]]
+name = "toggle-window-transparency"
+text = ["toggle window transparency", "super backspace"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-window-gaps"
+text = ["toggle window gaps", "super shift backspace"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-single-window-square-aspect"
+text = ["toggle single-window square aspect", "super control backspace", "super ctrl backspace"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "dismiss-last-notification"
+text = ["dismiss last notification", "dismiss notification", "clear notification", "super comma"]
+run = ["true"]
+
+[[action]]
+name = "dismiss-all-notifications"
+text = ["dismiss all notifications", "clear all notifications", "super shift comma"]
+run = ["true"]
+
+[[action]]
+name = "toggle-silencing-notifications"
+text = ["toggle silencing notifications", "super control comma", "super ctrl comma"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "invoke-last-notification"
+text = ["invoke last notification", "super alt comma"]
+run = ["true"]
+
+[[action]]
+name = "restore-last-notification"
+text = ["restore last notification", "super alt shift comma"]
+run = ["true"]
+
+[[action]]
+name = "toggle-locking-on-idle"
+text = ["toggle locking on idle", "super control i", "super ctrl i"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-nightlight"
+text = ["toggle nightlight", "super control n", "super ctrl n"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-laptop-display"
+text = ["toggle laptop display", "super control delete", "super ctrl delete"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-laptop-display-mirroring"
+text = ["toggle laptop display mirroring", "super control alt delete", "super ctrl alt delete"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "screenshot"
+text = ["screenshot", "take a screenshot"]
+run = ["true"]
+
+[[action]]
+name = "screenshot-full-screen"
+text = ["screenshot full screen"]
+run = ["true"]
+
+[[action]]
+name = "screenrecording"
+text = ["screenrecording", "alt print screen"]
+run = ["true"]
+
+[[action]]
+name = "color-picker"
+text = ["color picker"]
+run = ["true"]
+
+[[action]]
+name = "screenshot-window"
+text = ["screenshot window"]
+run = ["true"]
+
+[[action]]
+name = "extract-text-ocr-from-screenshot"
+text = ["extract text (ocr) from screenshot", "super control print screen", "super ctrl print screen"]
+run = ["true"]
+
+[[action]]
+name = "share"
+text = ["share", "super control s", "super ctrl s"]
+run = ["true"]
+
+[[action]]
+name = "transcode"
+text = ["transcode", "super control period", "super ctrl period"]
+run = ["true"]
+
+[[action]]
+name = "set-reminder"
+text = ["set reminder", "super control r", "super ctrl r"]
+run = ["true"]
+
+[[action]]
+name = "show-reminders"
+text = ["show reminders", "super control alt r", "super ctrl alt r"]
+run = ["true"]
+
+[[action]]
+name = "clear-reminders"
+text = ["clear reminders", "super control shift r", "super ctrl shift r"]
+run = ["true"]
+
+[[action]]
+name = "show-time"
+text = ["show time", "super control alt t", "super ctrl alt t"]
+run = ["true"]
+
+[[action]]
+name = "show-battery-remaining"
+text = ["show battery remaining", "super control alt b", "super ctrl alt b"]
+run = ["true"]
+
+[[action]]
+name = "show-weather"
+text = ["show weather", "super control alt w", "super ctrl alt w"]
+run = ["true"]
+
+[[action]]
+name = "audio-controls"
+text = ["audio controls", "super control a", "super ctrl a"]
+run = ["true"]
+
+[[action]]
+name = "bluetooth-controls"
+text = ["bluetooth controls", "super control b", "super ctrl b"]
+run = ["true"]
+
+[[action]]
+name = "wifi-controls"
+text = ["wifi controls", "super control w", "super ctrl w"]
+run = ["true"]
+
+[[action]]
+name = "activity"
+text = ["activity", "super shift t"]
+run = ["true"]
+
+[[action]]
+name = "toggle-light-dark-theme"
+text = ["toggle light/dark theme"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "zoom-in-super-control-z"
+text = ["super control z", "super ctrl z"]
+run = ["true"]
+
+[[action]]
+name = "reset-zoom"
+text = ["super control alt z", "super ctrl alt z"]
+run = ["true"]
+
+[[action]]
+name = "pause-menu"
+text = ["pause menu", "game menu", "super escape"]
+run = ["true"]
+
+[[action]]
+name = "tmux"
+text = ["tmux", "super alt enter"]
+run = ["true"]
+
+[[action]]
+name = "terminal"
+text = ["terminal", "open terminal", "new terminal", "super enter"]
+run = ["true"]
+
+[[action]]
+name = "terminal-fallback"
+text = ["terminal (fallback)", "control alt t", "ctrl alt t"]
+run = ["true"]
+
+[[action]]
+name = "file-manager"
+text = ["file manager", "files", "open files", "super shift f"]
+run = ["true"]
+
+[[action]]
+name = "browser"
+text = ["browser", "open browser", "super shift b"]
+run = ["true"]
+
+[[action]]
+name = "toggle-firefox-chrome"
+text = ["toggle firefox chrome", "super alt shift f"]
+run = ["true"]
+
+[[action]]
+name = "browser-private"
+text = ["browser (private)", "super alt shift b"]
+run = ["true"]
+
+[[action]]
+name = "music-menu"
+text = ["music menu", "super m"]
+run = ["true"]
+
+[[action]]
+name = "music"
+text = ["music", "super shift m"]
+run = ["true"]
+
+[[action]]
+name = "music-tui"
+text = ["music tui", "super alt shift m"]
+run = ["true"]
+
+[[action]]
+name = "director-desktop"
+text = ["director (desktop)", "super shift d"]
+run = ["true"]
+
+[[action]]
+name = "director-tui"
+text = ["director tui", "super d"]
+run = ["true"]
+
+[[action]]
+name = "clanker-casa"
+text = ["clanker casa", "super q"]
+run = ["true"]
+
+[[action]]
+name = "claude"
+text = ["claude", "super shift a"]
+run = ["true"]
+
+[[action]]
+name = "heierchat"
+text = ["heierchat", "super a"]
+run = ["true"]
+
+[[action]]
+name = "inventory"
+text = ["inventory", "super i"]
+run = ["true"]
+
+[[action]]
+name = "ht-llama-webui-dev"
+text = ["ht-llama webui (dev)", "super alt a"]
+run = ["true"]
+
+[[action]]
+name = "youtube"
+text = ["youtube", "super shift y"]
+run = ["true"]
+
+[[action]]
+name = "yt-live-chat"
+text = ["yt live chat"]
+run = ["true"]
+
+[[action]]
+name = "twitch-chat"
+text = ["twitch chat"]
+run = ["true"]
+
+[[action]]
+name = "launch-apps"
+text = ["launch apps", "launcher", "open launcher", "app launcher", "super space"]
+run = ["true"]
+
+[[action]]
+name = "toggle-top-bar"
+text = ["toggle top bar", "toggle bar", "hide the bar", "show the bar", "super shift space"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "next-background-in-theme"
+text = ["next background in theme", "super control space", "super ctrl space"]
+run = ["true"]
+
+[[action]]
+name = "screenshot-region"
+text = ["screenshot region", "capture region", "super shift s"]
+run = ["true"]
+
+[[action]]
+name = "switch-keyboard-layout"
+text = ["switch keyboard layout", "toggle keyboard (no/en)", "super grave", "super bracket"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "show-key-bindings"
+text = ["show key bindings", "key bindings", "show shortcuts", "super shift slash"]
+run = ["true"]
+
+[[action]]
+name = "quickpick-menu"
+text = ["quickpick menu"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-down-monitor"
+text = ["move window to down monitor", "super control j", "super ctrl j"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-up-monitor"
+text = ["move window to up monitor", "super control k", "super ctrl k"]
+run = ["true"]
+
+[[action]]
+name = "move-window-to-right-monitor"
+text = ["move window to right monitor", "super control l", "super ctrl l"]
+run = ["true"]
+
+[[action]]
+name = "lock-system"
+text = ["lock system", "lock the screen", "lock computer", "super control shift l", "super ctrl shift l"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "hover-browser"
+text = ["hover browser", "super b"]
+run = ["true"]
+
+[[action]]
+name = "terminal-swap"
+text = ["terminal (swap)", "super control enter", "super ctrl enter"]
+run = ["true"]
+
+[[action]]
+name = "toggle-vibe-mode"
+text = ["toggle vibe mode", "super shift v"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "vibe-window"
+text = ["vibe window", "super shift w"]
+run = ["true"]
+
+[[action]]
+name = "zoom-in-super-control-equals"
+text = ["super control equals", "super ctrl equals"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "zoom-out-super-control-minus"
+text = ["super control minus", "super ctrl minus"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "reset-zoom-super-control-0"
+text = ["super control 0", "super control zero", "super ctrl 0"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "grab-youtube-video"
+text = ["grab youtube video"]
+run = ["true"]
+
+[[action]]
+name = "phone-mirror-scrcpy"
+text = ["phone mirror (scrcpy)"]
+run = ["true"]
+
+[[action]]
+name = "toggle-live-subtitles"
+text = ["toggle live subtitles", "super alt c"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "discord-mute-toggle"
+text = ["discord mute toggle", "control shift m", "ctrl shift m"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "toggle-mouse-f-keys"
+text = ["toggle mouse\u2192f-keys", "super alt m"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "talk-to-jasonelle"
+text = ["talk to jasonelle", "super control alt j", "super ctrl alt j"]
+run = ["true"]
+
+[[action]]
+name = "jasonelle-quickdraw"
+text = ["jasonelle quickdraw", "super control alt k", "super ctrl alt k"]
+run = ["true"]
+
+[[action]]
+name = "ink-on-desktop"
+text = ["ink on desktop", "super control p", "super ctrl p"]
+run = ["true"]
+
+[[action]]
+name = "tablet-monitor-orientation"
+text = ["tablet monitor + orientation", "super control shift p", "super ctrl shift p"]
+run = ["true"]
+
+[[action]]
+name = "toggle-cluster-stats-bar"
+text = ["toggle cluster stats bar", "super control g", "super ctrl g"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "youtube-chat"
+text = ["youtube chat", "super alt shift y"]
+run = ["true"]
+
+[[action]]
+name = "launch-wl-mirror"
+text = ["launch wl-mirror", "super shift i"]
+run = ["true"]
+
+[[action]]
+name = "pin-workspace-to-monitor"
+text = ["pin workspace to monitor", "super shift p"]
+run = ["true"]
+
+[[action]]
+name = "cycle-monitor-profile"
+text = ["cycle monitor profile", "super shift o"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "scene-editor"
+text = ["scene editor", "super n"]
+run = ["true"]
+
+[[action]]
+name = "scene-highlighter"
+text = ["scene highlighter", "super shift n"]
+run = ["true"]
+
+[[action]]
+name = "super-tab"
+text = ["super tab"]
+run = ["true"]
+
+[[action]]
+name = "alt-tab"
+text = ["alt tab"]
+run = ["true"]
+
+[[action]]
+name = "alt-shift-tab"
+text = ["alt shift tab"]
+run = ["true"]
+
+[[action]]
+name = "super-alt-left"
+text = ["super alt left"]
+run = ["true"]
+
+[[action]]
+name = "super-alt-right"
+text = ["super alt right"]
+run = ["true"]
+
+[[action]]
+name = "super-alt-up"
+text = ["super alt up"]
+run = ["true"]
+
+[[action]]
+name = "super-alt-down"
+text = ["super alt down"]
+run = ["true"]
+
+[[action]]
+name = "super-control-h"
+text = ["super control h", "super ctrl h"]
+run = ["true"]
+
+[[action]]
+name = "print-screen"
+text = ["print screen"]
+run = ["true"]
+
+[[action]]
+name = "super-print-screen"
+text = ["super print screen"]
+run = ["true"]
+
+[[action]]
+name = "super-control-t"
+text = ["super control t", "super ctrl t"]
+run = ["true"]
+exact = true
+
+[[action]]
+name = "super-shift-c"
+text = ["super shift c"]
+run = ["true"]
+
+[[action]]
+name = "super-alt-k"
+text = ["super alt k"]
+run = ["true"]
+
+[[action]]
+name = "super-shift-g"
+text = ["super shift g"]
+run = ["true"]
+
+[[action]]
+name = "focus-leftmost-window"
+text = ["leftmost window", "left most window", "far left window", "window leftmost"]
+run = ["true"]
+
+[[action]]
+name = "focus-rightmost-window"
+text = ["rightmost window", "right most window", "far right window", "window rightmost"]
+run = ["true"]
+
+[[action]]
+name = "focus-top-window"
+text = ["top window", "topmost window", "window top", "window at the top"]
+run = ["true"]
+
+[[action]]
+name = "focus-bottom-window"
+text = ["bottom window", "bottommost window", "window bottom", "window at the bottom"]
+run = ["true"]

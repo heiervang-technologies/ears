@@ -1,0 +1,63 @@
+# Fixture: the [commands] phrase lists of the config.toml on centurion,
+# 2026-11-13 (programs replaced by placeholders). Read by src/cs/migrate.rs tests.
+
+[commands]
+enabled = true
+enter = ["enter", "over"]
+sign_off = ["over and out", "peace", "peace out", "piece out", "ears out", "years out"]
+new_line = ["new line"]
+undo = ["scratch that"]
+back = ["back"]
+backtrack = ["backtrack", "back track"]
+standby = ["ears vad", "ears v a d"]
+wake = ["ears on", "listen clanker", "hey clanker", "hay clanker", "h e y clanker", "hey klanker", "clanker", "klanker", "hey glinker", "hey clinker", "hey clunker", "hey klinker", "adsense", "ad sense", "ads on"]
+sleep = ["ears off", "years off", "fuck off", "f off", "fuck of", "yourself", "fuck off clanker", "fuck off klanker", "fuck off clunker", "f off clanker", "fuck off kleiner", "fuck off klecker", "fuck off klinker"]
+literal = ["literal"]
+steer = ["voice-cmd", "handle"]
+type_anyway = ["discord", "vesktop", "code", "code-oss", "slack", "obsidian", "signal"]
+sleep_on_language = ["sv"]
+
+[commands.keys]
+"background" = "ctrl+b"
+"clear" = "ctrl+u"
+"clear all" = "ctrl+u*40"
+"erase" = "ctrl+u"
+
+[commands.run."centurion"]
+phrases = ["centurion", "centurian", "centurions", "senturion", "century on"]
+command = ["true"]
+resume = true
+
+[commands.run."cursor"]
+phrases = ["cursor mode", "cursor", "back to cursor", "type here"]
+command = ["true"]
+
+[commands.run."ears-help"]
+phrases = ["ears help", "help ears", "years help"]
+command = ["true"]
+
+[commands.run."friend-dismiss"]
+command = ["true"]
+
+[commands.run."friend-name"]
+command = ["true"]
+
+[commands.run."friend-wake"]
+command = ["true"]
+
+[commands.run."regular"]
+phrases = ["ears on", "regular mode", "normal mode", "regular ears"]
+command = ["true"]
+resume = true
+
+[commands.run."show-commands"]
+phrases = ["show commands", "show me the commands", "hide commands"]
+command = ["true"]
+
+[commands.run."talk-to-centurion"]
+phrases = ["talk to centurion", "talk to centurian", "stick to centurion"]
+command = ["true"]
+
+[commands.run."talking-stick"]
+phrases = ["talking stick", "stick mode", "to the stick"]
+command = ["true"]
