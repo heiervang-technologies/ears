@@ -368,6 +368,44 @@ pub fn command_line(
     Some(line)
 }
 
+/// The journal line for a chanted breath (chant mode, ears#264): `heard`,
+/// the folded words that fired action `fired` (or fired nothing),
+/// `by_words` when those words named it, and `readings`, the breath's
+/// folded words hearing by hearing: the other readings go in
+/// [`Line::alts`], chant evidence for the miner. A firing not by its words
+/// is marked `via = "chant"` (the meters, from sound and meaning).
+pub fn chant_line(
+    fired: Option<&str>,
+    heard: &str,
+    by_words: bool,
+    readings: &[String],
+) -> Option<Line> {
+    let said = normalize(heard);
+    let mut line = Line::new(ModeKind::Command.name(), said.clone());
+    match fired {
+        Some(name) => {
+            let phrase = if by_words && !said.is_empty() {
+                said.clone()
+            } else {
+                action_phrase(name)
+            };
+            line = line.matched(format!("action:{name}"), phrase);
+            if !by_words {
+                line.via = Some("chant".into());
+            }
+        }
+        None if !said.is_empty() => {}
+        None => return None,
+    }
+    for reading in readings {
+        let reading = normalize(reading);
+        if !reading.is_empty() && reading != said && !line.alts.contains(&reading) {
+            line.alts.push(reading);
+        }
+    }
+    Some(line)
+}
+
 /// An action's name as words: "close-window" -> "close window".
 fn action_phrase(name: &str) -> String {
     normalize(&name.replace(['-', '_'], " "))
@@ -490,6 +528,14 @@ impl Journal {
         hearing: &crate::command_mode::Hearing,
     ) {
         if let Some(line) = command_line(outcome, hearing) {
+            self.send(line);
+        }
+    }
+
+    /// A chanted breath that fired, or ended firing nothing
+    /// ([`chant_line`]).
+    pub fn chant(&self, fired: Option<&str>, heard: &str, by_words: bool, readings: &[String]) {
+        if let Some(line) = chant_line(fired, heard, by_words, readings) {
             self.send(line);
         }
     }

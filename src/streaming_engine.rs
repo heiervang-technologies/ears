@@ -437,6 +437,9 @@ impl StreamingEngine {
         };
 
         let segment = self.handle_vad_outcome(outcome);
+        if self.chanting() && !self.deciding() {
+            self.chant_listen(samples.len()).await;
+        }
 
         // While a decision is open nothing is typed, not even a ghost; nor
         // in vision mode, where words describe what to find.
@@ -464,15 +467,20 @@ impl StreamingEngine {
     /// the last voiced frame on counts ([`PARTIAL_LEAD_MS`]): an older one
     /// may be missing the last words. The streamed decoder pushes every
     /// change within about 150 ms, so words said after it would replace it
-    /// before the shortest early end.
+    /// before the shortest early end. Never while chanting: a chant is one
+    /// command said again and again, and ending its breath at the first
+    /// pause would make each repeat a breath of its own (heard whole and
+    /// missed) instead of filling the meters mid-chant ([`crate::chant`]).
     fn aim_early_end(&mut self) {
         use crate::endpoint::Ending;
         let silence = self.vad_detector.silence_ms();
         let utterance = self.ghost.as_ref().map(|g| g.utterance);
+        let chanting = self.chanting();
         let config = self.vad_detector.config();
         let early = match self.ending {
             Some((u, ending, at))
                 if silence > 0
+                    && !chanting
                     && Some(u) == utterance
                     && (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS =>
             {
@@ -586,6 +594,7 @@ impl StreamingEngine {
                 ghost.next_utterance();
             }
             self.ghost_clear();
+            self.chant_breath_dropped();
             self.discard("not speech-like enough");
             return Ok(());
         }
@@ -657,6 +666,10 @@ impl StreamingEngine {
         debug!("WAV save took {:?}", wav_start.elapsed());
         drop(saving);
 
+        if self.chanting() && !self.deciding() {
+            self.chant_segment(&segment.samples).await;
+            return Ok(());
+        }
         if self.mode.is_command() && !self.deciding() {
             self.command_segment(&segment_file).await;
             return Ok(());
@@ -851,6 +864,22 @@ impl StreamingEngine {
             self.subtitle_command(&transcript);
             self.enter_command_mode(&transcript).await;
             self.dictation_command_timed("command-mode", &transcript, asr_done, decided);
+            return Ok(());
+        }
+        // "chant": command mode, chanting.
+        if self.command_paths.is_some()
+            && crate::chant::PHRASES.contains(&crate::commands::normalize(&transcript).as_str())
+        {
+            let decided = Instant::now();
+            if self.mode.is_standby() {
+                self.apply_wake(crate::wake::Wake::On, &transcript);
+            }
+            self.subtitle_command(&transcript);
+            if !self.mode.is_command() {
+                self.enter_command_mode(&transcript).await;
+            }
+            self.set_chant(Some(true));
+            self.dictation_command_timed("chant-mode", &transcript, asr_done, decided);
             return Ok(());
         }
         // A colour said alone switches to the mode the LED shows in it.
@@ -2340,7 +2369,7 @@ impl StreamingEngine {
                     started.elapsed()
                 );
                 self.set_mode(crate::vad_mode::Mode::Command(Box::new(
-                    crate::vad_mode::CommandState { mode },
+                    crate::vad_mode::CommandState::new(mode),
                 )));
                 self.ghost_accept(heard).await;
                 crate::desktop::AudioFeedback::beep_done().ok();
@@ -2361,6 +2390,7 @@ impl StreamingEngine {
     }
 
     fn leave_command_mode(&mut self) {
+        // A chant is command mode's: it ends with it.
         if self.mode.is_command() {
             self.set_mode(crate::vad_mode::Mode::Dictation);
         }
@@ -2368,7 +2398,7 @@ impl StreamingEngine {
 
     /// Route a command-mode utterance to its action by embedding.
     async fn command_segment(&mut self, wav: &std::path::Path) {
-        use crate::command_mode::{Effect, Outcome};
+        use crate::command_mode::Outcome;
         let Ok(bytes) = std::fs::read(wav) else {
             self.discard("segment audio unreadable");
             return;
@@ -2480,25 +2510,7 @@ impl StreamingEngine {
         let acted = match outcome {
             Outcome::Fire { name, effect } => {
                 self.subtitle_fired(&hearing.words, &name);
-                match effect {
-                    Effect::Keys(combo) => {
-                        self.run_command(&crate::commands::Command::Keys(combo), &name)
-                            .await
-                    }
-                    Effect::Run(argv) => {
-                        let command = crate::commands::Command::Run {
-                            name: name.clone(),
-                            argv: argv.clone(),
-                        };
-                        self.run_program(&command, &argv, &name).await;
-                    }
-                    Effect::Colour(colour) => self.switch_to_colour(colour, &name).await,
-                    Effect::Leave => {
-                        crate::desktop::AudioFeedback::beep_done().ok();
-                        self.leave_command_mode();
-                    }
-                    Effect::Nothing | Effect::Wrong => {}
-                }
+                self.fire_effect(&name, effect).await;
                 true
             }
             Outcome::Taught(name) => {
@@ -2615,11 +2627,59 @@ impl StreamingEngine {
         }
     }
 
+    /// Do what a command-mode action does.
+    async fn fire_effect(&mut self, name: &str, effect: crate::command_mode::Effect) {
+        use crate::command_mode::Effect;
+        match effect {
+            Effect::Keys(combo) => {
+                self.run_command(&crate::commands::Command::Keys(combo), name)
+                    .await
+            }
+            Effect::Run(argv) => {
+                let command = crate::commands::Command::Run {
+                    name: name.to_string(),
+                    argv: argv.clone(),
+                };
+                self.run_program(&command, &argv, name).await;
+            }
+            Effect::Colour(colour) => self.switch_to_colour(colour, name).await,
+            Effect::Leave => {
+                crate::desktop::AudioFeedback::beep_done().ok();
+                self.leave_command_mode();
+            }
+            Effect::Chant => {
+                crate::desktop::AudioFeedback::beep_done().ok();
+                self.set_chant(None);
+            }
+            Effect::Agent(intent) => {
+                let program = self
+                    .mode
+                    .command_mut()
+                    .map(|m| m.agent.clone())
+                    .unwrap_or_default();
+                if intent.trim().is_empty() || program.is_empty() {
+                    info!("Agent: nothing to hand over (no words, and no miss before)");
+                    crate::desktop::AudioFeedback::beep_error().ok();
+                    return;
+                }
+                let mut argv = program;
+                argv.push(intent);
+                let command = crate::commands::Command::Run {
+                    name: name.to_string(),
+                    argv: argv.clone(),
+                };
+                self.run_program(&command, &argv, name).await;
+            }
+            Effect::Nothing | Effect::Wrong => {}
+        }
+    }
+
     /// Check if VAD is currently detecting speech
     pub fn is_speaking(&self) -> bool {
         self.vad_detector.is_speaking()
     }
 }
 
+mod chant;
 #[cfg(test)]
 mod tests;

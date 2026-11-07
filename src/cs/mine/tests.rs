@@ -489,6 +489,36 @@ fn routed_fires_and_chant_readings_are_evidence() {
 }
 
 #[test]
+fn a_chanted_breath_journals_its_other_readings() {
+    let readings = [
+        "clothes window".to_string(),
+        "close window".to_string(),
+        "Clothes window!".to_string(),
+        String::new(),
+    ];
+    let line = chant_line(Some("close-window"), "close window", true, &readings).unwrap();
+    assert_eq!(line.mode, "command");
+    assert_eq!(line.target.as_deref(), Some("action:close-window"));
+    assert_eq!(line.phrase.as_deref(), Some("close window"));
+    assert_eq!(line.via, None);
+    assert_eq!(line.alts, vec!["clothes window".to_string()]);
+    let p = mine(&[line.clone(), line], &params(2));
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].heard, "clothes window");
+    assert_eq!(p[0].evidence.get("chant"), Some(&2));
+
+    // Fired by the meters (sound, meaning): the action's name is the phrase.
+    let line = chant_line(Some("close-window"), "clothes window", false, &[]).unwrap();
+    assert_eq!(line.phrase.as_deref(), Some("close window"));
+    assert_eq!(line.via.as_deref(), Some("chant"));
+
+    // A miss is kept unmatched (retry evidence); a silent one not at all.
+    let miss = chant_line(None, "clothes window", false, &readings).unwrap();
+    assert!(!miss.is_matched());
+    assert!(chant_line(None, "", false, &readings).is_none());
+}
+
+#[test]
 fn failure_modes() {
     assert_eq!(classify("years off", "ears off"), FailureMode::Homophone);
     assert_eq!(

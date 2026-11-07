@@ -15,7 +15,10 @@
 # the last one back. Recordings start counting once there are four.
 #
 # Built in: `leave` (back to dictation), `none` (chatter: nothing happens),
-# `wrong`. An action here with the same name replaces the built-in.
+# `wrong`, `chant` (chant mode on or off: say it again until it lands) and
+# `agent` ("agent ..." hands what follows, or the last words that fired
+# nothing, to the `agent` program below). An action here with the same name
+# replaces the built-in.
 
 server = "http://localhost:30201"
 # Similarities are z-scored per anchor kind (text, your voice): how much
@@ -25,6 +28,8 @@ floor = 2.0
 # ...and beats every other action's nearest anchor by `margin`.
 margin = 0.4
 k = 5
+# The escape hatch: run with what you meant as one more argument.
+agent = ["ears-chant-agent"]
 
 [[action]]
 name = "enter"

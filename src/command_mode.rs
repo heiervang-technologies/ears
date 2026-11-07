@@ -19,8 +19,11 @@
 //! Design note: wiki "Embedding-Driven Voice Control".
 //!
 //! Built-in actions, always present: `leave` (back to dictation; "command"
-//! again), `none` (ordinary chatter, so it has somewhere to land) and
-//! `wrong` (forget the voice anchor the last firing added).
+//! again), `none` (ordinary chatter, so it has somewhere to land), `wrong`
+//! (forget the voice anchor the last firing added), `chant` (chanting on or
+//! off, [`crate::chant`]) and `agent`, the escape hatch for a missing
+//! command: "agent ..." hands what follows, or else the last words that
+//! fired nothing, to the `agent` program of `actions.toml`.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -82,6 +85,14 @@ pub struct ActionsFile {
     pub k: usize,
     #[serde(default, rename = "action")]
     pub actions: Vec<ActionSpec>,
+    /// The `agent` action runs this with what you meant as one more
+    /// argument.
+    #[serde(default = "default_agent")]
+    pub agent: Vec<String>,
+}
+
+fn default_agent() -> Vec<String> {
+    vec!["ears-chant-agent".into()]
 }
 
 fn default_server() -> String {
@@ -134,6 +145,11 @@ pub enum Effect {
     Wrong,
     /// Switch to the mode of a colour word ([`crate::colour_mode`]).
     Colour(crate::colour_mode::Colour),
+    /// Chanting on or off ([`crate::chant`]).
+    Chant,
+    /// Hand what was meant to an agent: the words after "agent", else the
+    /// last words that fired nothing ("" when there are none).
+    Agent(String),
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +216,25 @@ fn builtins() -> Vec<Action> {
                 "that's not what I meant",
             ],
         ),
+        Action {
+            exact: true,
+            ..a("chant", Effect::Chant, crate::chant::PHRASES)
+        },
+        Action {
+            exact: true,
+            rest: true,
+            ..a(
+                "agent",
+                Effect::Agent(String::new()),
+                &[
+                    "agent",
+                    "send to agent",
+                    "ask the agent",
+                    "tell the agent",
+                    "ask agent",
+                ],
+            )
+        },
     ]
 }
 
@@ -857,6 +892,10 @@ pub struct CommandMode {
     voice: VoiceAnchors,
     /// The voice anchor the last firing added, for `wrong`.
     last_auto: Option<VoiceAnchor>,
+    /// The `agent` program ([`ActionsFile::agent`]).
+    pub agent: Vec<String>,
+    /// The last words that fired nothing, for `agent`.
+    pub last_miss: Option<String>,
 }
 
 /// What an utterance in command mode came to.
@@ -984,6 +1023,17 @@ pub fn write_last(state_dir: &Path, record: &impl Serialize) {
         state_dir.join(LAST),
         serde_json::to_vec(record).unwrap_or_default(),
     );
+}
+
+/// The chant so far, as [`CommandMode::chant_hear`] heard it.
+#[derive(Debug, Clone, Default)]
+pub struct ChantHearing {
+    /// What it repeats (folded words), "" without words.
+    pub heard: String,
+    /// The action those words name, and a `rest` action's argument.
+    pub named: Option<(usize, Option<String>)>,
+    pub audio: Option<Decision>,
+    pub meaning: Option<Decision>,
 }
 
 /// Lowercase words, punctuation and filler gone: "Press Enter." -> "press enter".
@@ -1187,6 +1237,8 @@ impl CommandMode {
             paths,
             voice,
             last_auto: None,
+            agent: file.agent,
+            last_miss: None,
         })
     }
 
@@ -1294,18 +1346,14 @@ impl CommandMode {
         hearing.by = by;
         let Some(i) = fire else {
             hearing.nearest = nearest(&hearing);
+            self.missed(words);
             self.write_last(&hearing);
             return (Outcome::Nothing, hearing);
         };
         self.write_last(&hearing);
         let action = self.router.actions[i].clone();
-        let effect = match (action.effect, &rest) {
-            (Effect::Run(mut argv), Some((r, arg))) if action.rest && *r == i => {
-                argv.push(arg.clone());
-                Effect::Run(argv)
-            }
-            (effect, _) => effect,
-        };
+        let arg = rest.filter(|r| r.0 == i).map(|r| r.1);
+        let effect = self.effect(i, arg);
         let outcome = match effect {
             Effect::Wrong => {
                 let forgotten = self.last_auto.take().map(|anchor| {
@@ -1340,6 +1388,60 @@ impl CommandMode {
             }
         };
         (outcome, hearing)
+    }
+
+    /// What firing action `i` does, given the words after its phrasing
+    /// (`rest` actions): a `run` gets them as one more argument; `agent`
+    /// takes them as what was meant, else the last miss.
+    pub fn effect(&self, i: usize, rest: Option<String>) -> Effect {
+        let action = &self.router.actions[i];
+        match (action.effect.clone(), rest) {
+            (Effect::Run(mut argv), Some(arg)) if action.rest => {
+                argv.push(arg);
+                Effect::Run(argv)
+            }
+            (Effect::Agent(_), rest) => Effect::Agent(
+                rest.filter(|r| !r.trim().is_empty())
+                    .or_else(|| self.last_miss.clone())
+                    .unwrap_or_default(),
+            ),
+            (effect, _) => effect,
+        }
+    }
+
+    /// Keep words that fired nothing for the `agent` action.
+    pub fn missed(&mut self, words: &str) {
+        let words = words.trim();
+        if !plain(words).is_empty() {
+            self.last_miss = Some(words.to_string());
+        }
+    }
+
+    /// Hear the chant so far, without acting or learning: its folded words,
+    /// the action they name, and the votes on the audio and on their
+    /// meaning (skipped when the words name an action). Until the text
+    /// anchors are in ([`CommandMode::ready`]) it goes by the words alone:
+    /// no meaning is asked of the embedding server, busy with the load.
+    pub async fn chant_hear(&mut self, audio: Option<&[f32]>, words: &str) -> ChantHearing {
+        let ready = self.ready();
+        let units = crate::chant::units(words);
+        let named = crate::chant::by_words(&self.router, &units);
+        let meaning = match (&named, units.first()) {
+            (None, Some(unit)) if ready => match self.embedder.text(unit).await {
+                Ok(v) => Some(self.router.decide(&v)),
+                Err(e) => {
+                    tracing::debug!("Chant: cannot embed {:?}: {}", unit, e);
+                    None
+                }
+            },
+            _ => None,
+        };
+        ChantHearing {
+            heard: units.first().cloned().unwrap_or_default(),
+            named,
+            audio: audio.map(|u| self.router.decide(u)),
+            meaning,
+        }
     }
 
     fn write_last(&self, hearing: &Hearing) {

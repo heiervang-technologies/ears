@@ -42,10 +42,21 @@ pub enum ModeKind {
     Vision,
 }
 
-/// Command mode's state while it is on. Sub-states of command mode go here
-/// (chanting, ears#264), so they end when command mode does.
+/// Command mode's state while it is on. Sub-states of command mode go here,
+/// so they end when command mode does.
 pub struct CommandState {
     pub mode: crate::command_mode::CommandMode,
+    /// Chanting ([`crate::chant`]): command mode with fading per-action
+    /// meters that fire mid-chant. Leaving command mode drops it, and with
+    /// it its files for the light ([`crate::chant::ChantState`]).
+    pub chant: Option<crate::chant::ChantState>,
+}
+
+impl CommandState {
+    /// Command mode, not chanting.
+    pub fn new(mode: crate::command_mode::CommandMode) -> Self {
+        Self { mode, chant: None }
+    }
 }
 
 /// The mode VAD is in.
@@ -90,6 +101,19 @@ impl Mode {
             Mode::Command(state) => Some(&mut state.mode),
             _ => None,
         }
+    }
+
+    /// Command mode's whole state (with its sub-states), while it is on.
+    pub fn command_state_mut(&mut self) -> Option<&mut CommandState> {
+        match self {
+            Mode::Command(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// Whether command mode is on and chanting.
+    pub fn is_chanting(&self) -> bool {
+        matches!(self, Mode::Command(state) if state.chant.is_some())
     }
 }
 
