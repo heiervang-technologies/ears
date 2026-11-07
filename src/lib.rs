@@ -22,6 +22,7 @@ pub mod config;
 
 // Iteration 2: State management and process control
 pub mod lock;
+pub mod log_rotate;
 pub mod mic_check;
 pub mod pcm;
 pub mod process;
