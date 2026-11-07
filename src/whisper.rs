@@ -335,8 +335,47 @@ impl WhisperClient {
         grammar: Option<&str>,
         verify: bool,
     ) -> Result<String, WhisperError> {
-        let path = audio_path.as_ref();
+        self.checked(audio_path.as_ref(), grammar, verify, self.prompt.as_deref())
+            .await
+    }
 
+    /// Transcribe with `context` (the phrases the caller listens for, see
+    /// [`crate::cs::context`]) as the prompt in place of the configured one.
+    /// With a context the model sometimes hears nothing in a short phrase it
+    /// gets right without one, or writes the context out: then the audio is
+    /// transcribed again as by [`Self::transcribe_checked`]. Without a
+    /// context this is [`Self::transcribe_checked`].
+    pub async fn transcribe_with_context(
+        &self,
+        audio_path: impl AsRef<Path>,
+        verify: bool,
+        context: Option<&str>,
+    ) -> Result<String, WhisperError> {
+        let path = audio_path.as_ref();
+        let Some(context) = context else {
+            return self.transcribe_checked(path, None, verify).await;
+        };
+        match self.checked(path, None, verify, Some(context)).await {
+            Ok(text) if !crate::cs::context::is_echo(&text, context) => return Ok(text),
+            Ok(text) => info!(
+                "The ASR wrote out the context ({:?}); again without it",
+                text
+            ),
+            Err(WhisperError::EmptyTranscription) => {
+                debug!("Nothing heard with the context; again without it")
+            }
+            Err(e) => return Err(e),
+        }
+        self.transcribe_checked(path, None, verify).await
+    }
+
+    async fn checked(
+        &self,
+        path: &Path,
+        grammar: Option<&str>,
+        verify: bool,
+        prompt: Option<&str>,
+    ) -> Result<String, WhisperError> {
         // Validate audio file exists and has content
         self.validate_audio_file(path).await?;
 
@@ -349,7 +388,7 @@ impl WhisperClient {
         let text = (|| async {
             match grammar {
                 Some(g) => self.transcribe_chat_internal(path, g).await,
-                None => self.transcribe_internal(path).await,
+                None => self.transcribe_internal(path, prompt).await,
             }
         })
         .retry(self.create_backoff())
@@ -466,7 +505,7 @@ impl WhisperClient {
         let attempt = async {
             match grammar {
                 Some(g) => self.transcribe_chat_internal(path, g).await,
-                None => self.transcribe_internal(path).await,
+                None => self.transcribe_internal(path, self.prompt.as_deref()).await,
             }
         };
         let text = tokio::time::timeout(deadline, attempt)
@@ -507,7 +546,11 @@ impl WhisperClient {
     }
 
     /// Internal transcription logic without retry
-    async fn transcribe_internal(&self, path: &Path) -> Result<String, WhisperError> {
+    async fn transcribe_internal(
+        &self,
+        path: &Path,
+        prompt: Option<&str>,
+    ) -> Result<String, WhisperError> {
         let start = std::time::Instant::now();
         let base = self.server_url.trim_end_matches('/');
         let url = format!("{}/v1/audio/transcriptions", base);
@@ -539,9 +582,9 @@ impl WhisperClient {
         }
 
         // Add prompt for context biasing (entity names, acronyms, etc.)
-        if let Some(ref prompt) = self.prompt {
+        if let Some(prompt) = prompt.filter(|p| !p.trim().is_empty()) {
             debug!("Using prompt: {}", prompt);
-            form = form.text("prompt", prompt.clone());
+            form = form.text("prompt", prompt.to_string());
         }
 
         // Send request
@@ -1019,6 +1062,91 @@ mod tests {
         let client = WhisperClient::new(server.uri()).with_language(Some("en".into()));
         let wav = wav_file();
         assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Stop.");
+    }
+
+    /// A server that answers `with` when the request carries a prompt and
+    /// `without` otherwise.
+    async fn context_server(with: &str, without: &str) -> wiremock::MockServer {
+        use wiremock::matchers::{body_string_contains, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = no_speech_server(without, "language English<asr_text>Enter.").await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .and(body_string_contains("name=\"prompt\""))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": with})),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn prompts(requests: &[wiremock::Request]) -> Vec<bool> {
+        requests
+            .iter()
+            .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+            .map(|r| String::from_utf8_lossy(&r.body).contains("name=\"prompt\""))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn context_result_is_kept() {
+        let server = context_server("Close window.", "Clothes window.").await;
+        let client = WhisperClient::new(server.uri());
+        let wav = wav_file();
+        let text = client
+            .transcribe_with_context(wav.path(), false, Some("enter, close window"))
+            .await
+            .unwrap();
+        assert_eq!(text, "Close window.");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(prompts(&requests), [true]);
+        let body = String::from_utf8_lossy(&requests[0].body).to_string();
+        assert!(body.contains("enter, close window"));
+    }
+
+    #[tokio::test]
+    async fn empty_with_context_falls_back_to_without() {
+        let server = context_server("", "Enter.").await;
+        let client = WhisperClient::new(server.uri());
+        let wav = wav_file();
+        let text = client
+            .transcribe_with_context(wav.path(), false, Some("enter, close window"))
+            .await
+            .unwrap();
+        assert_eq!(text, "Enter.");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(prompts(&requests), [true, false]);
+    }
+
+    #[tokio::test]
+    async fn echoed_context_falls_back_to_without() {
+        let server = context_server("Enter, close window, ears on.", "Enter.").await;
+        let client = WhisperClient::new(server.uri());
+        let wav = wav_file();
+        let text = client
+            .transcribe_with_context(wav.path(), false, Some("enter, close window, ears on"))
+            .await
+            .unwrap();
+        assert_eq!(text, "Enter.");
+    }
+
+    #[tokio::test]
+    async fn no_context_sends_the_configured_prompt() {
+        let server = context_server("Hyprland.", "Hyper land.").await;
+        let wav = wav_file();
+        let plain = WhisperClient::new(server.uri());
+        let text = plain
+            .transcribe_with_context(wav.path(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(text, "Hyper land.");
+        let prompted = WhisperClient::new(server.uri()).with_prompt(Some("Hyprland".into()));
+        let text = prompted
+            .transcribe_with_context(wav.path(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(text, "Hyprland.");
     }
 
     #[tokio::test]

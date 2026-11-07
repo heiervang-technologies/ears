@@ -476,6 +476,12 @@ impl StreamingEngine {
             return false;
         }
         self.ghost_stream_link();
+        // The mode's phrases as context, worked out once per utterance.
+        let starting = self
+            .ghost
+            .as_ref()
+            .is_some_and(|g| !matches!(g.streamed, Some(s) if s.utterance == g.utterance));
+        let context = if starting { self.asr_context() } else { None };
         let grammar = self.guided_grammar.clone();
         let muted = self.typing_mode == TypingMode::None;
         let samples = if self.vad_detector.is_speaking() {
@@ -514,11 +520,13 @@ impl StreamingEngine {
             Some(s) if s.utterance == ghost.utterance => s,
             _ => {
                 ghost.stream_id += 1;
+                let base = crate::stream_client::StartParams::from_spec(spec);
                 session.start(
                     ghost.stream_id,
                     &crate::stream_client::StartParams {
                         grammar,
-                        ..crate::stream_client::StartParams::from_spec(spec)
+                        context: context.or(base.context.clone()),
+                        ..base
                     },
                 );
                 Streamed {
@@ -772,13 +780,22 @@ impl StreamingEngine {
             return;
         }
         let samples = samples.to_vec();
+        // A new per-tick decoder gets the mode's phrases as context.
+        let context = if continuous && self.ghost.as_ref().is_some_and(|g| g.decoder.is_none()) {
+            self.asr_context()
+        } else {
+            None
+        };
 
         let ghost = self.ghost.as_mut().expect("checked above");
         if continuous {
             let spec = self.continuous.as_ref().expect("checked above");
             // After a lost stream, carry on from what it settled.
             let mut decoder = ghost.decoder.take().unwrap_or_else(|| {
-                let fresh = spec.decoder();
+                let fresh = match context {
+                    Some(context) => spec.decoder().with_context(Some(context)),
+                    None => spec.decoder(),
+                };
                 match ghost.stream_state.take() {
                     Some(state) => fresh.resume(state),
                     None => fresh,

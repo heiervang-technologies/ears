@@ -1,0 +1,55 @@
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 0, "heard": "No.", "seconds": 0.0594}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 757, "heard": "", "seconds": 0.0433}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 1021, "heard": "", "seconds": 0.0385}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 0, "heard": "", "seconds": 0.039}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 757, "heard": "", "seconds": 0.0386}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["silence"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5765}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 0, "heard": "", "seconds": 0.0399}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 757, "heard": "", "seconds": 0.0397}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 1021, "heard": "", "seconds": 0.04}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 0, "heard": "", "seconds": 0.04}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 757, "heard": "", "seconds": 0.0396}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-quiet"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5715}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 0, "heard": "", "seconds": 0.0513}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 757, "heard": "", "seconds": 0.0395}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 1021, "heard": "", "seconds": 0.04}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 0, "heard": "", "seconds": 0.0401}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 757, "heard": "", "seconds": 0.0401}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["white-loud"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5721}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 0, "heard": "", "seconds": 0.0485}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 757, "heard": "", "seconds": 0.0406}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 1021, "heard": "", "seconds": 0.041}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 0, "heard": "", "seconds": 0.0421}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 757, "heard": "", "seconds": 0.0441}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["pink"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5723}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 0, "heard": "", "seconds": 0.0457}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 757, "heard": "", "seconds": 0.0397}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 1021, "heard": "", "seconds": 0.0401}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 0, "heard": "", "seconds": 0.0401}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 757, "heard": "", "seconds": 0.0395}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["brown"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5776}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 0, "heard": "", "seconds": 0.046}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 757, "heard": "", "seconds": 0.0395}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 1021, "heard": "", "seconds": 0.0405}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 0, "heard": "", "seconds": 0.041}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 757, "heard": "", "seconds": 0.0405}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["hum"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5748}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 0, "heard": "", "seconds": 0.0452}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 757, "heard": "", "seconds": 0.04}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 1021, "heard": "", "seconds": 0.0401}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 0, "heard": "", "seconds": 0.0402}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 757, "heard": "", "seconds": 0.0394}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["beep"], "context_chars": 757, "heard": "Ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan", "seconds": 0.5762}
+{"path": "http", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 0, "heard": "", "seconds": 0.0412}
+{"path": "http", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 757, "heard": "", "seconds": 0.034}
+{"path": "http", "cond": "cap1024", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 1021, "heard": "", "seconds": 0.0343}
+{"path": "chat", "cond": "none", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 0, "heard": "", "seconds": 0.0347}
+{"path": "chat", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 757, "heard": "", "seconds": 0.034}
+{"path": "forced", "cond": "list", "voice": "noise", "kind": "noise", "forms": ["short-white"], "context_chars": 757, "heard": "ears on, ears off, hey clanker, listen clanker, fuck off clanker, ears help, regular mode, talking stick, show commands, talk to centurion, cursor mode, new line, scratch that, backtrack, over and out, peace out, literal, enter, command, wrong, pause the music, next track, previous track, volume up, turn it down, full screen, close window, scroll to the top, zoom in, pan left", "seconds": 0.5642}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 757, "heard": "Ears on.", "seconds": 0.0449}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 757, "heard": "Ears off.", "seconds": 0.0455}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 757, "heard": "Ears held.", "seconds": 0.0456}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 757, "heard": "Over and out.", "seconds": 0.0458}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 757, "heard": "Enter.", "seconds": 0.0292}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 757, "heard": "Run.", "seconds": 0.0349}
+{"path": "forced", "cond": "list", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 757, "heard": "Close window.", "seconds": 0.04}

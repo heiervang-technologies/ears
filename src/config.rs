@@ -326,6 +326,9 @@ pub struct Config {
     /// Dropping agents' `say` lines the mic picked up (`[say_echo]`).
     #[serde(default)]
     pub say_echo: crate::say_echo::SayEchoConfig,
+    /// Compensating scaffolding (`[cs]`, RFC 0002).
+    #[serde(default)]
+    pub cs: CsConfig,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
     pub config_dir: PathBuf,
@@ -335,6 +338,36 @@ pub struct Config {
     /// State directory (computed, not stored)
     #[serde(skip)]
     pub state_dir: PathBuf,
+}
+
+/// `[cs]`: compensating scaffolding (RFC 0002).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CsConfig {
+    /// In command mode and standby, pass the phrases that mode listens for
+    /// to the ASR as context (see [`crate::cs::context`]). Never in
+    /// dictation. Measured in `experiments/cs-context/`.
+    #[serde(default = "default_cs_context")]
+    pub context: bool,
+    /// Longest context, in characters; whole phrases only, in priority order.
+    #[serde(default = "default_cs_context_chars")]
+    pub context_chars: usize,
+}
+
+impl Default for CsConfig {
+    fn default() -> Self {
+        Self {
+            context: default_cs_context(),
+            context_chars: default_cs_context_chars(),
+        }
+    }
+}
+
+fn default_cs_context() -> bool {
+    true
+}
+
+fn default_cs_context_chars() -> usize {
+    crate::cs::context::DEFAULT_CAP
 }
 
 impl Config {
@@ -392,6 +425,7 @@ impl Config {
             live_decoding: LiveDecoding::default(),
             vision: Default::default(),
             say_echo: Default::default(),
+            cs: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
@@ -553,6 +587,7 @@ impl Config {
             live_decoding: LiveDecoding::default(),
             vision: Default::default(),
             say_echo: Default::default(),
+            cs: Default::default(),
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
