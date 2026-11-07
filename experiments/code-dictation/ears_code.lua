@@ -27,6 +27,7 @@
 -- All phrases are configurable in ~/.config/ears/code.toml.
 local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/"
 local PARTIAL_MS = 500
+local MAX_RECORD_S = "300"
 local ns = vim.api.nvim_create_namespace("ears_code")
 vim.api.nvim_set_hl(0, "EarsGhost", { fg = "#ffcc33", italic = true, default = true })
 vim.api.nvim_set_hl(0, "EarsHeard", { link = "Comment", default = true })
@@ -142,9 +143,9 @@ local function insert_lines(lines)
   return row
 end
 
-local function dictate(on_done, nbest, lang_, wav, scope)
+local function dictate(on_done, flag, lang_, wav, scope)
   local cmd = { "python3", here .. "dictate.py", lang_ or state.lang, wav or state.wav, scope or state.scope }
-  if nbest then table.insert(cmd, 3, "--nbest") end
+  if flag then table.insert(cmd, 3, flag) end
   vim.system(cmd, { text = true, cwd = here }, vim.schedule_wrap(function(out)
     if out.code ~= 0 then return on_done(nil, out.stderr) end
     on_done(vim.json.decode(out.stdout))
@@ -176,7 +177,7 @@ local function partial()
   dictate(function(result)
     state.busy = false
     if state.rec and result then ghost(result.code, result.heard) end
-  end)
+  end, "--partial")
 end
 
 local function stop()
@@ -201,7 +202,7 @@ local function stop()
           os.remove(wav)
           os.remove(scope)
           if nbest then offer(buf, row, tick, result.code, nbest.alternatives) end
-        end, true, l, wav, scope)
+        end, "--nbest", l, wav, scope)
         return
       end
     end
@@ -214,7 +215,9 @@ local function toggle()
   if state.rec then return stop() end
   state.buf, state.lang, state.scope = vim.api.nvim_get_current_buf(), lang(), scope_file()
   state.wav = vim.fn.tempname() .. ".wav"
-  local cmd = { "pw-record", "--rate", "16000", "--channels", "1", "--format", "s16" }
+  -- The cap bounds a recorder that outlives a Neovim killed too hard for
+  -- VimLeavePre (it would hold the mic and fill tmpfs otherwise).
+  local cmd = { "timeout", "-s", "INT", MAX_RECORD_S, "pw-record", "--rate", "16000", "--channels", "1", "--format", "s16" }
   local dev = device()
   if dev then vim.list_extend(cmd, { "--target", dev }) end
   table.insert(cmd, state.wav)
@@ -728,6 +731,17 @@ vim.api.nvim_create_autocmd("FocusLost", { group = group, callback = function() 
 vim.api.nvim_create_autocmd({ "BufEnter", "FileType", "ModeChanged" }, { group = group, callback = function() resolve() end })
 listen()
 vim.defer_fn(resolve, 300)
+
+-- Never leave the recorder behind: quitting, or loading this file again.
+local function kill_recorder()
+  if not state.rec then return end
+  pcall(function() state.timer:stop(); state.timer:close() end)
+  state.rec:kill("sigint")
+  state.rec = nil
+end
+if _G.ears_code_kill_recorder then _G.ears_code_kill_recorder() end
+_G.ears_code_kill_recorder = kill_recorder
+vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = kill_recorder })
 
 vim.keymap.set({ "n", "i" }, "<M-v>", toggle, { desc = "ears: dictate code" })
 

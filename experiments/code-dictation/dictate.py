@@ -1,6 +1,6 @@
 """Transcribe a WAV with names in scope as context, then translate to code.
 
-Usage: python dictate.py [--nbest] LANG WAV [SCOPE_FILE]
+Usage: python dictate.py [--nbest|--partial] LANG WAV [SCOPE_FILE]
        python dictate.py --text LANG TEXT [SCOPE_FILE]
        python dictate.py --serve   (JSON lines in and out, for the VAD path)
 LANG is py, sh or text. Prints JSON: {"heard": ..., "code": ..., "alternatives":
@@ -16,13 +16,18 @@ import tempfile
 from probe import asr, asr_nbest
 from spoken import bash_line, code_lines, insert_keys, normal_keys, python_line
 
-def repaired(path):
+PARTIAL_TAIL_S = 15  # a partial decodes only the end: cost stays flat as the clip grows
+
+
+def repaired(path, tail_s=None):
     """pw-record fills in the WAV sizes only on exit; rebuild the header so a
     recording still in progress can be sent as a partial."""
     raw = open(path, "rb").read()
     at = raw.find(b"data")
     pcm = raw[at + 8:] if at >= 0 else b""
     pcm = pcm[: len(pcm) // 2 * 2]
+    if tail_s:
+        pcm = pcm[-int(tail_s * 32000):]
     # One file per run: a partial and the final can read the same recording
     # at once, and must not delete each other's copy.
     fd, out = tempfile.mkstemp(suffix=".wav", dir=os.path.dirname(path))
@@ -54,9 +59,10 @@ if sys.argv[1] == "--text":  # translate only: python dictate.py --text LANG TEX
     sys.exit(0)
 
 nbest = "--nbest" in sys.argv
-args = [a for a in sys.argv[1:] if a != "--nbest"]
+partial = "--partial" in sys.argv
+args = [a for a in sys.argv[1:] if a not in ("--nbest", "--partial")]
 lang, wav = args[0], args[1]
-wav, seconds = repaired(wav)
+wav, seconds = repaired(wav, PARTIAL_TAIL_S if partial else None)
 if seconds < 0.3:
     os.remove(wav)
     print(json.dumps({"heard": "", "code": ""}))
