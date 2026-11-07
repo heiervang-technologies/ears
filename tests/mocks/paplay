@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Mock paplay for testing - does nothing (avoids playing sounds)
-exit 0

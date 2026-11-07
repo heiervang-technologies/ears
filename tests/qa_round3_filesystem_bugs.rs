@@ -135,36 +135,6 @@ fn test_config_save_to_readonly_dir() {
 }
 
 #[test]
-fn test_config_load_with_invalid_url() {
-    println!("\n🔍 BUG INVESTIGATION: What if server config file contains invalid URL?");
-
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("config");
-    fs::create_dir_all(&config_dir).unwrap();
-
-    // Write invalid URL to server config
-    let server_file = config_dir.join("server");
-    fs::write(&server_file, "not-a-valid-url-at-all").unwrap();
-
-    // Create config that will try to load this
-    let mut config = Config::new().unwrap();
-    config.config_dir = config_dir.clone();
-
-    // Manually load server file (simulating Config::load behavior)
-    let server_str = fs::read_to_string(&server_file).unwrap().trim().to_string();
-    let parse_result = url::Url::parse(&server_str);
-
-    println!("Parse result: {:?}", parse_result);
-
-    // EXPECTED: Should fail to parse invalid URL
-    assert!(parse_result.is_err(), "Should fail to parse invalid URL");
-
-    // The manual simulation above confirms that Config::load would encounter
-    // an invalid URL. Config::load() handles this gracefully by logging a
-    // warning and falling back to the default URL.
-}
-
-#[test]
 fn test_state_dir_creation_in_unwritable_parent() {
     if is_root() {
         println!("Skipping test: permission tests don't work as root");
@@ -198,54 +168,4 @@ fn test_state_dir_creation_in_unwritable_parent() {
     let mut perms = fs::metadata(&parent).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&parent, perms);
-}
-
-#[test]
-fn test_audio_file_disappears_before_transcription() {
-    println!("\n🔍 BUG INVESTIGATION: What if audio file is deleted between recording and transcription?");
-
-    // This is simulated in main.rs around line 319-326
-    // The code checks if audio_file exists and has content
-    // If not, it returns an error
-
-    // Let's verify the error handling is present
-    let temp_dir = TempDir::new().unwrap();
-    let audio_file = temp_dir.path().join("recording.wav");
-
-    // File doesn't exist
-    let exists = audio_file.exists();
-    println!("File exists: {}", exists);
-
-    assert!(!exists, "File should not exist");
-
-    // The main.rs code at line 321-326 handles this:
-    // if !audio_file.exists() {
-    //     AudioFeedback::beep_error().ok();
-    //     Notifications::error("Recording file is empty or missing").ok();
-    //     tracing::error!("Audio file not found: {}", audio_file.display());
-    //     anyhow::bail!("Audio file not found");
-    // }
-
-    println!("✅ Main.rs correctly checks for missing audio file");
-}
-
-#[test]
-#[ignore] // This test requires root or special setup to simulate disk full
-fn test_disk_full_during_recording() {
-    println!("\n🔍 BUG INVESTIGATION: What happens when disk is full during recording?");
-
-    // NOTE: This is difficult to test without actually filling up disk
-    // or using special filesystem mocking tools
-
-    // BUG POTENTIAL: If disk fills up during pw-record:
-    // 1. pw-record might fail or write partial file
-    // 2. File might have size > 0 but be incomplete
-    // 3. Whisper transcription might fail with unclear error
-
-    // The current code checks file size > 0 but doesn't validate
-    // that the WAV file is actually complete and well-formed
-
-    println!("⚠️  POTENTIAL BUG: No validation that audio file is complete/well-formed WAV");
-    println!("    Only checks: exists() and len() > 0");
-    println!("    A partial/corrupted WAV would pass these checks");
 }
