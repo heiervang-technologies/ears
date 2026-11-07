@@ -2518,13 +2518,14 @@ async fn test_a_whole_command_ends_the_utterance_at_a_short_pause() {
     assert_eq!(after("Next window."), 160);
     // The prefix guard: the start of a longer phrase keeps its old wait.
     assert_eq!(after("Over."), 416);
-    assert_eq!(after("Next."), 704);
-    assert_eq!(after("Call Moon."), 704);
+    // Command mode never waits for a finished sentence: 400 at most.
+    assert_eq!(after("Next."), 416);
+    assert_eq!(after("Call Moon."), 416);
     // A run command ends like a key command: its phrase may take more words.
     assert_eq!(after("Hey friend"), 416);
     assert_eq!(after("Ship it over"), 416);
     assert_eq!(after("Ship it."), 704);
-    assert_eq!(after("Could you close it"), 1216);
+    assert_eq!(after("Could you close it"), 416);
     // Nothing that was not a whole command changed.
     for (_, partial, _, was) in rows.iter().filter(|r| r.2) {
         if after(partial) != 160 {
@@ -2695,6 +2696,117 @@ async fn test_a_pause_that_read_finished_is_tracked() {
     }
     assert!(ended);
     assert_eq!(engine.pause, None);
+}
+
+/// Frames of silence (32 ms each) before VAD ends an utterance with no
+/// live reading at all.
+fn silence_only_to_end(engine: &mut StreamingEngine) -> u64 {
+    feed(engine, &[0.9, 0.9, 0.9, 0.9]);
+    engine.ending = None;
+    let mut frames = 0;
+    loop {
+        frames += 1;
+        let outcome = engine.vad_detector.inject_probability(0.0);
+        if engine.handle_vad_outcome(outcome).is_some() {
+            break;
+        }
+        engine.aim_early_end();
+        assert!(frames < 200, "never ended");
+    }
+    engine.ghost.as_mut().unwrap().next_utterance();
+    frames * 32
+}
+
+/// Command mode is not streamed, so it has no reading: it ends after
+/// `command_silence_ms`, not `max_silence_duration_ms` (live 15:16-15:27
+/// on 2026-11-15: "Open files.", "Scroll down." waited 1500 ms).
+#[tokio::test]
+async fn test_command_mode_without_a_reading_ends_at_command_silence() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    assert_eq!(
+        silence_only_to_end(&mut engine),
+        1216,
+        "dictation as before"
+    );
+    let paths = latency_paths(dir.path(), "http://127.0.0.1:9");
+    engine.command_paths = Some(paths.clone());
+    let mode = crate::command_mode::CommandMode::start_loading(paths).unwrap();
+    engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
+        crate::vad_mode::CommandState::new(mode),
+    )));
+    assert_eq!(silence_only_to_end(&mut engine), 416);
+    assert_eq!(engine.early_end, None);
+    // A chant still waits the breath out.
+    engine.set_chant(Some(true));
+    assert_eq!(silence_only_to_end(&mut engine), 1216);
+}
+
+/// Open a decision for `engine` (this process is the asker, so it lives).
+fn open_decision(engine: &mut StreamingEngine, dir: &std::path::Path, other: bool) {
+    let decision = serde_json::json!({
+        "id": "d1", "question": "Ship it?", "options": ["yes", "no"],
+        "pid": std::process::id(), "other": other,
+    });
+    std::fs::write(dir.join(crate::decide::FILE), decision.to_string()).unwrap();
+    engine.set_decisions_dir(dir);
+    assert!(engine.deciding());
+}
+
+/// Frames of silence before an utterance ends while a decision is open,
+/// its live transcript `partial` (None: no reading).
+fn decision_silence_to_end(engine: &mut StreamingEngine, partial: Option<&str>) -> u64 {
+    feed(engine, &[0.9, 0.9, 0.9, 0.9]);
+    engine.ending = None;
+    if let Some(partial) = partial {
+        let ghost = engine.ghost.as_mut().unwrap();
+        let u = ghost.utterance;
+        ghost
+            .partial_tx
+            .send(Partial::streamed(u, partial.into(), 0))
+            .unwrap();
+        engine.decide_listen(false);
+    }
+    let mut frames = 0;
+    loop {
+        frames += 1;
+        let outcome = engine.vad_detector.inject_probability(0.0);
+        if engine.handle_vad_outcome(outcome).is_some() {
+            break;
+        }
+        engine.aim_early_end();
+        assert!(frames < 200, "never ended");
+    }
+    engine.ghost.as_mut().unwrap().next_utterance();
+    frames * 32
+}
+
+/// An open decision never waits `max_silence_duration_ms`: an option said
+/// whole ends it at the exact wait, anything else after `command_silence_ms`;
+/// with room for an answer of your own, a whole option after
+/// `command_silence_ms` ("yes, but later" may go on) and free text by the
+/// dictation rule.
+#[tokio::test]
+async fn test_decision_answers_end_at_short_pauses() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    engine.set_mode(crate::vad_mode::Mode::Dictation);
+    open_decision(&mut engine, dir.path(), false);
+    let end = |e: &mut StreamingEngine, p| decision_silence_to_end(e, p);
+    assert_eq!(end(&mut engine, Some("Yes.")), 160);
+    assert_eq!(end(&mut engine, Some("Two.")), 160);
+    assert_eq!(end(&mut engine, Some("Cancel.")), 160);
+    assert_eq!(end(&mut engine, Some("I think yes but")), 416);
+    assert_eq!(end(&mut engine, None), 416);
+
+    open_decision(&mut engine, dir.path(), true);
+    assert_eq!(end(&mut engine, Some("Yes.")), 416);
+    assert_eq!(end(&mut engine, Some("Let's wait until tomorrow.")), 704);
+    assert_eq!(end(&mut engine, Some("Let's wait until")), 704);
+    assert_eq!(end(&mut engine, None), 704);
+    with_early_finish(&mut engine, 350);
+    assert_eq!(end(&mut engine, Some("Let's wait until tomorrow.")), 352);
+    assert_eq!(end(&mut engine, Some("Let's wait until")), 704);
 }
 
 /// A chant is not cut at its first pause: no early end while chanting, so

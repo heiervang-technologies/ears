@@ -156,6 +156,26 @@ const ORDINALS: &[&[&str]] = &[
 ];
 
 impl Decision {
+    /// Whether `transcript` is, all of it, one way of choosing: an option,
+    /// a known mishearing of one, its number, or cancel. Not an option
+    /// within a sentence or the start of one: words may still be coming.
+    /// For ending the utterance at a short pause.
+    pub fn is_whole(&self, transcript: &str) -> bool {
+        let said = crate::commands::normalize(transcript);
+        if said.is_empty() {
+            return false;
+        }
+        let option = |i: usize| crate::commands::normalize(&self.options[i]);
+        (0..self.options.len()).any(|i| option(i) == said)
+            || CANCEL.contains(&said.as_str())
+            || (!self.exact
+                && (self.heard_as.iter().any(|(h, _)| *h == said)
+                    || ORDINALS
+                        .iter()
+                        .take(self.options.len())
+                        .any(|words| words.contains(&said.as_str()))))
+    }
+
     /// Match what was said against the options: the option itself, its
     /// number, the option within a sentence, or enough of its start.
     pub fn hear(&self, transcript: &str) -> Heard {
@@ -404,6 +424,34 @@ pub async fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_whole_choice_is_an_option_its_number_or_cancel() {
+        let mut d = Decision {
+            id: "d".into(),
+            question: "Ship it?".into(),
+            options: vec!["Deploy now".into(), "no".into()],
+            pid: 1,
+            opened_ms: None,
+            timeout_ms: None,
+            other: false,
+            exact: false,
+            heard_as: vec![("deploy now please".into(), 0)],
+        };
+        assert!(d.is_whole("Deploy now."));
+        assert!(d.is_whole("No"));
+        assert!(d.is_whole("the second one"));
+        assert!(d.is_whole("Skip."));
+        assert!(d.is_whole("Deploy now, please."));
+        // Within a sentence, or the start of one: words may be coming.
+        assert!(!d.is_whole("no but later"));
+        assert!(!d.is_whole("Deploy"));
+        assert!(!d.is_whole("three"));
+        assert!(!d.is_whole(""));
+        d.exact = true;
+        assert!(!d.is_whole("two"));
+        assert!(d.is_whole("no"));
+    }
 
     fn decision(options: &[&str]) -> Decision {
         Decision {
