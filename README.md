@@ -352,7 +352,20 @@ runs `ears-call-agent moon`, "call agent" runs it with "".
 With subtitles on, the line shows what was heard: highlighted with the action
 it fired ("send it" -> enter), or marked as no command with the nearest action,
 so a command that does not exist is plain to see. `command-last.json` in the
-runtime dir has the last hearing in full.
+runtime dir has the last hearing in full, with `timing`: when the ASR, the
+audio embedding, the decision and the action were done, in ms after VAD
+called the utterance ended (a voice command said while dictating is written
+there too, `"mode": "dictation"`). The same is logged as `Command timing:`.
+An action's exact words (or a known mishearing of them) fire it as soon as
+the words are in, without waiting for the audio embedding; the embedding
+still comes in afterwards for the record and to learn the voice.
+
+With the live stream on, an utterance whose live transcript is exactly a
+whole command (an action's phrasing here; "enter" or "ears off" while
+dictating) ends after `[vad] exact_silence_ms` of silence (default 150)
+instead of 400 or 700. Not if a longer phrase starts with it ("over" while
+"over and out" is a phrase, "next" while "next window" is), nor for a phrase
+that takes the words after it ("call ...").
 
 `ears command on|off|toggle|status` switches it from scripts (a voice call
 leaves command mode so your words reach the caller).

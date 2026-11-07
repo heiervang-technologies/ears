@@ -296,6 +296,20 @@ pub struct StreamingEngine {
     ending: Option<(u64, crate::endpoint::Ending, Instant)>,
     /// The early end currently asked of VAD.
     early_end: Option<(crate::endpoint::Ending, u64)>,
+    /// The whole commands of the mode they were built for
+    /// ([`crate::endpoint::Ending::Exact`]); rebuilt when the mode or the
+    /// commands change.
+    exact_phrases: Option<(
+        crate::vad_mode::ModeKind,
+        Option<Arc<crate::endpoint::Phrases>>,
+    )>,
+    /// When the last segment was called ended, and after how much silence:
+    /// the zero of the stage timing ([`crate::command_mode::Timing`]).
+    ended: Option<(Instant, u64)>,
+    /// Route every command-mode utterance after its audio embedding, even
+    /// one its words already decide: how it was before words fired first.
+    /// Only the latency tests set it, to measure the difference.
+    wait_for_embedding: bool,
     /// Keep each transcribed utterance as a WAV here and report it on
     /// `SegmentCompleted` (ws-listen `--keep-audio`).
     keep_audio_dir: Option<PathBuf>,
@@ -372,6 +386,9 @@ impl StreamingEngine {
             continuous: None,
             continuous_http: false,
             ending: None,
+            exact_phrases: None,
+            ended: None,
+            wait_for_embedding: false,
             early_end: None,
             keep_audio_dir: None,
             claimed: false,
@@ -460,7 +477,8 @@ impl StreamingEngine {
                     && (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS =>
             {
                 let ms = match ending {
-                    Ending::Command => config.command_silence_ms,
+                    Ending::Exact if config.exact_silence_ms > 0 => config.exact_silence_ms,
+                    Ending::Exact | Ending::Command => config.command_silence_ms,
                     Ending::Finished => config.finished_silence_ms,
                 };
                 (ms > 0 && ms < config.max_silence_duration_ms).then_some((ending, ms))
@@ -483,9 +501,14 @@ impl StreamingEngine {
     /// dropped before confirmation).
     fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
         if let Some(segment) = outcome {
-            if let Some((ending, ms)) = self.early_end.take() {
-                info!("Utterance ended after {} ms of silence ({:?})", ms, ending);
-            }
+            let waited = match self.early_end.take() {
+                Some((ending, ms)) => {
+                    info!("Utterance ended after {} ms of silence ({:?})", ms, ending);
+                    ms
+                }
+                None => self.vad_detector.config().max_silence_duration_ms,
+            };
+            self.ended = Some((Instant::now(), waited));
             // Complete speech segment detected. A short word kept from a
             // rejected candidate was never announced as started.
             if !self.was_speaking {
@@ -730,6 +753,7 @@ impl StreamingEngine {
         };
 
         drop(transcribing);
+        let asr_done = (Instant::now(), self.mode.kind());
         info!("Transcription took {:?}", transcribe_start.elapsed());
 
         // Clean up temp file
@@ -820,19 +844,24 @@ impl StreamingEngine {
             && crate::command_mode::ENTER_PHRASES
                 .contains(&crate::commands::normalize(&transcript).as_str())
         {
+            let decided = Instant::now();
             if self.mode.is_standby() {
                 self.apply_wake(crate::wake::Wake::On, &transcript);
             }
             self.subtitle_command(&transcript);
             self.enter_command_mode(&transcript).await;
+            self.dictation_command_timed("command-mode", &transcript, asr_done, decided);
             return Ok(());
         }
         // A colour said alone switches to the mode the LED shows in it.
         if let Some(colour) = crate::colour_mode::Colour::parse(&transcript)
             .filter(|c| *c != crate::colour_mode::Colour::Pink || self.vision_enabled)
         {
+            let decided = Instant::now();
             self.subtitle_command(&transcript);
             self.switch_to_colour(colour, &transcript).await;
+            let label = format!("colour:{}", colour.name());
+            self.dictation_command_timed(&label, &transcript, asr_done, decided);
             return Ok(());
         }
 
@@ -843,14 +872,19 @@ impl StreamingEngine {
             self.commands.parse(&transcript)
         {
             if self.run_resumes(&command) {
+                let decided = Instant::now();
                 self.run_command(&command, &transcript).await;
                 self.apply_wake(crate::wake::Wake::On, &transcript);
+                self.dictation_command_timed(&command.label(), &transcript, asr_done, decided);
                 return Ok(());
             }
         }
         if let Some(wake) = self.wake.check_transcript(&transcript) {
+            let decided = Instant::now();
             self.subtitle_command(&transcript);
             self.apply_wake(wake, &transcript);
+            let label = format!("wake:{wake:?}").to_lowercase();
+            self.dictation_command_timed(&label, &transcript, asr_done, decided);
             return Ok(());
         }
         if self.mode.is_standby() {
@@ -858,8 +892,10 @@ impl StreamingEngine {
             if let Some(command @ crate::commands::Command::Run { .. }) =
                 self.commands.parse(&transcript)
             {
+                let decided = Instant::now();
                 self.subtitle_command(&transcript);
                 self.run_command(&command, &transcript).await;
+                self.dictation_command_timed(&command.label(), &transcript, asr_done, decided);
                 return Ok(());
             }
             // Not typed, published or logged: standby hears everything.
@@ -888,17 +924,19 @@ impl StreamingEngine {
                 Some((body, crate::commands::Command::Literal(_))) => body,
                 Some((body, command)) => {
                     info!("Ends in {} ({:?})", command.label(), transcript);
-                    tail = Some((command, transcript));
+                    tail = Some((command, transcript, Instant::now()));
                     body
                 }
                 None => transcript,
             },
             Some(command) => {
+                let decided = Instant::now();
                 self.subtitle_command(&transcript);
                 self.run_command(&command, &transcript).await;
                 if command == crate::commands::Command::SignOff {
                     self.apply_wake(crate::wake::Wake::Off, &transcript);
                 }
+                self.dictation_command_timed(&command.label(), &transcript, asr_done, decided);
                 return Ok(());
             }
         };
@@ -980,7 +1018,7 @@ impl StreamingEngine {
         }
 
         drop(typing);
-        if let Some((command, heard)) = tail {
+        if let Some((command, heard, decided)) = tail {
             if delivered {
                 if self.ghost.is_some() {
                     // The commit goes through the input method, the key
@@ -995,6 +1033,7 @@ impl StreamingEngine {
                 if command == crate::commands::Command::SignOff {
                     self.apply_wake(crate::wake::Wake::Off, &heard);
                 }
+                self.dictation_command_timed(&command.label(), &heard, asr_done, decided);
             } else {
                 info!(
                     "{} not pressed: the text before it was not typed",
@@ -1322,6 +1361,7 @@ impl StreamingEngine {
             Box::new(crate::wake::NoWake)
         };
         self.commands = commands;
+        self.exact_phrases = None;
     }
 
     /// `[cs]` settings: whether command mode and standby pass the phrases
@@ -1349,6 +1389,31 @@ impl StreamingEngine {
     /// Keep the utterance journal for `ears cs mine` (`[cs] journal`).
     pub fn set_cs_journal(&mut self, journal: Option<crate::cs::mine::Journal>) {
         self.cs_journal = journal;
+    }
+
+    /// The whole commands of the current mode, for ending an utterance
+    /// that is one of them at a short pause. None where partials do not
+    /// decide anything (standby, vision) or nothing qualifies.
+    pub(crate) fn exact_phrases(&mut self) -> Option<Arc<crate::endpoint::Phrases>> {
+        use crate::vad_mode::Mode;
+        let kind = self.mode.kind();
+        if let Some((built, phrases)) = &self.exact_phrases {
+            if *built == kind {
+                return phrases.clone();
+            }
+        }
+        let phrases = match &self.mode {
+            Mode::Dictation => Some(crate::endpoint::dictation_phrases(
+                &self.commands,
+                self.command_paths.is_some(),
+            )),
+            Mode::Command(state) => Some(state.mode.phrases()),
+            Mode::Standby | Mode::Vision => None,
+        }
+        .filter(|p| !p.is_empty())
+        .map(Arc::new);
+        self.exact_phrases = Some((kind, phrases.clone()));
+        phrases
     }
 
     /// Replace the wake detector (e.g. with a wake word model).
@@ -1380,6 +1445,7 @@ impl StreamingEngine {
     fn set_mode(&mut self, to: crate::vad_mode::Mode) {
         use crate::vad_mode::ModeKind;
         let from = std::mem::replace(&mut self.mode, to);
+        self.exact_phrases = None;
         let (old, new) = (from.kind(), self.mode.kind());
         // Dropping command mode's state also stops loading its anchors.
         drop(from);
@@ -1850,6 +1916,7 @@ impl StreamingEngine {
     pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
         let _ = std::fs::remove_file(state_dir.join(crate::command_mode::LOADING));
         self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
+        self.exact_phrases = None;
         self.mode_files.dir = Some(state_dir.to_path_buf());
         self.mode_files.publish(self.mode.kind());
     }
@@ -2313,23 +2380,27 @@ impl StreamingEngine {
         else {
             return;
         };
+        let clock = self.clock();
+        let mut timing = clock.timing();
         // Heard both ways at once: the words, and the audio's embedding.
-        // The words only count if they come back in time.
+        // The words only count if they come back in time. While the text
+        // anchors load the server is busy with them and nothing is routed
+        // by embedding: the words alone.
         let started = Instant::now();
+        let embedding = ready.then(|| {
+            tokio::spawn(async move {
+                let u = embedder.audio(&bytes).await;
+                (u, Instant::now())
+            })
+        });
         let context = self.asr_context();
         let asr = tokio::time::timeout(
             COMMAND_ASR_BUDGET,
             self.whisper_client
                 .transcribe_with_context(wav, false, context.as_deref()),
-        );
-        // While the text anchors load the server is busy with them and
-        // nothing is routed by embedding: the words alone.
-        let (asr, audio) = tokio::join!(asr, async {
-            match ready {
-                true => Some(embedder.audio(&bytes).await),
-                false => None,
-            }
-        });
+        )
+        .await;
+        timing.asr_ms = Some(clock.ms(Instant::now()));
         let words = match asr {
             Ok(Ok(text)) => text,
             Ok(Err(crate::whisper::WhisperError::EmptyTranscription)) => String::new(),
@@ -2345,13 +2416,26 @@ impl StreamingEngine {
                 String::new()
             }
         };
-        let audio = match audio {
-            Some(Ok(u)) => Some(u),
-            Some(Err(e)) => {
-                warn!("Command mode: {}", e);
+        // An action's exact words fire it now: the embedding could only
+        // agree, or lose to them (see `combine`). It still comes in for the
+        // record and to teach the voice, after the action.
+        let early = !self.wait_for_embedding
+            && self
+                .mode
+                .command_mut()
+                .is_some_and(|m| m.fires_by_words(&words));
+        let mut embedding = embedding;
+        let audio = match (early, embedding.take()) {
+            (false, Some(task)) => {
+                let (u, at) = Self::embedding_in(task).await;
+                timing.embedding_ms = at.map(|at| clock.ms(at));
+                u
+            }
+            (true, task) => {
+                embedding = task;
                 None
             }
-            None => None,
+            (false, None) => None,
         };
         if audio.is_none() && words.trim().is_empty() {
             crate::desktop::AudioFeedback::beep_error().ok();
@@ -2361,7 +2445,8 @@ impl StreamingEngine {
         let Some(mode) = self.mode.command_mut() else {
             return;
         };
-        let (outcome, hearing) = mode.hear_with(audio, &words).await;
+        let (outcome, mut hearing) = mode.hear_with(audio, &words).await;
+        timing.decision_ms = Some(clock.ms(Instant::now()));
         let top = |d: &Option<crate::command_mode::Decision>| {
             d.as_ref().map_or("-".to_string(), |d| {
                 d.votes
@@ -2379,12 +2464,20 @@ impl StreamingEngine {
             started.elapsed(),
             hearing.words,
             top(&hearing.audio),
-            top(&hearing.text)
+            if early {
+                "- (by words, not waiting for the audio)".to_string()
+            } else {
+                top(&hearing.text)
+            }
         );
         if let Some(journal) = &self.cs_journal {
             journal.command(&outcome, &hearing);
         }
-        match outcome {
+        let fired = match &outcome {
+            Outcome::Fire { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        let acted = match outcome {
             Outcome::Fire { name, effect } => {
                 self.subtitle_fired(&hearing.words, &name);
                 match effect {
@@ -2406,23 +2499,119 @@ impl StreamingEngine {
                     }
                     Effect::Nothing | Effect::Wrong => {}
                 }
+                true
             }
             Outcome::Taught(name) => {
                 self.subtitle_fired(&hearing.words, &name);
                 info!("Command mode: learned a new way to say {}", name);
                 crate::desktop::AudioFeedback::beep_done().ok();
+                true
             }
             Outcome::Forgot(name) => {
                 self.subtitle_fired(&hearing.words, "wrong");
                 info!("Command mode: forgot the last recording of {:?}", name);
                 crate::desktop::AudioFeedback::beep_done().ok();
+                true
             }
             Outcome::Nothing => {
                 // Say what was heard, so a command that does not exist (or
                 // was misheard) is plain to see.
                 self.discard("no action is a confident match");
                 self.subtitle_missed(&hearing.words, hearing.nearest.as_deref());
+                false
             }
+        };
+        if acted {
+            timing.action_ms = Some(clock.ms(Instant::now()));
+        }
+        if let Some(task) = embedding {
+            let (u, at) = Self::embedding_in(task).await;
+            timing.embedding_ms = at.map(|at| clock.ms(at));
+            if let Some(u) = u {
+                match (self.mode.command_mut(), &self.command_paths) {
+                    (Some(mode), _) => mode.heard_audio(&mut hearing, fired.as_deref(), u),
+                    // The action left command mode: the vote is not
+                    // needed, only what the voice taught.
+                    (None, Some(paths)) => {
+                        if let Some(name) = fired.as_deref().filter(|_| hearing.by == Some("words"))
+                        {
+                            crate::command_mode::CommandMode::remember_after(paths, name, u);
+                        }
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        info!(
+            "Command timing: {} (by {})",
+            timing,
+            hearing.by.unwrap_or("-")
+        );
+        hearing.timing = Some(timing);
+        if let Some(paths) = &self.command_paths {
+            crate::command_mode::write_last(&paths.state_dir, &hearing);
+        }
+    }
+
+    /// The audio embedding a command-mode utterance spawned, and when it
+    /// came in (None if it failed).
+    async fn embedding_in(
+        task: tokio::task::JoinHandle<(crate::command_mode::Result<Vec<f32>>, Instant)>,
+    ) -> (Option<Vec<f32>>, Option<Instant>) {
+        match task.await {
+            Ok((Ok(u), at)) => (Some(u), Some(at)),
+            Ok((Err(e), _)) => {
+                warn!("Command mode: {}", e);
+                (None, None)
+            }
+            Err(e) => {
+                warn!("Command mode: the audio embedding stopped: {}", e);
+                (None, None)
+            }
+        }
+    }
+
+    /// The zero of this segment's stage timing: when VAD called it ended
+    /// (now, if that was not seen).
+    fn clock(&self) -> crate::command_mode::Clock {
+        let (ended, silence_ms) = self.ended.unwrap_or_else(|| {
+            (
+                Instant::now(),
+                self.vad_detector.config().max_silence_duration_ms,
+            )
+        });
+        crate::command_mode::Clock { ended, silence_ms }
+    }
+
+    /// Log and record (in `command-last.json`) the stage timing of a voice
+    /// command said outside command mode. `asr`: when the transcript was
+    /// in, and in which mode; `decided`: when it was known to be this
+    /// command.
+    fn dictation_command_timed(
+        &mut self,
+        label: &str,
+        heard: &str,
+        (asr, heard_in): (Instant, crate::vad_mode::ModeKind),
+        decided: Instant,
+    ) {
+        let clock = self.clock();
+        let timing = crate::command_mode::Timing {
+            asr_ms: Some(clock.ms(asr)),
+            decision_ms: Some(clock.ms(decided)),
+            action_ms: Some(clock.ms(Instant::now())),
+            ..clock.timing()
+        };
+        info!("Command timing: {} ({})", timing, label);
+        if let Some(paths) = &self.command_paths {
+            crate::command_mode::write_last(
+                &paths.state_dir,
+                &crate::command_mode::DictationCommand {
+                    mode: heard_in,
+                    command: label.to_string(),
+                    words: heard.to_string(),
+                    timing,
+                },
+            );
         }
     }
 

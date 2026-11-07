@@ -628,6 +628,10 @@ impl StreamingEngine {
         let standby = self.mode.is_standby();
         let say_echo = self.say_echo.enabled.then(|| self.say_echo.clone());
         let say_playing = self.say_playing.clone();
+        // A whole command of the mode ends the utterance soonest. Command
+        // mode routes the ASR's own words, dictation the filtered ones.
+        let exact = (!bash).then(|| self.exact_phrases()).flatten();
+        let exact_on_raw = self.mode.is_command();
         // Read once per poll, and only when a partial needs it.
         let mut said: Option<(f64, Vec<crate::say_echo::Said>)> = None;
         self.ghost_stream_events();
@@ -700,7 +704,12 @@ impl StreamingEngine {
             let parsed = commands.as_ref().and_then(|c| c.parse(&text));
             // Only the stream pushes every change soon enough to trust.
             if streamed && !bash {
-                self.ending = crate::endpoint::ending(&raw, &text, commands.as_ref())
+                let whole = exact
+                    .as_ref()
+                    .is_some_and(|p| p.is_complete(if exact_on_raw { &raw } else { &text }));
+                self.ending = whole
+                    .then_some(crate::endpoint::Ending::Exact)
+                    .or_else(|| crate::endpoint::ending(&raw, &text, commands.as_ref()))
                     .map(|e| (utterance, e, Instant::now()));
             }
             // Subtitles follow speech even with typing off, never in standby.

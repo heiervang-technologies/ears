@@ -293,6 +293,7 @@ fn test_vad_settings_toml_roundtrip() {
         min_mean_probability: 0.6,
         command_silence_ms: 300,
         finished_silence_ms: 0,
+        exact_silence_ms: 120,
     };
 
     let toml_str = toml::to_string_pretty(&settings).unwrap();
@@ -302,6 +303,7 @@ fn test_vad_settings_toml_roundtrip() {
     assert_eq!(loaded.min_speech_duration_ms, 200);
     assert_eq!(loaded.command_silence_ms, 300);
     assert_eq!(loaded.finished_silence_ms, 0);
+    assert_eq!(loaded.exact_silence_ms, 120);
     assert_eq!(loaded.max_silence_duration_ms, 500);
     assert_eq!(loaded.pre_speech_buffer_ms, 300);
     assert!(loaded.ghost);
