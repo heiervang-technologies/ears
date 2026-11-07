@@ -2,8 +2,8 @@
 //! flagged ones marked. Exits non-zero when an active entry would now be
 //! rejected.
 
-use super::risk::{assess, Lexicon, Phrase, Risk, Verdict};
-use super::{Located, Scaffold, Status};
+use super::risk::{Lexicon, Phrase, Risk, Verdict};
+use super::{assess_entry, Located, Scaffold, Status};
 use crate::commands::VoiceCommands;
 
 /// A phrase some list matches, and that list (an owned [`Phrase`]).
@@ -77,7 +77,7 @@ impl Row {
     }
 }
 
-/// Assess every entry (`cs::risk::assess`) against the configured phrases
+/// Assess every entry ([`assess_entry`]) against the configured phrases
 /// and the other active entries.
 pub fn rows(scaffold: &Scaffold, configured: &[ListPhrase]) -> Vec<Row> {
     let lexicon = Lexicon::builtin();
@@ -100,8 +100,9 @@ pub fn rows(scaffold: &Scaffold, configured: &[ListPhrase]) -> Vec<Row> {
     scaffold
         .located()
         .map(|located| Row {
-            risk: assess(
+            risk: assess_entry(
                 &located.entry.heard,
+                &located.entry.meant,
                 &located.entry.target,
                 &others,
                 &lexicon,
@@ -324,6 +325,31 @@ risk_reason = "near ears off"
         assert!(text.ends_with("3 entries, 3 flagged, 1 rejected while active\n"));
         assert!(!text.contains('\x1b'));
         assert!(render(&rows, true).contains("\x1b[31m"));
+    }
+
+    #[test]
+    fn another_target_saying_the_meant_words_is_no_collision() {
+        // "ears on" both wakes and runs `regular`: "years on" heard for the
+        // wake phrase is no new ambiguity...
+        let commands: VoiceCommands = toml::from_str(
+            r#"
+            [run.regular]
+            phrases = ["ears on", "regular mode"]
+            command = ["haios-voice-route", "cursor"]
+            resume = true
+            "#,
+        )
+        .unwrap();
+        let configured = configured_phrases(&commands, &[]);
+        let entry = |meant: &str, target: &str| {
+            format!("[[entry]]\nmeant = {meant:?}\ntarget = {target:?}\nheard = \"years on\"\n")
+        };
+        let wake = rows(&scaffold(&entry("ears on", "wake")), &configured);
+        assert_ne!(wake[0].risk.verdict, Verdict::Reject, "{:?}", wake[0]);
+        assert!(!wake[0].failing());
+        // ...but meant as "ears off" it still sounds exactly like a wake phrase.
+        let sleep = rows(&scaffold(&entry("ears off", "sleep")), &configured);
+        assert!(sleep[0].failing(), "{:?}", sleep[0]);
     }
 
     #[test]
