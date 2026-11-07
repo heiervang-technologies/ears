@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sentence period, and more commands (nvim, yay, pacman, gh, rg, ...) or a
   script path are allowed. The canonical copy moved into the vLLM plugin
   package; `grammars/bash.gbnf` links to it.
+- VAD keeps its mode (dictation, standby, command, vision) in one value
+  (`src/vad_mode.rs`) and changes it in one place. Besides the markers
+  (`vad.standby`, `vad.command`, `vad.vision`, all still written), it
+  publishes `mode.json` (`{"mode":"command"}`) in the runtime dir.
+  Two combinations that were possible are gone: `ears command on` in standby
+  now wakes first, as saying "command" does (it left the light orange while
+  actions fired), and standing by in vision mode leaves vision mode, as
+  "orange" does (the light stayed pink, and waking went back to vision).
 
 ### Fixed
 

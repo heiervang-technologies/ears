@@ -230,13 +230,11 @@ pub struct StreamingEngine {
 
     /// Where command mode keeps its files; None: command mode is off.
     command_paths: Option<crate::command_mode::Paths>,
-    /// Command mode while it is on: utterances route to actions by
-    /// embedding instead of being transcribed.
-    command_mode: Option<crate::command_mode::CommandMode>,
-    /// Vision mode (pink): utterances go to `ears look`, not the cursor.
-    vision_mode: bool,
-    /// Its marker for the LED (`vad.vision` in the state dir).
-    vision_marker: Option<std::path::PathBuf>,
+    /// What an utterance is for: dictation, standby, command or vision.
+    /// Changed only by [`StreamingEngine::set_mode`].
+    mode: crate::vad_mode::Mode,
+    /// Where the mode is published for other programs.
+    mode_files: crate::vad_mode::ModeFiles,
     /// Pink is a mode only when `[vision] enabled`: otherwise "look" and
     /// "pink" are just words.
     vision_enabled: bool,
@@ -301,14 +299,10 @@ pub struct StreamingEngine {
     /// Keep each transcribed utterance as a WAV here and report it on
     /// `SegmentCompleted` (ws-listen `--keep-audio`).
     keep_audio_dir: Option<PathBuf>,
-    /// Listening without typing until the wake phrase (see `crate::wake`).
-    standby: bool,
     /// A client holds the input claim: nothing is typed or drawn, and
     /// partials are published as `Partial` events for it to show.
     claimed: bool,
     wake: Box<dyn crate::wake::WakeDetector>,
-    /// File that exists while in standby, for `ears prompt`.
-    standby_marker: Option<PathBuf>,
 }
 
 impl StreamingEngine {
@@ -363,9 +357,8 @@ impl StreamingEngine {
             shell_grammar: None,
             shell_probe: crate::shell_focus::focused_shell,
             command_paths: None,
-            command_mode: None,
-            vision_mode: false,
-            vision_marker: None,
+            mode: crate::vad_mode::Mode::Dictation,
+            mode_files: Default::default(),
             vision_enabled: false,
             subtitles: None,
             decisions: None,
@@ -377,10 +370,8 @@ impl StreamingEngine {
             ending: None,
             early_end: None,
             keep_audio_dir: None,
-            standby: false,
             claimed: false,
             wake: Box::new(crate::wake::NoWake),
-            standby_marker: None,
         })
     }
 
@@ -423,7 +414,11 @@ impl StreamingEngine {
 
         // While a decision is open nothing is typed, not even a ghost; nor
         // in vision mode, where words describe what to find.
-        if self.ghost.is_some() && !self.standby && !self.deciding() && !self.vision_mode {
+        if self.ghost.is_some()
+            && !self.mode.is_standby()
+            && !self.deciding()
+            && !self.mode.is_vision()
+        {
             self.ghost_poll_partials();
             if segment.is_none() {
                 self.ghost_maybe_start_partial();
@@ -600,7 +595,9 @@ impl StreamingEngine {
                 self.apply_wake(wake, "");
                 return Ok(());
             }
-            crate::wake::AudioVerdict::NotWake if self.standby && !self.deciding() => return Ok(()),
+            crate::wake::AudioVerdict::NotWake if self.mode.is_standby() && !self.deciding() => {
+                return Ok(())
+            }
             _ => {}
         }
 
@@ -628,7 +625,7 @@ impl StreamingEngine {
         debug!("WAV save took {:?}", wav_start.elapsed());
         drop(saving);
 
-        if self.command_mode.is_some() && !self.deciding() {
+        if self.mode.is_command() && !self.deciding() {
             self.command_segment(&segment_file).await;
             return Ok(());
         }
@@ -743,7 +740,7 @@ impl StreamingEngine {
 
         // Checked before the filters, which strip what tells languages apart.
         // Only with commands on: the wake phrases are the way back.
-        if self.commands.enabled && !self.standby && self.guided_grammar.is_none() {
+        if self.commands.enabled && !self.mode.is_standby() && self.guided_grammar.is_none() {
             let heard = &transcript;
             if let Some(language) = self
                 .commands
@@ -778,7 +775,7 @@ impl StreamingEngine {
             && crate::command_mode::ENTER_PHRASES
                 .contains(&crate::commands::normalize(&transcript).as_str())
         {
-            if self.standby {
+            if self.mode.is_standby() {
                 self.apply_wake(crate::wake::Wake::On, &transcript);
             }
             self.subtitle_command(&transcript);
@@ -811,7 +808,7 @@ impl StreamingEngine {
             self.apply_wake(wake, &transcript);
             return Ok(());
         }
-        if self.standby {
+        if self.mode.is_standby() {
             // Only run commands act in standby; they do not resume typing.
             if let Some(command @ crate::commands::Command::Run { .. }) =
                 self.commands.parse(&transcript)
@@ -831,7 +828,7 @@ impl StreamingEngine {
         // What was said, commands included: viewers see why a key was pressed.
         self.subtitle_finished(&transcript);
 
-        if self.vision_mode {
+        if self.mode.is_vision() {
             self.look(&transcript);
             return Ok(());
         }
@@ -1091,7 +1088,7 @@ impl StreamingEngine {
         argv: &[String],
         heard: &str,
     ) {
-        if self.standby || self.typing_mode == TypingMode::None || self.typing_suspended {
+        if self.mode.is_standby() || self.typing_mode == TypingMode::None || self.typing_suspended {
             self.ghost_clear();
         } else {
             self.ghost_accept(heard).await;
@@ -1290,12 +1287,49 @@ impl StreamingEngine {
     /// Keep `path` in existence while in standby, so the shell prompt can
     /// show it. Removes a stale one now.
     pub fn set_standby_marker(&mut self, path: PathBuf) {
-        let _ = std::fs::remove_file(&path);
-        self.standby_marker = Some(path);
+        self.mode_files.standby = Some(path);
+        self.mode_files.publish(self.mode.kind());
     }
 
     pub fn is_standby(&self) -> bool {
-        self.standby
+        self.mode.is_standby()
+    }
+
+    /// The mode VAD is in.
+    pub fn mode(&self) -> crate::vad_mode::ModeKind {
+        self.mode.kind()
+    }
+
+    /// Change mode. Every change goes through here: it leaves the old mode
+    /// (command mode's state, a look still running), takes the new one and
+    /// publishes it ([`crate::vad_mode::ModeFiles`]). The cue and the
+    /// switch published for the new mode are the caller's, as they depend
+    /// on what asked for it (a wake phrase, a colour, `ears command`).
+    fn set_mode(&mut self, to: crate::vad_mode::Mode) {
+        use crate::vad_mode::ModeKind;
+        let from = std::mem::replace(&mut self.mode, to);
+        let (old, new) = (from.kind(), self.mode.kind());
+        // Dropping command mode's state also stops loading its anchors.
+        drop(from);
+        self.mode_files.publish(new);
+        if old == new {
+            return;
+        }
+        match old {
+            ModeKind::Command => {
+                info!("Command mode off: dictating again");
+                self.send_event(StreamingEvent::VoiceCommand {
+                    name: "dictation-mode".into(),
+                    text: String::new(),
+                });
+            }
+            ModeKind::Vision => {
+                // A look still asking would take the next words as its answer.
+                self.stop_look();
+                info!("Vision mode off");
+            }
+            ModeKind::Dictation | ModeKind::Standby => {}
+        }
     }
 
     /// Switch standby the way a wake phrase would, asked for over IPC
@@ -1304,50 +1338,46 @@ impl StreamingEngine {
     pub fn request_wake(&mut self, wake: crate::wake::Wake) {
         // A tool asking for the mode ears is already in (a call answered
         // while awake) gets no cue: only a spoken phrase is confirmed.
-        if wake.standby_after(self.standby) == self.standby {
+        if self.mode.kind().after_wake(wake) == self.mode.kind() {
             return;
         }
         self.apply_wake(wake, "");
     }
 
     /// Act on a wake phrase. One that asks for the current mode only
-    /// repeats its tone, so it is confirmed but never typed.
+    /// repeats its tone, so it is confirmed but never typed. Standing by
+    /// leaves any mode; waking goes back to dictation.
     fn apply_wake(&mut self, wake: crate::wake::Wake, heard: &str) {
-        let standby = wake.standby_after(self.standby);
-        if standby == self.standby {
+        use crate::vad_mode::{Mode, ModeKind};
+        let to = self.mode.kind().after_wake(wake);
+        if to == self.mode.kind() {
             debug!("Wake phrase for the current mode: {:?}", wake);
-            if standby {
+            if self.mode.is_standby() {
                 crate::desktop::AudioFeedback::beep_toggle_off().ok();
             } else {
                 crate::desktop::AudioFeedback::beep_toggle_on().ok();
             }
             return;
         }
-        self.standby = standby;
-        if standby {
-            self.leave_command_mode();
-        }
+        self.set_mode(match to {
+            ModeKind::Standby => Mode::Standby,
+            _ => Mode::Dictation,
+        });
         self.ghost_clear();
-        if let Some(path) = &self.standby_marker {
-            let result = if self.standby {
-                std::fs::write(path, b"")
-            } else {
-                std::fs::remove_file(path)
-            };
-            if let Err(e) = result {
-                warn!("Cannot update standby marker {}: {}", path.display(), e);
-            }
-        }
-        let name = if self.standby { "standby" } else { "resume" };
+        let name = if self.mode.is_standby() {
+            "standby"
+        } else {
+            "resume"
+        };
         info!(
             "VAD {}",
-            if self.standby {
+            if self.mode.is_standby() {
                 "in standby: listening for the wake phrase only"
             } else {
                 "resumed typing"
             }
         );
-        if self.standby {
+        if self.mode.is_standby() {
             crate::desktop::AudioFeedback::beep_toggle_off().ok();
         } else {
             crate::desktop::AudioFeedback::beep_toggle_on().ok();
@@ -1578,7 +1608,7 @@ impl StreamingEngine {
     fn send_event(&self, event: StreamingEvent) {
         // In standby nothing is dictated: no cues, no ducking, nothing for
         // socket consumers, except the switch back.
-        if self.standby
+        if self.mode.is_standby()
             && matches!(
                 event,
                 StreamingEvent::SpeechProbable
@@ -1716,7 +1746,8 @@ impl StreamingEngine {
             return;
         };
         let probe = self.shell_probe;
-        let aimed = !self.standby && self.typing_mode != TypingMode::None && run_blocking(probe);
+        let aimed =
+            !self.mode.is_standby() && self.typing_mode != TypingMode::None && run_blocking(probe);
         if aimed != self.guided_grammar.is_some() {
             info!(
                 "{}",
@@ -1742,13 +1773,13 @@ impl StreamingEngine {
 
     /// Allow command mode ("command" on its own), keeping its runtime files
     /// in `state_dir`. A marker left by an earlier run is removed.
+    /// Also publishes the mode there from now on (`vad.command`,
+    /// `vad.vision`, `mode.json`; see [`crate::vad_mode`]).
     pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
-        let _ = std::fs::remove_file(state_dir.join(crate::command_mode::MARKER));
         let _ = std::fs::remove_file(state_dir.join(crate::command_mode::LOADING));
         self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
-        let vision = state_dir.join(VISION_MARKER);
-        let _ = std::fs::remove_file(&vision);
-        self.vision_marker = Some(vision);
+        self.mode_files.dir = Some(state_dir.to_path_buf());
+        self.mode_files.publish(self.mode.kind());
     }
 
     /// Allow vision mode (pink), from `[vision] enabled`.
@@ -1777,18 +1808,18 @@ impl StreamingEngine {
     /// The mode subtitles are written for.
     fn subtitle_mode(&self) -> crate::subtitles::Mode {
         use crate::subtitles::Mode;
+        use crate::vad_mode::ModeKind;
         if self
             .decisions
             .as_ref()
             .is_some_and(|d| d.current().is_some())
         {
-            Mode::Decide
-        } else if self.standby {
-            Mode::Standby
-        } else if self.command_mode.is_some() {
-            Mode::Command
-        } else {
-            Mode::Dictation
+            return Mode::Decide;
+        }
+        match self.mode.kind() {
+            ModeKind::Standby => Mode::Standby,
+            ModeKind::Command => Mode::Command,
+            ModeKind::Dictation | ModeKind::Vision => Mode::Dictation,
         }
     }
 
@@ -1829,10 +1860,9 @@ impl StreamingEngine {
         use crate::colour_mode::Colour;
         info!("Colour word {:?}: switching to {}", heard, colour.name());
         if colour == Colour::Pink {
-            if self.standby {
+            if self.mode.is_standby() {
                 self.apply_wake(crate::wake::Wake::On, heard);
             }
-            self.leave_command_mode();
             self.enter_vision_mode();
             return;
         }
@@ -1843,10 +1873,10 @@ impl StreamingEngine {
                 return;
             }
             Colour::Purple => {
-                if self.standby {
+                if self.mode.is_standby() {
                     self.apply_wake(crate::wake::Wake::On, heard);
                 }
-                if self.command_mode.is_none() {
+                if !self.mode.is_command() {
                     self.enter_command_mode(heard).await;
                 } else {
                     crate::desktop::AudioFeedback::beep_done().ok();
@@ -1855,7 +1885,7 @@ impl StreamingEngine {
             }
             Colour::Blue | Colour::Yellow | Colour::Pink => {}
         }
-        if self.standby {
+        if self.mode.is_standby() {
             self.apply_wake(crate::wake::Wake::On, heard);
         }
         self.leave_command_mode();
@@ -2056,7 +2086,7 @@ impl StreamingEngine {
 
     /// Whether command mode is on.
     pub fn in_command_mode(&self) -> bool {
-        self.command_mode.is_some()
+        self.mode.is_command()
     }
 
     /// Switch command mode as saying "command" would, asked for over IPC
@@ -2067,7 +2097,7 @@ impl StreamingEngine {
     /// standby, orange from any other mode.
     pub async fn request_colour(&mut self, colour: Option<crate::colour_mode::Colour>) {
         use crate::colour_mode::Colour;
-        let colour = colour.unwrap_or(if self.standby {
+        let colour = colour.unwrap_or(if self.mode.is_standby() {
             Colour::Blue
         } else {
             Colour::Orange
@@ -2076,11 +2106,15 @@ impl StreamingEngine {
     }
 
     pub async fn request_command_mode(&mut self, on: Option<bool>) {
-        let on = on.unwrap_or(self.command_mode.is_none());
-        if on == self.command_mode.is_some() {
+        let on = on.unwrap_or(!self.mode.is_command());
+        if on == self.mode.is_command() {
             return;
         }
         if on {
+            // As saying "command" does: from standby, it wakes first.
+            if self.mode.is_standby() {
+                self.apply_wake(crate::wake::Wake::On, "");
+            }
             self.enter_command_mode("").await;
         } else {
             crate::desktop::AudioFeedback::beep_done().ok();
@@ -2088,37 +2122,27 @@ impl StreamingEngine {
         }
     }
 
+    /// Vision mode, from dictation or command mode (standby wakes first).
     fn enter_vision_mode(&mut self) {
         self.ghost_clear();
-        if !self.vision_mode {
+        if !self.mode.is_vision() {
             info!("Vision mode on: say what to find on screen");
-            self.vision_mode = true;
-            if let Some(marker) = &self.vision_marker {
-                if let Err(e) = std::fs::write(marker, "") {
-                    warn!("Cannot write the vision mode marker: {}", e);
-                }
-            }
+            self.set_mode(crate::vad_mode::Mode::Vision);
         }
         crate::desktop::AudioFeedback::beep_done().ok();
     }
 
     fn leave_vision_mode(&mut self) {
-        if !std::mem::take(&mut self.vision_mode) {
-            return;
+        if self.mode.is_vision() {
+            self.set_mode(crate::vad_mode::Mode::Dictation);
         }
-        if let Some(marker) = &self.vision_marker {
-            let _ = std::fs::remove_file(marker);
-        }
-        // A look still asking would take the next words as its answer.
-        self.stop_look();
-        info!("Vision mode off");
     }
 
     /// Stop the look still running, if any: one waiting for SAM, or whose
     /// guess was not answered. Only a process that is an `ears look`: the
     /// pid in a stale state file may belong to someone else by now.
     fn stop_look(&self) {
-        let Some(dir) = self.vision_marker.as_ref().and_then(|m| m.parent()) else {
+        let Some(dir) = self.mode_files.dir() else {
             return;
         };
         let running = std::fs::read_to_string(dir.join(crate::vision::FILE))
@@ -2173,11 +2197,9 @@ impl StreamingEngine {
                     },
                     started.elapsed()
                 );
-                self.command_mode = Some(mode);
-                let marker = paths.state_dir.join(crate::command_mode::MARKER);
-                if let Err(e) = std::fs::write(marker, "") {
-                    warn!("Cannot write the command mode marker: {}", e);
-                }
+                self.set_mode(crate::vad_mode::Mode::Command(Box::new(
+                    crate::vad_mode::CommandState { mode },
+                )));
                 self.ghost_accept(heard).await;
                 crate::desktop::AudioFeedback::beep_done().ok();
                 self.send_event(StreamingEvent::VoiceCommand {
@@ -2197,17 +2219,9 @@ impl StreamingEngine {
     }
 
     fn leave_command_mode(&mut self) {
-        if self.command_mode.take().is_none() {
-            return;
+        if self.mode.is_command() {
+            self.set_mode(crate::vad_mode::Mode::Dictation);
         }
-        if let Some(paths) = &self.command_paths {
-            let _ = std::fs::remove_file(paths.state_dir.join(crate::command_mode::MARKER));
-        }
-        info!("Command mode off: dictating again");
-        self.send_event(StreamingEvent::VoiceCommand {
-            name: "dictation-mode".into(),
-            text: String::new(),
-        });
     }
 
     /// Route a command-mode utterance to its action by embedding.
@@ -2218,8 +2232,8 @@ impl StreamingEngine {
             return;
         };
         let Some((embedder, ready)) = self
-            .command_mode
-            .as_mut()
+            .mode
+            .command_mut()
             .map(|m| (m.embedder.clone(), m.ready()))
         else {
             return;
@@ -2267,7 +2281,7 @@ impl StreamingEngine {
             self.discard("neither words nor embedding");
             return;
         }
-        let Some(mode) = self.command_mode.as_mut() else {
+        let Some(mode) = self.mode.command_mut() else {
             return;
         };
         let (outcome, hearing) = mode.hear_with(audio, &words).await;

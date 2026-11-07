@@ -617,7 +617,7 @@ impl StreamingEngine {
         let bash = self.guided_grammar.is_some();
         let commands = (!bash).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
-        let standby = self.standby;
+        let standby = self.mode.is_standby();
         let say_echo = self.say_echo.enabled.then(|| self.say_echo.clone());
         let say_playing = self.say_playing.clone();
         // Read once per poll, and only when a partial needs it.
@@ -744,7 +744,7 @@ impl StreamingEngine {
     /// Start a partial transcription of the utterance so far, if due.
     pub(super) fn ghost_maybe_start_partial(&mut self) {
         // Command mode embeds whole utterances; nothing is transcribed.
-        if self.ghost.is_none() || self.command_mode.is_some() || self.ghost_stream_feed() {
+        if self.ghost.is_none() || self.mode.is_command() || self.ghost_stream_feed() {
             return;
         }
         let Some(ghost) = self.ghost.as_ref() else {
