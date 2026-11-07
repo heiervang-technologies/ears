@@ -305,6 +305,8 @@ pub struct StreamingEngine {
     wake: Box<dyn crate::wake::WakeDetector>,
     /// `[cs]`: ASR context in command mode and standby. Off until set.
     cs: crate::config::CsConfig,
+    /// The opt-in utterance journal for `ears cs mine` ([`crate::cs::mine`]).
+    cs_journal: Option<crate::cs::mine::Journal>,
 }
 
 impl StreamingEngine {
@@ -378,6 +380,7 @@ impl StreamingEngine {
                 context: false,
                 ..Default::default()
             },
+            cs_journal: None,
         })
     }
 
@@ -799,6 +802,17 @@ impl StreamingEngine {
             self.ghost_clear();
             self.discard("filtered out");
             return Ok(());
+        }
+        if let Some(journal) = &self.cs_journal {
+            let ctx = crate::cs::mine::Context {
+                commands: &self.commands,
+                mode: self.mode.kind(),
+                command_mode: self.command_paths.is_some(),
+                vision: self.vision_enabled,
+                guided: self.guided_grammar.is_some(),
+                max_distance: self.cs.mine_max_distance,
+            };
+            journal.transcript(&ctx, &transcript);
         }
 
         // Also from standby: "command" is a way back in, like a wake phrase.
@@ -1330,6 +1344,11 @@ impl StreamingEngine {
             self.command_paths.is_some(),
             &self.cs,
         )
+    }
+
+    /// Keep the utterance journal for `ears cs mine` (`[cs] journal`).
+    pub fn set_cs_journal(&mut self, journal: Option<crate::cs::mine::Journal>) {
+        self.cs_journal = journal;
     }
 
     /// Replace the wake detector (e.g. with a wake word model).
@@ -2045,6 +2064,9 @@ impl StreamingEngine {
             (Heard::Unclear, Some(_)) => (None, "custom"),
             (Heard::Unclear, None) => (None, "unclear"),
         };
+        if let Some(journal) = &self.cs_journal {
+            journal.decision(&decision.options, choice, outcome, said, via);
+        }
         if let Some(decisions) = self.decisions.as_ref() {
             decisions.note(&crate::decide::Feedback {
                 id: decision.id.clone(),
@@ -2359,6 +2381,9 @@ impl StreamingEngine {
             top(&hearing.audio),
             top(&hearing.text)
         );
+        if let Some(journal) = &self.cs_journal {
+            journal.command(&outcome, &hearing);
+        }
         match outcome {
             Outcome::Fire { name, effect } => {
                 self.subtitle_fired(&hearing.words, &name);

@@ -2061,3 +2061,31 @@ async fn test_asr_context_off_sends_no_prompt() {
     run_one(&mut engine, &mut rx).await;
     assert_eq!(asr_prompts(&whisper).await, vec![None, None, None]);
 }
+
+/// The cs journal hook: voice commands and standby near misses are kept,
+/// dictated text and room speech never ([`crate::cs::mine`]).
+#[tokio::test]
+async fn test_cs_journal_keeps_commands_and_standby_but_not_dictation() {
+    let journaled = |heard: &'static str, standby: bool| async move {
+        let (mut engine, mut rx, _server, _dir) = command_engine(heard).await;
+        if standby {
+            engine.mode = crate::vad_mode::Mode::Standby;
+        }
+        let (tx, lines) = std::sync::mpsc::sync_channel(8);
+        engine.set_cs_journal(Some(crate::cs::mine::Journal::with_sender(tx)));
+        run_one(&mut engine, &mut rx).await;
+        lines.try_iter().collect::<Vec<_>>()
+    };
+    assert!(journaled("It's over now.", false).await.is_empty());
+    let enter = journaled("Over.", false).await;
+    assert_eq!(enter.len(), 1);
+    assert_eq!(enter[0].mode, "dictation");
+    assert_eq!(enter[0].target.as_deref(), Some("enter"));
+    // Standby: a near miss of "ears off" is kept, room speech is not.
+    let missed = journaled("Ears of.", true).await;
+    assert_eq!(missed.len(), 1);
+    assert_eq!(missed[0].mode, "standby");
+    assert_eq!(missed[0].text, "ears of");
+    assert!(!missed[0].is_matched());
+    assert!(journaled("What time is it?", true).await.is_empty());
+}

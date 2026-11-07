@@ -26,6 +26,7 @@
 pub mod check;
 pub mod context;
 pub mod migrate;
+pub mod mine;
 pub mod risk;
 
 use serde::{Deserialize, Serialize};

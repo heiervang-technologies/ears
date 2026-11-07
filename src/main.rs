@@ -309,6 +309,21 @@ async fn handle_cs(config: &ears::Config, action: CsAction) -> Result<i32> {
             ears::cs::migrate::run(&config_path, &actions, &model, out.as_deref())?;
             Ok(0)
         }
+        CsAction::Mine {
+            since,
+            out,
+            journal,
+            model,
+        } => {
+            let args = ears::cs::mine::MineArgs {
+                since,
+                out,
+                journal,
+                model,
+            };
+            ears::cs::mine::run(config, &args)?;
+            Ok(0)
+        }
     }
 }
 
