@@ -1,0 +1,60 @@
+Open the pull request and check whether the tests pass.
+Rename the variable to max silence milliseconds and rerun cargo clippy.
+Can you rebase this branch onto origin main and push it?
+The function returns an option of string, so unwrap it with a default.
+Add a unit test for the early finish rule in the streaming engine.
+Run cargo test with test threads set to one.
+Spawn three agents and give each of them a worktree.
+Why does the websocket close after the first utterance?
+Move the accept hold to after the action fires.
+Install the new binary in all three locations and restart the service.
+Set the gpu memory utilization to zero point three.
+Check the logs on rogue for the qwen three ASR pod.
+Let's merge the PR once the checks are green.
+The latency is dominated by the silence wait, not the model.
+Write a script that replays the clips in real time.
+Use kubectl to get the deployment and print it as YAML.
+Grep the debug log for utterance ended.
+Make the default false and document it in the readme.
+Fix the off by one error in the window bounds.
+Refactor process segment into smaller stages.
+Pin the plugin to the latest commit on main.
+The tracker should show each agent with its status.
+Create a new branch called feat smart endpoint.
+I think the speculative decode would save about a hundred milliseconds.
+Restart the vad unit with systemctl user restart.
+Look at the nvidia smi output and tell me how much memory is free.
+Add a config key called live min step milliseconds.
+Send a message to the hai os desk about the LED states.
+Compile it in release mode on the storage drive.
+Open the neovim config and jump to the ears plugin.
+The embedding model is called embeddinggemma two.
+Query the vast API for four RTX thirty ninety offers.
+Destroy the instance when the budget is spent.
+Let me know when the benchmark finishes.
+Compare word error rate on test clean and test other.
+Show me the diff for whisper dot rs.
+Squash the commits and date them last Saturday.
+This is a regression, revert it and open an issue.
+Turn on chant mode and say it again until it lands.
+Use the director tool to send the message by name.
+Measure the round trip with curl five times.
+Put the results in a markdown table.
+Bump the version and update the changelog.
+How many tokens per second does the decoder reach?
+Enable CUDA graphs and disable eager mode.
+The stream plugin re-encodes all audio on every step.
+Cache the encoder output for completed eight second windows.
+Try int eight weight only quantization on the decoder.
+Tell me the p fifty and p ninety of the final round trip.
+Lower the rollback words from three to two and measure again.
+Sync the dotfiles and commit the keybinding change.
+Open waybar config and change the click handler.
+Ping the Helsinki server and report the average.
+Start the fcitx five addon in debug mode.
+What does the health command return when the mic is missing?
+Add the word Claire as a mishearing of clear.
+Write the summary to the epoch issue on GitHub.
+Kill the orphan recorder process, but ask Markus first.
+Run the probe with four voices and two speeds.
+The ghost text should update every fifty milliseconds.
