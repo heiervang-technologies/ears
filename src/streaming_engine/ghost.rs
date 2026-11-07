@@ -634,6 +634,9 @@ impl StreamingEngine {
         let exact_on_raw = self.mode.is_command();
         // Read once per poll, and only when a partial needs it.
         let mut said: Option<(f64, Vec<crate::say_echo::Said>)> = None;
+        // The silence VAD had counted when these partials arrived: how
+        // much of it the stream heard after them ([`super::SETTLE_MS`]).
+        let heard = self.vad_detector.silence_ms();
         self.ghost_stream_events();
         let Some(ghost) = self.ghost.as_mut() else {
             return;
@@ -710,7 +713,7 @@ impl StreamingEngine {
                 self.ending = whole
                     .then_some(crate::endpoint::Ending::Exact)
                     .or_else(|| crate::endpoint::ending(&raw, &text, commands.as_ref()))
-                    .map(|e| (utterance, e, Instant::now()));
+                    .map(|e| (utterance, e, Instant::now(), heard));
             }
             // Subtitles follow speech even with typing off, never in standby.
             if let (Some(subtitles), false) = (self.subtitles.as_mut(), standby) {

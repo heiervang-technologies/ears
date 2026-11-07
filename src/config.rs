@@ -184,6 +184,15 @@ pub struct VadSettings {
     /// `command_silence_ms`.
     #[serde(default = "default_exact_silence_ms")]
     pub exact_silence_ms: u64,
+    /// End an utterance after this much silence (ms) when the live
+    /// transcript sounds finished (as for `finished_silence_ms`) and has
+    /// settled: the stream heard at least 250 ms of the silence without
+    /// changing it. Shorter than `finished_silence_ms` to take effect
+    /// (default: 0, off). The log says "(Finished, settled)" when it ended
+    /// one, and "Pause of N ms ... speech went on" for each pause that read
+    /// finished but was not the end, so the value can be chosen on data.
+    #[serde(default)]
+    pub early_finish_ms: u64,
 }
 
 fn default_command_silence_ms() -> u64 {
@@ -214,6 +223,7 @@ impl Default for VadSettings {
             command_silence_ms: default_command_silence_ms(),
             finished_silence_ms: default_finished_silence_ms(),
             exact_silence_ms: default_exact_silence_ms(),
+            early_finish_ms: 0,
         }
     }
 }

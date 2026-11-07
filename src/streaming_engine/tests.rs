@@ -2403,6 +2403,114 @@ async fn test_a_whole_command_ends_the_utterance_at_a_short_pause() {
     }
 }
 
+/// Frames of silence before the end when the partial `partial` arrives
+/// after `before` frames of it; `None` if speech went on first.
+fn end_with_late_partial(engine: &mut StreamingEngine, partial: &str, before: usize) -> u64 {
+    feed(engine, &[0.9, 0.9, 0.9, 0.9]);
+    let mut frames = 0;
+    for _ in 0..before {
+        frames += 1;
+        assert!(feed(engine, &[0.0]).is_empty());
+        engine.aim_early_end();
+    }
+    let ghost = engine.ghost.as_mut().unwrap();
+    let u = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::streamed(u, partial.into(), 0))
+        .unwrap();
+    engine.ghost_poll_partials();
+    engine.aim_early_end();
+    loop {
+        frames += 1;
+        let outcome = engine.vad_detector.inject_probability(0.0);
+        if engine.handle_vad_outcome(outcome).is_some() {
+            break;
+        }
+        engine.aim_early_end();
+        assert!(frames < 200, "never ended");
+    }
+    engine.ghost.as_mut().unwrap().next_utterance();
+    frames * 32
+}
+
+fn with_early_finish(engine: &mut StreamingEngine, ms: u64) {
+    engine.vad_detector = VadSegmentDetector::new(VadConfig {
+        early_finish_ms: ms,
+        ..engine.vad_detector.config().clone()
+    })
+    .unwrap();
+}
+
+/// `early_finish_ms` ends a finished sentence sooner once the stream has
+/// heard `SETTLE_MS` of the silence without changing it; nothing else moves.
+#[tokio::test]
+async fn test_a_settled_finished_sentence_ends_at_early_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    engine.set_mode(crate::vad_mode::Mode::Dictation);
+    // Off by default: as before.
+    assert_eq!(silence_to_end(&mut engine, "Ship it."), 704);
+    with_early_finish(&mut engine, 350);
+    // The partial arrived during speech: settled by 250 ms, ends at 350.
+    assert_eq!(silence_to_end(&mut engine, "Ship it."), 352);
+    // It arrived 160 ms into the silence: the stream must hear 250 more.
+    assert_eq!(end_with_late_partial(&mut engine, "Ship it.", 5), 416);
+    // Arriving late enough, the settle wait passes `finished_silence_ms`:
+    // the old wait applies.
+    assert_eq!(end_with_late_partial(&mut engine, "Ship it.", 15), 704);
+    // A sentence that does not read finished, and commands, keep theirs.
+    assert_eq!(silence_to_end(&mut engine, "Ship it and."), 1216);
+    assert_eq!(silence_to_end(&mut engine, "Ship it over"), 416);
+    assert_eq!(silence_to_end(&mut engine, "Enter."), 160);
+    // Only shorter than `finished_silence_ms` counts.
+    with_early_finish(&mut engine, 700);
+    assert_eq!(silence_to_end(&mut engine, "Ship it."), 704);
+}
+
+/// A pause that read as an ending is followed while it lasts and forgotten
+/// when speech goes on (after logging it) or the utterance ends.
+#[tokio::test]
+async fn test_a_pause_that_read_finished_is_tracked() {
+    use crate::endpoint::Ending;
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    engine.set_mode(crate::vad_mode::Mode::Dictation);
+    feed(&mut engine, &[0.9, 0.9, 0.9, 0.9]);
+    let ghost = engine.ghost.as_mut().unwrap();
+    let u = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::streamed(u, "Please orient yourself.".into(), 0))
+        .unwrap();
+    engine.ghost_poll_partials();
+    engine.aim_early_end();
+    assert_eq!(engine.pause, None, "no pause while speaking");
+    for _ in 0..10 {
+        assert!(feed(&mut engine, &[0.0]).is_empty());
+        engine.aim_early_end();
+    }
+    assert_eq!(engine.pause, Some((Ending::Finished, 32, 320)));
+    // "... in the repo": speech goes on, the pause is logged and dropped.
+    feed(&mut engine, &[0.9]);
+    engine.aim_early_end();
+    assert_eq!(engine.pause, None);
+    assert!(engine.vad_detector.is_speaking());
+    // A pause that ends the utterance is not one that went on.
+    for _ in 0..3 {
+        feed(&mut engine, &[0.0]);
+        engine.aim_early_end();
+    }
+    assert!(engine.pause.is_some());
+    let mut ended = false;
+    for _ in 0..40 {
+        ended |= !feed(&mut engine, &[0.0]).is_empty();
+        engine.aim_early_end();
+    }
+    assert!(ended);
+    assert_eq!(engine.pause, None);
+}
+
 /// A chant is not cut at its first pause: no early end while chanting, so
 /// "close window ... close window" stays one breath and fills the meters.
 #[tokio::test]
