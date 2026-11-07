@@ -1112,6 +1112,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
     // A lost capture (WirePlumber restarted, the device came back) starts
     // VAD again from scratch, unless it keeps failing (#220).
     let mut restart_capture = false;
+    let mut gave_up = false;
     loop {
         tokio::select! {
             _ = sigterm.recv() => break,
@@ -1122,7 +1123,8 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
                     unix_now(),
                 ) else {
                     AudioFeedback::beep_vad_close().ok();
-                    eprintln!("VAD stopped: no audio input (it kept failing)");
+                    tracing::error!("VAD stopped: no audio input (it kept failing)");
+                    gave_up = true;
                     break;
                 };
                 eprintln!("Microphone capture lost: listening again in {:?}", delay);
@@ -1223,8 +1225,20 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
     if restart_capture {
         drop(vad_lock);
         restart_self();
+        // Only reached when the exec failed.
+        gave_up = true;
     }
 
+    vad_exit(gave_up)
+}
+
+/// A VAD that was stopped ends cleanly; one that lost its microphone for good
+/// fails, so that a supervisor (`contrib/systemd/ears-vad.service`) starts it
+/// again rather than reading it as stopped on purpose.
+fn vad_exit(gave_up: bool) -> Result<()> {
+    if gave_up {
+        anyhow::bail!("VAD stopped: no audio input (it kept failing)");
+    }
     Ok(())
 }
 
@@ -1281,6 +1295,12 @@ fn restart_self() {
 #[cfg(test)]
 mod capture_restart_tests {
     use super::*;
+
+    #[test]
+    fn giving_up_on_the_microphone_is_a_failure_and_a_stop_is_not() {
+        assert!(vad_exit(false).is_ok());
+        assert!(vad_exit(true).is_err());
+    }
 
     #[test]
     fn backs_off_in_a_row_and_resets_after_a_quiet_spell() {

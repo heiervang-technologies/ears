@@ -460,8 +460,8 @@ VAD per session (`vad.pid`, `vad.lock`, `vad-health.lock`):
   `ears vad stop` finds nothing to stop: `systemctl --user stop
   ears-vad.service` cancels it.
 - A lost microphone is still handled by ears itself (it restarts in place,
-  same process). If that gives up after repeated failures, ears exits 0 and
-  the unit does not start it again.
+  same process). If that gives up after repeated failures, ears exits with
+  an error, and the unit starts it again under the same limits.
 
 For a waybar module, start through the unit instead of exec'ing the binary:
 
