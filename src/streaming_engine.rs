@@ -158,6 +158,9 @@ pub struct StreamingStats {
 /// The children themselves are bounded by `desktop::run_bounded`, so the
 /// closure is guaranteed to return.
 /// Command mode waits this long for the words; after it, the embedding decides alone.
+/// Between committing an utterance's text and pressing the key its closing
+/// command asks for.
+const TAIL_KEY_DELAY: std::time::Duration = std::time::Duration::from_millis(40);
 const COMMAND_ASR_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
 
 fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
@@ -286,6 +289,11 @@ pub struct StreamingEngine {
     continuous: Option<crate::continuous::ContinuousSpec>,
     /// The per-tick HTTP decoder still works (false: repeat instead).
     continuous_http: bool,
+    /// How the live transcript of the utterance in progress ends: ghost
+    /// utterance, ending, and when that partial arrived ([`crate::endpoint`]).
+    ending: Option<(u64, crate::endpoint::Ending, Instant)>,
+    /// The early end currently asked of VAD.
+    early_end: Option<(crate::endpoint::Ending, u64)>,
     /// Keep each transcribed utterance as a WAV here and report it on
     /// `SegmentCompleted` (ws-listen `--keep-audio`).
     keep_audio_dir: Option<PathBuf>,
@@ -362,6 +370,8 @@ impl StreamingEngine {
             ghost: None,
             continuous: None,
             continuous_http: false,
+            ending: None,
+            early_end: None,
             keep_audio_dir: None,
             standby: false,
             claimed: false,
@@ -415,12 +425,44 @@ impl StreamingEngine {
                 self.ghost_maybe_start_partial();
             }
         }
+        self.aim_early_end();
 
         if let Some(segment) = segment {
             self.process_segment(segment).await?;
         }
 
         Ok(())
+    }
+
+    /// Let VAD end the utterance in progress early when its live transcript
+    /// ends in a command or a finished sentence. Only a partial that arrived
+    /// after the last voiced frame counts: an older one may be missing the
+    /// last words. The streamed decoder pushes every change within about
+    /// 150 ms, so by the shortest early end the partial has caught up.
+    fn aim_early_end(&mut self) {
+        use crate::endpoint::Ending;
+        let silence = self.vad_detector.silence_ms();
+        let utterance = self.ghost.as_ref().map(|g| g.utterance);
+        let config = self.vad_detector.config();
+        let early = match self.ending {
+            Some((u, ending, at))
+                if silence > 0
+                    && Some(u) == utterance
+                    && (at.elapsed().as_millis() as u64) < silence =>
+            {
+                let ms = match ending {
+                    Ending::Command => config.command_silence_ms,
+                    Ending::Finished => config.finished_silence_ms,
+                };
+                (ms > 0 && ms < config.max_silence_duration_ms).then_some((ending, ms))
+            }
+            _ => None,
+        };
+        if early != self.early_end {
+            debug!("Early end: {:?}", early);
+            self.early_end = early;
+            self.vad_detector.end_early(early.map(|(_, ms)| ms));
+        }
     }
 
     /// Translate the detector's state after a chunk into transition events.
@@ -432,6 +474,9 @@ impl StreamingEngine {
     /// dropped before confirmation).
     fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
         if let Some(segment) = outcome {
+            if let Some((ending, ms)) = self.early_end.take() {
+                info!("Utterance ended after {} ms of silence ({:?})", ms, ending);
+            }
             // Complete speech segment detected. A short word kept from a
             // rejected candidate was never announced as started.
             if !self.was_speaking {
@@ -787,9 +832,20 @@ impl StreamingEngine {
         }
 
         let guided_command = self.guided_grammar.is_some();
+        // "... over": typed, then Enter, all from one utterance.
+        let mut tail = None;
         let transcript = match self.commands.parse(&transcript) {
             _ if guided_command => transcript,
             Some(crate::commands::Command::Literal(rest)) => rest,
+            None => match self.commands.parse_tail(&transcript) {
+                Some((body, crate::commands::Command::Literal(_))) => body,
+                Some((body, command)) => {
+                    info!("Ends in {} ({:?})", command.label(), transcript);
+                    tail = Some((command, transcript));
+                    body
+                }
+                None => transcript,
+            },
             Some(command) => {
                 self.subtitle_command(&transcript);
                 self.run_command(&command, &transcript).await;
@@ -798,10 +854,9 @@ impl StreamingEngine {
                 }
                 return Ok(());
             }
-            None => transcript,
         };
         if self.typing_mode != TypingMode::None && !self.typing_suspended && !guided_command {
-            if self.commands.steer(&transcript).await {
+            if tail.is_none() && self.commands.steer(&transcript).await {
                 info!("Steered: {}", transcript);
                 self.subtitle_command(&transcript);
                 self.ghost_accept(&transcript).await;
@@ -832,6 +887,7 @@ impl StreamingEngine {
             .health
             .as_ref()
             .map(|h| h.enter(crate::health::Stage::Typing));
+        let mut delivered = false;
 
         // Update progressive typing with the full accumulated text
         if self.ghost.is_some() {
@@ -840,6 +896,7 @@ impl StreamingEngine {
                 self.ghost_clear();
             } else if let Some(chars) = self.ghost_commit(&transcript) {
                 self.note_typed(chars, accumulated_before);
+                delivered = true;
             }
         } else if self.typing_suspended {
             debug!("Typing suspended after earlier failure; transcript kept, nothing injected");
@@ -859,7 +916,7 @@ impl StreamingEngine {
                             e.to_string(),
                         )
                     });
-                let delivered = self.handle_typing_outcome(outcome, typing_start);
+                delivered = self.handle_typing_outcome(outcome, typing_start);
                 self.send_enter_if_delivered(delivered, typing_start);
             }
         } else if self.config.progressive_typing && !newly_committed.is_empty() {
@@ -867,7 +924,7 @@ impl StreamingEngine {
             let progressive_typing = &mut self.progressive_typing;
             let accumulated = &self.accumulated_text;
             let outcome = run_blocking(|| progressive_typing.update(accumulated));
-            let delivered = self.handle_typing_outcome(outcome, typing_start);
+            delivered = self.handle_typing_outcome(outcome, typing_start);
             if delivered {
                 let chars = self.accumulated_text.chars().count() - accumulated_chars_before;
                 self.note_typed(chars, accumulated_before);
@@ -876,6 +933,28 @@ impl StreamingEngine {
         }
 
         drop(typing);
+        if let Some((command, heard)) = tail {
+            if delivered {
+                if self.ghost.is_some() {
+                    // The commit goes through the input method, the key
+                    // through the compositor: let the text land first.
+                    tokio::time::sleep(TAIL_KEY_DELAY).await;
+                }
+                self.subtitle_command(&heard);
+                // Auto-Enter already pressed it after the text.
+                if !(self.auto_enter && self.ghost.is_none()) {
+                    self.press_command(&command, &heard);
+                }
+                if command == crate::commands::Command::SignOff {
+                    self.apply_wake(crate::wake::Wake::Off, &heard);
+                }
+            } else {
+                info!(
+                    "{} not pressed: the text before it was not typed",
+                    command.label()
+                );
+            }
+        }
 
         // Update stats
         let latency_ms = start_time.elapsed().as_millis() as u64;
@@ -954,6 +1033,12 @@ impl StreamingEngine {
         // The ghost shows the command word; it must not be committed. It
         // turns the accept colour, then goes before the key is pressed.
         self.ghost_accept(heard).await;
+        self.press_command(command, heard);
+    }
+
+    /// Press a key command's keys (or delete, for the delete commands).
+    fn press_command(&mut self, command: &crate::commands::Command, heard: &str) {
+        use crate::commands::Command;
         if matches!(
             command,
             Command::Undo | Command::Back(_) | Command::Backtrack

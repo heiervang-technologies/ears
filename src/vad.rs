@@ -113,6 +113,12 @@ pub struct VadConfig {
     /// Drop finished segments whose mean speech probability is below this
     /// (0 keeps everything).
     pub min_mean_probability: f32,
+    /// End the segment after this much silence when the live transcript
+    /// ends in a key command ("... over"). 0: never early.
+    pub command_silence_ms: u64,
+    /// End the segment after this much silence when the live transcript
+    /// sounds finished (ends a sentence, not on "and" or "uh"). 0: never early.
+    pub finished_silence_ms: u64,
 }
 
 impl VadConfig {
@@ -127,6 +133,8 @@ impl VadConfig {
             end_threshold: settings.end_threshold,
             auto_gain: settings.auto_gain,
             min_mean_probability: settings.min_mean_probability,
+            command_silence_ms: settings.command_silence_ms,
+            finished_silence_ms: settings.finished_silence_ms,
         }
     }
 
@@ -160,6 +168,8 @@ impl Default for VadConfig {
             end_threshold: None,
             auto_gain: false,
             min_mean_probability: 0.0,
+            command_silence_ms: 0,
+            finished_silence_ms: 0,
         }
     }
 }
@@ -193,6 +203,9 @@ pub struct SileroVad {
     last_probability: f32,
     /// Mean probability of a just-rejected candidate worth rescuing.
     rescued: Option<f32>,
+    /// Silence that ends the current segment instead of
+    /// `max_silence_duration_ms`, when shorter (see [`SileroVad::end_early`]).
+    early_end_ms: Option<u64>,
     health: Option<crate::health::PipelineHealth>,
 }
 
@@ -223,6 +236,7 @@ impl SileroVad {
             last_mean_probability: 0.0,
             last_probability: 0.0,
             rescued: None,
+            early_end_ms: None,
             health: None,
         })
     }
@@ -337,8 +351,14 @@ impl SileroVad {
                 self.trail_frames += 1;
             }
             let silence_ms = (self.silence_frames * ms_per_frame) as u64;
-            if silence_ms >= self.config.max_silence_duration_ms {
+            let limit = self
+                .early_end_ms
+                .map_or(self.config.max_silence_duration_ms, |ms| {
+                    ms.min(self.config.max_silence_duration_ms)
+                });
+            if silence_ms >= limit {
                 self.in_speech = false;
+                self.early_end_ms = None;
                 self.last_mean_probability = if self.voiced_frames > 0 {
                     self.voiced_sum / self.voiced_frames as f32
                 } else {
@@ -394,6 +414,21 @@ impl SileroVad {
         self.in_speech
     }
 
+    /// End the segment in progress after `ms` of silence instead of
+    /// `max_silence_duration_ms` (never later); `None` restores it.
+    pub fn end_early(&mut self, ms: Option<u64>) {
+        self.early_end_ms = ms;
+    }
+
+    /// Silence since the last voiced frame of the segment in progress.
+    pub fn silence_ms(&self) -> u64 {
+        if !self.in_speech {
+            return 0;
+        }
+        let ms_per_frame = (SILERO_FRAME_SIZE * 1000) / self.config.sample_rate;
+        (self.silence_frames * ms_per_frame) as u64
+    }
+
     /// Check if speech frames are accumulating but not yet confirmed
     /// (above threshold but below min_speech_duration)
     pub fn is_probably_speaking(&self) -> bool {
@@ -416,6 +451,7 @@ impl SileroVad {
         self.candidate_peak = 0.0;
         self.silence_frames = 0;
         self.in_speech = false;
+        self.early_end_ms = None;
         self.voiced_sum = 0.0;
         self.voiced_frames = 0;
         self.trail_sum = 0.0;
@@ -646,6 +682,21 @@ impl VadSegmentDetector {
 
     pub fn is_speaking(&self) -> bool {
         self.vad.is_speaking()
+    }
+
+    /// See [`SileroVad::end_early`].
+    pub fn end_early(&mut self, ms: Option<u64>) {
+        self.vad.end_early(ms);
+    }
+
+    /// See [`SileroVad::silence_ms`].
+    pub fn silence_ms(&self) -> u64 {
+        self.vad.silence_ms()
+    }
+
+    /// The detector's configuration.
+    pub fn config(&self) -> &VadConfig {
+        &self.vad.config
     }
 
     /// Check if speech is probable but not yet confirmed

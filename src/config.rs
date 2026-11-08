@@ -167,6 +167,24 @@ pub struct VadSettings {
     /// gate, which the ASR model would otherwise turn into words. 0 disables.
     #[serde(default = "default_min_mean_probability")]
     pub min_mean_probability: f32,
+    /// End an utterance after this much silence (ms) when the live
+    /// transcript ends in a key command such as "... over" (default: 400).
+    /// Needs the live ears stream; 0 waits `max_silence_duration_ms`.
+    #[serde(default = "default_command_silence_ms")]
+    pub command_silence_ms: u64,
+    /// End an utterance after this much silence (ms) when the live
+    /// transcript sounds finished: a sentence ends, and not on "and", "the"
+    /// or "uh" (default: 700). 0 waits `max_silence_duration_ms`.
+    #[serde(default = "default_finished_silence_ms")]
+    pub finished_silence_ms: u64,
+}
+
+fn default_command_silence_ms() -> u64 {
+    400
+}
+
+fn default_finished_silence_ms() -> u64 {
+    700
 }
 
 impl Default for VadSettings {
@@ -182,6 +200,8 @@ impl Default for VadSettings {
             end_threshold: None,
             auto_gain: default_auto_gain(),
             min_mean_probability: default_min_mean_probability(),
+            command_silence_ms: default_command_silence_ms(),
+            finished_silence_ms: default_finished_silence_ms(),
         }
     }
 }

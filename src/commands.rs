@@ -60,6 +60,12 @@ pub struct VoiceCommands {
     /// Words that, said first, type the rest of the utterance as text.
     #[serde(default = "default_literal", deserialize_with = "more_literal")]
     pub literal: Vec<String>,
+    /// Enter and sign-off phrases also act at the end of a longer utterance
+    /// (default: true): "ship it over" types "ship it" and presses Enter,
+    /// with no pause before "over". Not after a word that makes it part of
+    /// the sentence ("it's over", "start over"); "literal over" types it.
+    #[serde(default = "default_tail")]
+    pub tail: bool,
     /// Phrases that press a key combination, e.g. `background = "ctrl+b"`.
     /// See [`keycodes`] for the key names.
     #[serde(default)]
@@ -400,6 +406,10 @@ fn default_steer_timeout_ms() -> u64 {
     800
 }
 
+fn default_tail() -> bool {
+    true
+}
+
 fn default_accept_ms() -> u64 {
     200
 }
@@ -419,6 +429,7 @@ impl Default for VoiceCommands {
             sleep: default_sleep(),
             literal: default_literal(),
             keys: BTreeMap::new(),
+            tail: default_tail(),
             accept_ms: default_accept_ms(),
             steer: Vec::new(),
             steer_timeout_ms: default_steer_timeout_ms(),
@@ -608,6 +619,92 @@ impl VoiceCommands {
             if head == prefix && words.len() > prefix_words {
                 return Some(Command::Literal(words[prefix_words..].join(" ")));
             }
+        }
+        None
+    }
+}
+
+/// Words after which a closing "over" belongs to the sentence: "it's over",
+/// "start over", "hand it over" is not among them (a thing handed over is
+/// usually the message).
+const OVER_IN_SENTENCE: &[&str] = &[
+    "s", "its", "thats", "whats", "is", "was", "were", "are", "be", "been", "being", "all", "game",
+    "start", "started", "starting", "come", "came", "coming", "turn", "turned", "turning", "take",
+    "took", "taking", "think", "thought", "thinking", "look", "looked", "looking", "fall", "fell",
+    "roll", "rolled", "knock", "knocked", "hang", "hung", "half", "once", "twice", "again", "and",
+    "or", "not", "sleep", "slept", "stay", "stayed", "stopping", "won", "win", "bend", "lean",
+    "tip", "tipped", "spill", "boil", "boiled", "flip", "flipped", "cross", "crossed", "climb",
+    "climbed", "jump", "jumped", "fly", "flew", "far", "way", "over", "left", "get", "got",
+    "getting", "read", "watch", "watched", "mull", "talk", "talked", "pore", "gloss", "glossed",
+    "run", "ran", "go", "went", "going", "do", "did", "redo", "chew", "puzzle",
+];
+
+/// Words after which a closing "enter" belongs to the sentence ("you can
+/// enter").
+const ENTER_IN_SENTENCE: &[&str] = &[
+    "to", "please", "you", "i", "we", "they", "he", "she", "can", "cant", "cannot", "will", "wont",
+    "not", "must", "should", "could", "would", "shall", "may", "might", "and", "or", "then",
+    "never", "dont", "didnt", "t", "ll", "d", "let", "lets", "us",
+];
+
+impl VoiceCommands {
+    /// An Enter or sign-off phrase that ends a longer utterance ("ship it
+    /// over"): the text before it and the command. "literal over" at the
+    /// end gives `Command::Literal` with the text to type as said.
+    pub fn parse_tail(&self, transcript: &str) -> Option<(String, Command)> {
+        if !self.enabled || !self.tail {
+            return None;
+        }
+        let words: Vec<&str> = transcript.split_whitespace().collect();
+        let said: Vec<String> = words.iter().map(|w| normalize(w)).collect();
+        // Longest phrases first: "over and out" before "out"... and "over".
+        let mut phrases: Vec<(Vec<String>, Command)> = self
+            .sign_off
+            .iter()
+            .map(|p| normalize(p))
+            .filter(|p| p.contains(' '))
+            .map(|p| (p.split(' ').map(String::from).collect(), Command::SignOff))
+            .chain(self.enter.iter().map(|p| {
+                let p = normalize(p);
+                (p.split(' ').map(String::from).collect(), Command::Enter)
+            }))
+            .filter(|(p, _): &(Vec<String>, Command)| !p.is_empty() && !p[0].is_empty())
+            .collect();
+        phrases.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
+        for (phrase, command) in phrases {
+            let n = phrase.len();
+            // Some words must come before it: the whole utterance is `parse`'s.
+            if said.len() <= n || said[said.len() - n..] != phrase[..] {
+                continue;
+            }
+            let mut cut = words.len() - n;
+            // "it's" normalizes to "it s": its last part decides.
+            let before = said[cut - 1].rsplit(' ').next().unwrap_or_default();
+            let literal = self.literal.iter().any(|l| normalize(l) == before);
+            if literal {
+                let mut text = words[..cut - 1].to_vec();
+                text.extend_from_slice(&words[cut..]);
+                return Some((text.join(" "), Command::Literal(String::new())));
+            }
+            let last = phrase[n - 1].as_str();
+            if n == 1 && last == "over" && OVER_IN_SENTENCE.contains(&before) {
+                return None;
+            }
+            if n == 1 && last == "enter" {
+                if ENTER_IN_SENTENCE.contains(&before) {
+                    return None;
+                }
+                // "... and press enter": the key, not the words.
+                if matches!(before, "press" | "hit") && cut > 1 {
+                    cut -= 1;
+                }
+            }
+            let body = words[..cut].join(" ");
+            let body = body.trim_end_matches([',', ';', ':', ' ']).to_string();
+            if normalize(&body).is_empty() {
+                return None;
+            }
+            return Some((body, command));
         }
         None
     }
@@ -861,6 +958,52 @@ mod tests {
             enter: vec!["over".into(), "enter".into()],
             ..VoiceCommands::default()
         }
+    }
+
+    #[test]
+    fn a_closing_over_or_enter_presses_enter() {
+        let c = over();
+        let tail = |t: &str| c.parse_tail(t);
+        assert_eq!(
+            tail("ship it to main over"),
+            Some(("ship it to main".into(), Command::Enter))
+        );
+        assert_eq!(
+            tail("Ship it to main, over."),
+            Some(("Ship it to main".into(), Command::Enter))
+        );
+        assert_eq!(
+            tail("run the tests and press enter"),
+            Some(("run the tests and".into(), Command::Enter))
+        );
+        assert_eq!(
+            tail("thanks over and out"),
+            Some(("thanks".into(), Command::SignOff))
+        );
+        // Part of the sentence.
+        assert_eq!(tail("the game is over"), None);
+        assert_eq!(tail("it's over"), None);
+        assert_eq!(tail("let's start over"), None);
+        assert_eq!(tail("you can enter"), None);
+        // The whole utterance is `parse`'s, not a tail.
+        assert_eq!(tail("over"), None);
+        assert_eq!(tail("over and out"), None);
+        // "literal" keeps the word as text.
+        assert_eq!(
+            tail("we are done literal over"),
+            Some(("we are done over".into(), Command::Literal(String::new())))
+        );
+        // A one-word sign-off ("peace") is too common to end on.
+        let c = VoiceCommands {
+            sign_off: vec!["over and out".into(), "peace".into()],
+            ..over()
+        };
+        assert_eq!(c.parse_tail("world peace"), None);
+        let off = VoiceCommands {
+            tail: false,
+            ..over()
+        };
+        assert_eq!(off.parse_tail("ship it over"), None);
     }
 
     #[test]
