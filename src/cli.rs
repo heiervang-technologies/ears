@@ -221,6 +221,16 @@ pub enum Commands {
         action: String,
     },
 
+    /// Switch the VAD mode by its colour, as saying the colour does: orange
+    /// (standby), blue (dictation), yellow (talking stick), purple (command
+    /// mode), pink (vision). `toggle` goes between orange and blue: a key
+    /// for "stop typing / type again".
+    Colour {
+        /// toggle | orange | blue | yellow | purple | pink
+        #[arg(value_parser = ["toggle", "orange", "blue", "yellow", "purple", "pink"])]
+        colour: String,
+    },
+
     /// Command mode: teach an action your phrasing. The next utterance in
     /// command mode becomes one of its anchors (it is not fired). Without
     /// ACTION, list the actions and how many anchors each has.

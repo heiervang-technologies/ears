@@ -78,6 +78,9 @@ pub struct TypingSettings {
     /// Command mode switched over IPC (`ears command on|off|toggle`): a
     /// request number and what it asks (`None`: toggle).
     pub command: Option<(u64, Option<bool>)>,
+    /// A colour mode asked for over IPC (`ears colour`): a request number
+    /// and the colour (`None`: orange and blue in turn).
+    pub colour: Option<(u64, Option<crate::colour_mode::Colour>)>,
 }
 
 impl Default for TypingSettings {
@@ -94,6 +97,7 @@ impl Default for TypingSettings {
             claimed: false,
             wake: None,
             command: None,
+            colour: None,
         }
     }
 }
@@ -204,6 +208,7 @@ pub async fn start_vad_pipeline(
             let _asr_probe = asr_probe;
             let mut last_wake: Option<u64> = None;
             let mut last_command: Option<u64> = None;
+            let mut last_colour: Option<u64> = None;
             loop {
                 tokio::select! {
                     audio = audio_rx.recv() => {
@@ -237,6 +242,12 @@ pub async fn start_vad_pipeline(
                             if last_command != Some(seq) {
                                 last_command = Some(seq);
                                 engine.request_command_mode(on).await;
+                            }
+                        }
+                        if let Some((seq, colour)) = s.colour {
+                            if last_colour != Some(seq) {
+                                last_colour = Some(seq);
+                                engine.request_colour(colour).await;
                             }
                         }
                         tracing::debug!("Typing settings updated: progressive={}, auto_correction={}, mode={:?}, auto_enter={}, bash_mode={}", s.progressive_typing, s.auto_correction, s.typing_mode, s.auto_enter, s.guided_grammar.is_some());
@@ -349,7 +360,8 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         // TUI keeps typing as its panels say.
                     }
                     crate::ipc::EarsCommand::Standby { .. }
-                    | crate::ipc::EarsCommand::CommandMode { .. } => {
+                    | crate::ipc::EarsCommand::CommandMode { .. }
+                    | crate::ipc::EarsCommand::Colour { .. } => {
                         // Standby is the headless VAD's (`ears vad`): the TUI
                         // has no wake phrases.
                         app.add_log("Standby switch ignored: the TUI has no standby");
@@ -399,6 +411,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                         claimed: false,
                         wake: None,
                         command: None,
+                        colour: None,
                     });
                 }
             }
@@ -433,6 +446,7 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             claimed: false,
                             wake: None,
                             command: None,
+                            colour: None,
                         });
                         vad_shutdown = Some(shutdown);
                         vad_settings = Some(settings);
