@@ -184,6 +184,13 @@ async fn main() -> Result<()> {
         Some(Commands::CommandMode { action }) => {
             handle_command_mode(&action, &config.state_dir).await?;
         }
+        Some(Commands::Colour { colour }) => {
+            match ears::ipc::send_command(&format!("colour-{colour}")).await {
+                Ok(resp) if resp.starts_with("colour:") => {}
+                Ok(resp) => anyhow::bail!("Running ears cannot switch colour: {resp}"),
+                Err(_) => anyhow::bail!("VAD is not running"),
+            }
+        }
         Some(Commands::Teach { action }) => {
             handle_teach(&config, action.as_deref())?;
         }
@@ -988,6 +995,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
             claimed,
             wake: None,
             command: None,
+            colour: None,
         }
     };
 
@@ -1014,6 +1022,7 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
     let mut claims: usize = 0;
     let mut wake_seq: u64 = 0;
     let mut command_seq: u64 = 0;
+    let mut colour_seq: u64 = 0;
 
     let save_to_clipboard = config.save_to_clipboard;
     let ducker = ears::ducker::VolumeDucker::new(config.vad.duck_enabled, config.vad.duck_percent);
@@ -1131,6 +1140,13 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
                         settings.command = Some((command_seq, on));
                         let _ = settings_tx.send(settings);
                         tracing::info!("Command mode switch asked for over IPC: {:?}", on);
+                    }
+                    ears::ipc::EarsCommand::Colour { colour } => {
+                        colour_seq += 1;
+                        let mut settings = make_settings(auto_enter, typing, claims > 0);
+                        settings.colour = Some((colour_seq, colour));
+                        let _ = settings_tx.send(settings);
+                        tracing::info!("Colour switch asked for over IPC: {:?}", colour);
                     }
                     ears::ipc::EarsCommand::Standby { wake } => {
                         wake_seq += 1;
@@ -1372,6 +1388,7 @@ async fn handle_ws_listen(
                 claimed: false,
                 wake: None,
                 command: None,
+                colour: None,
             });
         // Apply initial settings
         let s = settings_rx.borrow_and_update().clone();

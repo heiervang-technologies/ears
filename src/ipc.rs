@@ -142,6 +142,11 @@ pub enum EarsCommand {
     /// Switch command mode (`command-on|off|toggle`), as saying "command"
     /// does; `None` toggles.
     CommandMode { on: Option<bool> },
+    /// Switch to a colour mode (`colour-<name>`), as saying the colour does;
+    /// `colour-toggle` (`None`) goes between orange and blue.
+    Colour {
+        colour: Option<crate::colour_mode::Colour>,
+    },
 }
 
 /// Start the command server at the default socket path.
@@ -226,6 +231,22 @@ pub fn start_cmd_server_at(
                                         };
                                         let _ = tx.send(EarsCommand::CommandMode { on });
                                         "command:requested".to_string()
+                                    }
+                                    v if v.starts_with("colour-") => {
+                                        let name = &v["colour-".len()..];
+                                        match crate::colour_mode::Colour::parse(name) {
+                                            _ if name == "toggle" => {
+                                                let _ = tx.send(EarsCommand::Colour { colour: None });
+                                                "colour:requested".to_string()
+                                            }
+                                            Some(colour) => {
+                                                let _ = tx.send(EarsCommand::Colour {
+                                                    colour: Some(colour),
+                                                });
+                                                "colour:requested".to_string()
+                                            }
+                                            None => format!("error:unknown colour {name}"),
+                                        }
                                     }
                                     "toggle-auto-enter" => {
                                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();

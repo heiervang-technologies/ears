@@ -2061,6 +2061,19 @@ impl StreamingEngine {
     /// Switch command mode as saying "command" would, asked for over IPC
     /// (`ears command on|off|toggle`; `None` toggles), e.g. by a voice call
     /// that needs the words. Asking for the current mode does nothing.
+    /// Switch to a colour mode as saying the colour does (`ears colour`);
+    /// `None` goes between orange (standby) and blue (dictation): blue from
+    /// standby, orange from any other mode.
+    pub async fn request_colour(&mut self, colour: Option<crate::colour_mode::Colour>) {
+        use crate::colour_mode::Colour;
+        let colour = colour.unwrap_or(if self.standby {
+            Colour::Blue
+        } else {
+            Colour::Orange
+        });
+        self.switch_to_colour(colour, "").await;
+    }
+
     pub async fn request_command_mode(&mut self, on: Option<bool>) {
         let on = on.unwrap_or(self.command_mode.is_none());
         if on == self.command_mode.is_some() {
