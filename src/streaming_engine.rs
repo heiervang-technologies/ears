@@ -158,6 +158,10 @@ pub struct StreamingStats {
 /// The children themselves are bounded by `desktop::run_bounded`, so the
 /// closure is guaranteed to return.
 /// Command mode waits this long for the words; after it, the embedding decides alone.
+/// A partial may arrive this long before the last voiced frame and still
+/// end the utterance early: the closing word is decoded while its sound is
+/// still fading above the end threshold.
+const PARTIAL_LEAD_MS: u64 = 250;
 /// Between committing an utterance's text and pressing the key its closing
 /// command asks for.
 const TAIL_KEY_DELAY: std::time::Duration = std::time::Duration::from_millis(40);
@@ -435,10 +439,11 @@ impl StreamingEngine {
     }
 
     /// Let VAD end the utterance in progress early when its live transcript
-    /// ends in a command or a finished sentence. Only a partial that arrived
-    /// after the last voiced frame counts: an older one may be missing the
-    /// last words. The streamed decoder pushes every change within about
-    /// 150 ms, so by the shortest early end the partial has caught up.
+    /// ends in a command or a finished sentence. Only a partial from about
+    /// the last voiced frame on counts ([`PARTIAL_LEAD_MS`]): an older one
+    /// may be missing the last words. The streamed decoder pushes every
+    /// change within about 150 ms, so words said after it would replace it
+    /// before the shortest early end.
     fn aim_early_end(&mut self) {
         use crate::endpoint::Ending;
         let silence = self.vad_detector.silence_ms();
@@ -448,7 +453,7 @@ impl StreamingEngine {
             Some((u, ending, at))
                 if silence > 0
                     && Some(u) == utterance
-                    && (at.elapsed().as_millis() as u64) < silence =>
+                    && (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS =>
             {
                 let ms = match ending {
                     Ending::Command => config.command_silence_ms,
