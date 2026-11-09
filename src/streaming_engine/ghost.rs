@@ -663,6 +663,7 @@ impl StreamingEngine {
                     continue;
                 }
             };
+            let raw = text.clone();
             let (text, frozen_bytes) = if bash {
                 crate::bash::clean_frozen(&text, frozen_bytes)
             } else {
@@ -689,6 +690,11 @@ impl StreamingEngine {
                 None => (text, frozen_bytes),
             };
             let parsed = commands.as_ref().and_then(|c| c.parse(&text));
+            // Only the stream pushes every change soon enough to trust.
+            if streamed && !bash {
+                self.ending = crate::endpoint::ending(&raw, &text, commands.as_ref())
+                    .map(|e| (utterance, e, Instant::now()));
+            }
             // Subtitles follow speech even with typing off, never in standby.
             if let (Some(subtitles), false) = (self.subtitles.as_mut(), standby) {
                 let command = parsed.is_some()

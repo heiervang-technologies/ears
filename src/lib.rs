@@ -10,6 +10,7 @@ pub mod colour_mode;
 pub mod command_mode;
 pub mod commands;
 pub mod decide;
+pub mod endpoint;
 pub mod pointer;
 pub mod say_echo;
 pub mod vision;
