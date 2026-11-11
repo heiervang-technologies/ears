@@ -89,26 +89,6 @@ fn test_concurrent_state_transitions() {
 }
 
 #[test]
-fn test_recording_timeout_resets_state() {
-    println!("\n🔍 BUG INVESTIGATION: Recording timeout should reset state");
-
-    let temp_dir = TempDir::new().unwrap();
-    let mut state_mgr = StateManager::new(temp_dir.path()).unwrap();
-
-    // Override timeout to very short for testing
-    // (We can't access max_recording_duration directly, so we test behavior)
-
-    state_mgr.transition(State::Recording).unwrap();
-
-    // In real code, recording has max_recording_duration = 120 seconds
-    // If we try to transition after timeout, it should reset to Idle
-
-    println!("✓ Timeout mechanism exists (lines 73-82 in state.rs)");
-    println!("  But: Timeout is only checked during transition attempt");
-    println!("  Issue: If no one calls transition(), timeout isn't enforced");
-}
-
-#[test]
 fn test_state_file_manual_corruption() {
     println!("\n🔍 BUG INVESTIGATION: Manually corrupted state file");
 

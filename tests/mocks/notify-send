@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Mock notify-send for testing - does nothing (avoids showing notifications)
-exit 0
