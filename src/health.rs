@@ -168,6 +168,14 @@ pub struct HealthSnapshot {
     pub session_id: String,
     pub session_kind: &'static str,
     pub device: String,
+    /// The device the configuration asked capture to use.
+    pub device_configured: String,
+    /// The source capture opened; `None` until known. Differs from
+    /// `device_configured` when that device was missing.
+    pub device_opened: Option<String>,
+    /// The configured device was not present in PipeWire when capture
+    /// started, so `device_opened` is a fallback or the default source.
+    pub device_missing: bool,
     pub updated_monotonic_ms: u64,
     pub stage: Stage,
     pub stage_since_ms: u64,
@@ -212,6 +220,9 @@ pub struct HealthSnapshot {
     asr_track: AsrTrack,
 }
 
+/// [`HealthSnapshot::mic_warning`] while the configured device is absent.
+pub const MIC_MISSING: &str = "configured mic missing";
+
 /// Smoothed input levels behind [`HealthSnapshot::mic_warning`].
 #[derive(Clone, Debug, Default)]
 struct MicLevels {
@@ -221,6 +232,29 @@ struct MicLevels {
     speech_chunks: u32,
     /// Smoothed fraction of clipped samples.
     clip_rate: f32,
+}
+
+/// How often the same microphone quality state may reach the log above DEBUG.
+const MIC_LOG_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Whether a change to `state` is logged at its own level: the first time, and
+/// then at most once per [`MIC_LOG_INTERVAL`] for each distinct state.
+fn mic_log_due(
+    logged: &mut Vec<(Option<&'static str>, std::time::Instant)>,
+    state: Option<&'static str>,
+    now: std::time::Instant,
+) -> bool {
+    match logged.iter_mut().find(|(seen, _)| *seen == state) {
+        Some((_, at)) if now.duration_since(*at) < MIC_LOG_INTERVAL => false,
+        Some((_, at)) => {
+            *at = now;
+            true
+        }
+        None => {
+            logged.push((state, now));
+            true
+        }
+    }
 }
 
 /// Capture chunks (100 ms) of each kind before their level is judged.
@@ -365,6 +399,15 @@ impl PipelineHealth {
 
     pub fn device(&self, device: &str) {
         self.update(|s| s.device = device.to_owned());
+    }
+
+    /// Record which source capture opened (on every capture start).
+    pub fn capture_device(&self, choice: &crate::audio::CaptureDevice) {
+        self.update(|s| {
+            s.device_configured = choice.configured.clone();
+            s.device_opened = choice.opened.clone();
+            s.device_missing = choice.missing;
+        });
     }
 
     pub fn captured(&self, samples: &[f32]) {
@@ -534,7 +577,12 @@ impl PipelineHealth {
             / 16;
         state.noise_dbfs = state.levels.noise_dbfs();
         state.speech_dbfs = state.levels.speech_dbfs();
-        state.mic_warning = state.levels.warning();
+        // The wrong microphone outranks how the one in use sounds.
+        state.mic_warning = if state.device_missing {
+            Some(MIC_MISSING)
+        } else {
+            state.levels.warning()
+        };
         state.asr = state.asr_track.report();
         state
     }
@@ -609,6 +657,9 @@ impl HealthMonitor {
             session_id: format!("{pid}-{now}"),
             session_kind: "desktop_vad",
             device: String::new(),
+            device_configured: String::new(),
+            device_opened: None,
+            device_missing: false,
             updated_monotonic_ms: now,
             stage: Stage::Listening,
             stage_since_ms: now,
@@ -648,6 +699,7 @@ impl HealthMonitor {
         let worker = thread::Builder::new().name("ears-health".into()).spawn(move || {
             let mut previous_problem = None;
             let mut previous_mic = None;
+            let mut mic_logged = Vec::new();
             let mut write_failed = false;
             loop {
                 let done = rx.recv_timeout(Duration::from_secs(1)) != Err(mpsc::RecvTimeoutError::Timeout);
@@ -667,7 +719,11 @@ impl HealthMonitor {
                     previous_problem = problem;
                 }
                 if snapshot.mic_warning != previous_mic && !done {
+                    // A level hovering at a threshold flips this every few
+                    // seconds: repeats inside MIC_LOG_INTERVAL are debug detail.
+                    let due = mic_log_due(&mut mic_logged, snapshot.mic_warning, std::time::Instant::now());
                     match snapshot.mic_warning {
+                        _ if !due => tracing::debug!(session = %snapshot.session_id, state = ?snapshot.mic_warning, "Microphone quality changed again"),
                         Some(reason) => tracing::warn!(
                             session = %snapshot.session_id,
                             reason,
@@ -712,6 +768,24 @@ impl Drop for HealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flapping_mic_state_is_logged_once_per_interval() {
+        let start = std::time::Instant::now();
+        let mut logged = Vec::new();
+        assert!(mic_log_due(&mut logged, Some("noisy background"), start));
+        assert!(mic_log_due(&mut logged, None, start));
+        // Flips straight back: both states were just logged.
+        let soon = start + Duration::from_secs(5);
+        assert!(!mic_log_due(&mut logged, Some("noisy background"), soon));
+        assert!(!mic_log_due(&mut logged, None, soon));
+        // A different problem is news.
+        assert!(mic_log_due(&mut logged, Some("speech too quiet"), soon));
+        // The interval runs from the last line logged, not the last flip.
+        let later = start + MIC_LOG_INTERVAL;
+        assert!(mic_log_due(&mut logged, Some("noisy background"), later));
+        assert!(!mic_log_due(&mut logged, Some("speech too quiet"), later));
+    }
 
     #[test]
     fn stage_guards_restore_on_error_and_snapshot_is_consistent() {
@@ -806,6 +880,46 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&snap).unwrap();
         assert_eq!(value["mic_warning"], "mic clipping");
         assert!(value.get("levels").is_none());
+    }
+
+    #[test]
+    fn a_missing_device_is_reported_and_sets_the_mic_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let monitor = HealthMonitor::start(dir.path()).unwrap();
+        let health = monitor.health();
+        health.device("jbl");
+        let fresh = serde_json::to_value(health.snapshot()).unwrap();
+        assert_eq!(fresh["device_missing"], false);
+        assert_eq!(fresh["device_opened"], serde_json::Value::Null);
+
+        let pw = crate::audio::Sources {
+            names: vec!["ears_aec_mic".into()],
+            default: Some("rode".into()),
+        };
+        let fallbacks = ["ears_aec_mic".to_string()];
+        health.capture_device(&crate::audio::choose_capture_device(
+            "jbl",
+            &fallbacks,
+            Some(&pw),
+        ));
+        let value = serde_json::to_value(health.snapshot()).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["device"], "jbl");
+        assert_eq!(value["device_configured"], "jbl");
+        assert_eq!(value["device_opened"], "ears_aec_mic");
+        assert_eq!(value["device_missing"], true);
+        assert_eq!(value["mic_warning"], MIC_MISSING);
+
+        // A restart that finds the device again clears the warning.
+        health.capture_device(&crate::audio::choose_capture_device(
+            "ears_aec_mic",
+            &fallbacks,
+            Some(&pw),
+        ));
+        let snap = health.snapshot();
+        assert!(!snap.device_missing);
+        assert_eq!(snap.device_opened.as_deref(), Some("ears_aec_mic"));
+        assert_eq!(snap.mic_warning, None);
     }
 
     #[test]

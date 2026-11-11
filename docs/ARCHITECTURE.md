@@ -568,7 +568,16 @@ their count alone is not a count of unhandled failures.
 
 ### Logging
 
-Logs are written to `$XDG_RUNTIME_DIR/ears/debug.log` using `tracing_subscriber` with file output (no ANSI codes). Log level is controlled by `RUST_LOG` env var (default: `info`).
+Logs are written to `$XDG_RUNTIME_DIR/ears/debug.log` using `tracing_subscriber` with file output (no ANSI codes). Every `ears` process appends to the same file, short-lived subcommands included.
+
+Default levels (no `RUST_LOG`): `info` for ears, `warn` for ONNX Runtime (`ort`).
+
+- **INFO and above**: what diagnosing missed speech needs. Start of a long-running mode (`ears`, `ears vad`, `ears ghost`, `ears ws-listen`), capture start/stop/restart, VAD state transitions, utterance ends, segments kept, dropped or discarded, transcription results and timings, transcription errors, health changes.
+- **DEBUG**: per-invocation lines from short-lived subcommands (`ears typing status` from a status bar would otherwise write two lines every couple of seconds), the temporary file behind each transcription request, the 1 Hz health snapshot, and repeats of a microphone quality state already logged in the last 10 minutes (a level hovering at a threshold flips it every few seconds; `vad-health.json` always has the current state).
+
+`RUST_LOG` replaces the ears levels and takes the usual `tracing_subscriber` directives: `RUST_LOG=debug` for everything, `RUST_LOG=info,ears::health=debug` for one module. `ort` stays at `warn` unless `RUST_LOG` names it (`RUST_LOG=info,ort=info`). The level is read at startup, per process.
+
+The file is never rotated or truncated by ears. `$XDG_RUNTIME_DIR` is tmpfs, so it lasts until logout or reboot and counts against memory.
 
 ## 12. Post-Transcribe Hook
 

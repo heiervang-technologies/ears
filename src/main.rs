@@ -20,6 +20,20 @@ use ears::{
 use std::time::Duration;
 use url::Url;
 
+/// Levels for `debug.log` when `RUST_LOG` does not say otherwise.
+const DEFAULT_LOG_FILTER: &str = "info";
+
+/// The log filter: `RUST_LOG` when set and valid, else [`DEFAULT_LOG_FILTER`].
+/// ONNX Runtime narrates every model load at INFO, so `ort` stays at WARN
+/// unless `RUST_LOG` names it (`RUST_LOG=info,ort=info`).
+fn log_filter(rust_log: Option<&str>) -> tracing_subscriber::EnvFilter {
+    let quiet_ort = |directives: &str| format!("ort=warn,{directives}");
+    rust_log
+        .filter(|directives| !directives.trim().is_empty())
+        .and_then(|directives| tracing_subscriber::EnvFilter::try_new(quiet_ort(directives)).ok())
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new(quiet_ort(DEFAULT_LOG_FILTER)))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse CLI first (need profile for config loading)
@@ -92,15 +106,22 @@ async fn main() -> Result<()> {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::sync::Arc::new(log_file))
             .with_ansi(false)
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-            )
+            .with_env_filter(log_filter(std::env::var("RUST_LOG").ok().as_deref()))
             .try_init();
     }
 
-    tracing::info!("ears started");
-    tracing::info!("Log file: {}", log_file_path.display());
+    // Short-lived subcommands run constantly (a status bar polls `ears typing
+    // status` every couple of seconds) and all append to the same file: only
+    // the long-running modes announce themselves at INFO.
+    if matches!(
+        cli.command,
+        None | Some(Commands::Vad { .. } | Commands::Ghost | Commands::WsListen { .. })
+    ) {
+        tracing::info!(pid = std::process::id(), "ears started");
+    } else {
+        tracing::debug!("ears started");
+    }
+    tracing::debug!("Log file: {}", log_file_path.display());
 
     // Set audio cue volume from config
     AudioFeedback::set_volume(config.cue_volume);
@@ -1891,6 +1912,72 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_filter_keeps_ort_quiet_unless_rust_log_names_it() {
+        use tracing::level_filters::LevelFilter;
+        let directives = |rust_log| log_filter(rust_log).to_string();
+        assert_eq!(directives(None), directives(Some("info")));
+        assert!(directives(None).contains("ort=warn"));
+        assert!(directives(Some("debug")).contains("ort=warn"));
+        assert!(directives(Some("info,ort=info")).contains("ort=info"));
+        assert!(!directives(Some("info,ort=info")).contains("ort=warn"));
+        assert_eq!(log_filter(None).max_level_hint(), Some(LevelFilter::INFO));
+        assert_eq!(
+            log_filter(Some("info,ears::health=debug")).max_level_hint(),
+            Some(LevelFilter::DEBUG)
+        );
+        // An unparsable RUST_LOG falls back to the default instead of silence.
+        assert_eq!(directives(Some("ears=loud")), directives(None));
+    }
+
+    #[test]
+    fn default_log_filter_drops_ort_info_and_ears_debug() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let logged = |rust_log| {
+            let sink = Sink::default();
+            let writer = sink.clone();
+            let subscriber = tracing_subscriber::registry()
+                .with(log_filter(rust_log))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(move || writer.clone()),
+                );
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::info!(target: "ort::logging", "ort-info");
+                tracing::warn!(target: "ort::logging", "ort-warn");
+                tracing::debug!(target: "ears", "ears-debug");
+                tracing::info!(target: "ears::vad", "ears-info");
+            });
+            let bytes = sink.0.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        };
+        let has = |log: &str, names: [&str; 4]| names.map(|name| log.contains(name));
+        let names = ["ort-info", "ort-warn", "ears-debug", "ears-info"];
+        assert_eq!(has(&logged(None), names), [false, true, false, true]);
+        assert_eq!(
+            has(&logged(Some("debug")), names),
+            [false, true, true, true]
+        );
+        assert_eq!(
+            has(&logged(Some("info,ort=info")), names),
+            [true, true, false, true]
+        );
+    }
 
     #[test]
     fn test_set_server_validation() {

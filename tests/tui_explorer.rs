@@ -242,30 +242,3 @@ fn test_explorer_finds_command_mode() {
 
     println!("Unique command buffers: {:?}", unique_commands);
 }
-
-#[test]
-fn test_complexity_is_linear() {
-    use std::time::Instant;
-
-    // Test with different max_states limits
-    let limits = vec![10, 20, 30];
-    let mut times = vec![];
-
-    for &limit in &limits {
-        let start = Instant::now();
-        let states = explore_state_space(limit);
-        let duration = start.elapsed();
-
-        times.push(duration);
-        println!(
-            "\nLimit: {}, Found: {}, Time: {:?}",
-            limit,
-            states.len(),
-            duration
-        );
-    }
-
-    // Verify roughly linear scaling (within 3x)
-    // This is approximate due to BFS stopping conditions
-    println!("\n✓ Complexity appears linear in number of states explored");
-}

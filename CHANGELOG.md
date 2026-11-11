@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- VAD no longer captures from another microphone in silence when the
+  configured `device` is missing from PipeWire (#258). Each capture start
+  checks it; when absent, a warning names the source used instead,
+  `vad-health.json` gains `device_configured`, `device_opened` and
+  `device_missing`, and `mic_warning` reads `configured mic missing`. The
+  new optional `device_fallbacks` list is tried in order before PipeWire's
+  default source.
+
 - Live stream to a server on another machine: Nagle is off, a keepalive
   ping notices a server that vanished without closing (reboot, dropped
   Wi-Fi) within 10 s instead of after TCP's many-minute timeout, a missing

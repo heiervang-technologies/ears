@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Mock fzf for testing
-if [[ -n "${MOCK_FZF_SELECTION:-}" ]]; then
-    echo "$MOCK_FZF_SELECTION"
-else
-    head -1
-fi

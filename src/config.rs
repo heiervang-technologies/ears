@@ -218,6 +218,10 @@ pub struct Config {
     /// Audio input device name
     #[serde(default = "default_device")]
     pub device: String,
+    /// Devices to try, in order, when `device` is not present in PipeWire,
+    /// before PipeWire's default source (e.g. `["ears_aec_mic"]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub device_fallbacks: Vec<String>,
     /// Language code for transcription (None = auto-detect)
     pub language: Option<String>,
     /// API key for authenticated ASR services (None = no auth)
@@ -364,6 +368,7 @@ impl Config {
         Ok(Self {
             whisper_server: default_server(),
             device: default_device(),
+            device_fallbacks: Vec::new(),
             language: None,
             api_key: None,
             model: None,
@@ -524,6 +529,7 @@ impl Config {
         let mut config = Self {
             whisper_server: default_server(),
             device: default_device(),
+            device_fallbacks: Vec::new(),
             language: None,
             api_key: None,
             model: None,
@@ -1042,6 +1048,22 @@ server = [[[not valid toml
 "#;
         let result: Result<Config, _> = toml::from_str(invalid_toml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn device_fallbacks_are_optional_and_survive_a_save() {
+        let old: Config = toml::from_str("device = \"my-mic\"\n").unwrap();
+        assert!(old.device_fallbacks.is_empty());
+        assert!(!toml::to_string_pretty(&old)
+            .unwrap()
+            .contains("device_fallbacks"));
+
+        let (mut config, _temp_dir) = setup_test_config();
+        config.device_fallbacks = vec!["ears_aec_mic".into(), "second".into()];
+        config.save().unwrap();
+        let content = fs::read_to_string(config.config_dir.join("config.toml")).unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(loaded.device_fallbacks, ["ears_aec_mic", "second"]);
     }
 
     #[test]
