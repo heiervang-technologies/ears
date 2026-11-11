@@ -427,6 +427,53 @@ ears vad status   # exit 0 while VAD runs
 
 Continuously listens and auto-transcribes when speech is detected. Toggle on/off by running the command again; scripts should use `start`/`stop`, since a toggle fired while VAD restarts (or by a second caller) turns it off. When the microphone capture is lost (a WirePlumber restart, a replugged device), VAD starts again by itself with a short backoff.
 
+#### Supervised by systemd
+
+Started from a keybind or a status bar, nothing restarts VAD when it dies.
+`contrib/systemd/ears-vad.service` runs it as a user service in the graphical
+session and restarts it after a crash:
+
+```bash
+install -Dm644 contrib/systemd/ears-vad.service ~/.config/systemd/user/ears-vad.service
+systemctl --user daemon-reload
+systemctl --user enable --now ears-vad.service   # now, and at every login
+journalctl --user -u ears-vad.service            # what it printed
+```
+
+The unit expects the binary at `~/.cargo/bin/ears` (edit `ExecStart=`
+otherwise) and a session manager that starts `graphical-session.target` with
+`WAYLAND_DISPLAY` in the systemd user environment, as uwsm does on Omarchy.
+
+The unit and a VAD started by hand do not fight, because there is still one
+VAD per session (`vad.pid`, `vad.lock`, `vad-health.lock`):
+
+- The unit runs `ears vad start`, which never stops a running VAD. If one
+  already runs, it exits 0 and the unit ends inactive; that VAD keeps running
+  unsupervised until it is stopped and the unit started.
+- `ears vad stop`, or the bare `ears vad` / `ears ghost` toggle, stops the
+  unit's VAD like any other: it exits 0, and systemd restarts only failures
+  (`Restart=on-failure`), so it stays off. The next bare toggle starts a VAD
+  outside the unit, so point keybinds and bars at the unit instead (below).
+- A crash, a failed start or a kill is restarted after 2 s, backing off to
+  30 s; 8 failures in 5 minutes end it as failed (`systemctl --user
+  reset-failed ears-vad.service`). While a restart is pending,
+  `ears vad stop` finds nothing to stop: `systemctl --user stop
+  ears-vad.service` cancels it.
+- A lost microphone is still handled by ears itself (it restarts in place,
+  same process). If that gives up after repeated failures, ears exits 0 and
+  the unit does not start it again.
+
+For a waybar module, start through the unit instead of exec'ing the binary:
+
+```jsonc
+"on-click": "if ears vad status >/dev/null; then ears vad stop; systemctl --user stop ears-vad.service; else systemctl --user start ears-vad.service; fi",
+```
+
+`ears vad stop` plays the closing cue and also stops a VAD started by hand;
+`systemctl stop` cancels a pending restart. `ears health` (see
+[VAD appears unresponsive](#vad-appears-unresponsive)) gives a bar or a
+watchdog more than on/off.
+
 ### Ghost Completion (inline preview)
 
 `ears ghost` listens hands-free like `ears vad`, but nothing is typed while
@@ -750,6 +797,7 @@ ears select, s         Select device interactively
 ears current, c        Show current device
 ears server [URL]      Show or set whisper server URL
 ears mic-check         Measure microphone quality (see above)
+ears health            Is VAD working: process, snapshot, mic, server (exit 0-4)
 ears prompt            Prompt marker while recording / VAD (see below)
 ears help              Show help
 ```
@@ -828,6 +876,36 @@ Ears reuses the same files. Corrupted entries are repaired automatically.
 - Check logs: `cat $XDG_RUNTIME_DIR/ears/debug.log`
 
 ### VAD appears unresponsive
+
+`ears health` reads the health snapshot described below and says what it
+means:
+
+```
+$ ears health
+ears vad: running with warnings (speech too quiet)
+  process   pid 1191716, alive
+  snapshot  fresh, updated 182 ms ago
+  stage     listening for 192 ms
+  device    alsa_input.usb-R__DE_R__DE_NT1_5th_Gen_8A8F2746-00.mono-fallback
+  backlog   12 ms
+  gain      8.0x
+  mic       speech too quiet (noise -63 dBFS, speech -57 dBFS); try `ears mic-check`
+  asr       ok via stream
+  dropped   1 segment(s)
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | healthy |
+| 1 | not running: never started, stopped, or the process that wrote the snapshot is gone (its pid is dead or belongs to another process) |
+| 2 | stale or stuck: the process is alive but has not updated the snapshot for 5 s, or the snapshot reports no audio arriving, a stalled stage, an audio backlog, paused typing or an unreachable server |
+| 3 | running with warnings: `mic_warning`, any other `*_warning` field, or a degraded server connection |
+| 4 | the snapshot cannot be read |
+
+`ears health --json` prints the same verdict (`status`, `exit_code`,
+`summary`, `running`, `fresh`, `age_ms`, `stage_for_ms`, `problem`,
+`warnings`) with the snapshot as published under `snapshot`. It reads only
+the snapshot and `/proc`: no config, no log line, nothing sent to VAD.
 
 Desktop VAD publishes `$XDG_RUNTIME_DIR/ears/vad-health.json` once per second.
 It identifies the desktop session, microphone, last audio/VAD progress, speech

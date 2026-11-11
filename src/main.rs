@@ -82,6 +82,17 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Polled by status bars and scripts: no config or logging, only a read.
+    if let Some(Commands::Health { json }) = &cli.command {
+        let report = ears::health_report::read(&Config::state_dir_path()?);
+        if *json {
+            println!("{}", serde_json::to_string(&report)?);
+        } else {
+            print!("{}", ears::health_report::render(&report));
+        }
+        std::process::exit(report.exit_code);
+    }
+
     // Load config with profile
     let config = Config::load_profile_or_defaults(cli.profile.as_deref())?;
 
@@ -193,6 +204,7 @@ async fn main() -> Result<()> {
             ears::mic_check::run(&config, device, !no_transcribe, json).await?;
         }
         Some(Commands::Prompt { .. }) => unreachable!("handled before config load"),
+        Some(Commands::Health { .. }) => unreachable!("handled before config load"),
         Some(Commands::AutoEnter) => {
             handle_auto_enter().await?;
         }
@@ -908,12 +920,7 @@ async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
 /// Toggle VAD mode: start or stop headless voice activity detection
 /// A VAD process is alive (its pid file names one).
 fn vad_running(config: &Config) -> bool {
-    std::fs::read_to_string(config.state_dir.join("vad.pid"))
-        .ok()
-        .and_then(|s| s.split_whitespace().next()?.parse::<i32>().ok())
-        .is_some_and(|pid| {
-            pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
-        })
+    ears::health_report::pid_file_alive(&config.state_dir.join("vad.pid"))
 }
 
 /// Start, stop or toggle (`action` None) VAD.

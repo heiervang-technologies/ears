@@ -44,6 +44,7 @@ pub mod freeze;
 pub mod ghost;
 pub mod ghost_style;
 pub mod health;
+pub mod health_report;
 pub mod progressive_typing;
 pub mod stream_client;
 pub mod streaming;
