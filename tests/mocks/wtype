@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Mock wtype for testing - does nothing (avoids typing on screen)
-exit 0

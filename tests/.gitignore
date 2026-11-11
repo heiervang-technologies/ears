@@ -3,6 +3,3 @@
 *.tmp
 tmp/
 temp/
-
-# BATS output
-test-results/
