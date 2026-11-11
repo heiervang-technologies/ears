@@ -160,6 +160,7 @@ pub async fn start_vad_pipeline(
     // Start continuous capture
     let capture_config = ContinuousCaptureConfig {
         device: config.device.clone(),
+        fallbacks: config.device_fallbacks.clone(),
         ..ContinuousCaptureConfig::default()
     };
     let temp_dir = config.state_dir.clone();

@@ -42,6 +42,9 @@ pub struct ContinuousCaptureConfig {
     /// Audio device to capture from
     pub device: String,
 
+    /// Devices tried in order when `device` is not present in PipeWire
+    pub fallbacks: Vec<String>,
+
     /// Chunk size in samples to read at a time
     pub chunk_size: usize,
 }
@@ -50,6 +53,7 @@ impl Default for ContinuousCaptureConfig {
     fn default() -> Self {
         Self {
             device: "default".to_string(),
+            fallbacks: Vec::new(),
             chunk_size: crate::pipeline::AUDIO_CHUNK_SAMPLES, // 100ms at 16kHz
         }
     }
@@ -149,13 +153,24 @@ impl ContinuousCapture {
             .clone()
             .ok_or_else(|| ContinuousCaptureError::StartError("no audio sender set".to_string()))?;
 
+        let choice = self.choose_device().await;
+        if let Some(ref health) = self.health {
+            health.capture_device(&choice);
+        }
+        if choice.missing {
+            warn!(
+                "Configured audio device '{}' is not present in PipeWire; capturing from {} instead",
+                choice.configured,
+                choice.opened_label()
+            );
+        }
         info!(
             "Starting continuous audio capture from device: {}",
-            self.config.device
+            choice.opened_label()
         );
 
         // Start pw-record in continuous mode, raw PCM on stdout
-        let mut child = crate::pcm::pw_record(&self.config.device, "-")
+        let mut child = crate::pcm::pw_record(&choice.target, "-")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -181,6 +196,29 @@ impl ContinuousCapture {
         self.spawn_reader_task(stdout, audio_tx, generation);
 
         Ok(())
+    }
+
+    /// Check the configured device against PipeWire as it is right now.
+    async fn choose_device(&self) -> crate::audio::CaptureDevice {
+        let sources = match tokio::task::spawn_blocking(crate::audio::sources).await {
+            Ok(Ok(sources)) => Some(sources),
+            Ok(Err(e)) => {
+                warn!(
+                    "Cannot check that audio device '{}' is present: {:#}",
+                    self.config.device, e
+                );
+                None
+            }
+            Err(e) => {
+                warn!("Audio device check did not finish: {}", e);
+                None
+            }
+        };
+        crate::audio::choose_capture_device(
+            &self.config.device,
+            &self.config.fallbacks,
+            sources.as_ref(),
+        )
     }
 
     /// Stop continuous audio capture: kill and reap pw-record.
@@ -358,6 +396,7 @@ mod tests {
     fn test_continuous_capture_config_default() {
         let config = ContinuousCaptureConfig::default();
         assert_eq!(config.device, "default");
+        assert!(config.fallbacks.is_empty());
         assert_eq!(config.chunk_size, 1600);
     }
 
