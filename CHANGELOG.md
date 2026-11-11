@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Entering command mode no longer waits for the embedding server on the
+  audio path (the capture backed up and was killed, #259). Text anchors
+  missing from the cache are embedded by a task, in batches; meanwhile the
+  mode is on, `vad.command.loading` is up beside `vad.command`, and only an
+  action's exact words fire it. The cache is saved as it fills (atomically),
+  so an interrupted load resumes, and records the server's model
+  (`/v1/models`): the same model at another address reuses it. A cache
+  without a model is still matched by address and gains the model at its
+  next write.
 - VAD no longer captures from another microphone in silence when the
   configured `device` is missing from PipeWire (#258). Each capture start
   checks it; when absent, a warning names the source used instead,

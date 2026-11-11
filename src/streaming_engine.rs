@@ -1744,6 +1744,7 @@ impl StreamingEngine {
     /// in `state_dir`. A marker left by an earlier run is removed.
     pub fn set_command_mode_dir(&mut self, state_dir: &std::path::Path) {
         let _ = std::fs::remove_file(state_dir.join(crate::command_mode::MARKER));
+        let _ = std::fs::remove_file(state_dir.join(crate::command_mode::LOADING));
         self.command_paths = Some(crate::command_mode::Paths::new(state_dir));
         let vision = state_dir.join(VISION_MARKER);
         let _ = std::fs::remove_file(&vision);
@@ -2158,11 +2159,18 @@ impl StreamingEngine {
         };
         self.leave_vision_mode();
         let started = Instant::now();
-        match crate::command_mode::CommandMode::start(paths.clone()).await {
-            Ok(mode) => {
+        // Not awaited on the embedding server: audio keeps flowing, and
+        // until the text anchors are in, exact words still fire.
+        match crate::command_mode::CommandMode::start_loading(paths.clone()) {
+            Ok(mut mode) => {
                 info!(
-                    "Command mode on: {} actions, ready in {:?}",
+                    "Command mode on: {} actions, {} in {:?}",
                     mode.router.actions.len(),
+                    if mode.ready() {
+                        "ready"
+                    } else {
+                        "by exact words while the text anchors load,"
+                    },
                     started.elapsed()
                 );
                 self.command_mode = Some(mode);
@@ -2209,7 +2217,11 @@ impl StreamingEngine {
             self.discard("segment audio unreadable");
             return;
         };
-        let Some(embedder) = self.command_mode.as_ref().map(|m| m.embedder.clone()) else {
+        let Some((embedder, ready)) = self
+            .command_mode
+            .as_mut()
+            .map(|m| (m.embedder.clone(), m.ready()))
+        else {
             return;
         };
         // Heard both ways at once: the words, and the audio's embedding.
@@ -2219,7 +2231,14 @@ impl StreamingEngine {
             COMMAND_ASR_BUDGET,
             self.whisper_client.transcribe_checked(wav, None, false),
         );
-        let (asr, audio) = tokio::join!(asr, embedder.audio(&bytes));
+        // While the text anchors load the server is busy with them and
+        // nothing is routed by embedding: the words alone.
+        let (asr, audio) = tokio::join!(asr, async {
+            match ready {
+                true => Some(embedder.audio(&bytes).await),
+                false => None,
+            }
+        });
         let words = match asr {
             Ok(Ok(text)) => text,
             Ok(Err(crate::whisper::WhisperError::EmptyTranscription)) => String::new(),
@@ -2236,11 +2255,12 @@ impl StreamingEngine {
             }
         };
         let audio = match audio {
-            Ok(u) => Some(u),
-            Err(e) => {
+            Some(Ok(u)) => Some(u),
+            Some(Err(e)) => {
                 warn!("Command mode: {}", e);
                 None
             }
+            None => None,
         };
         if audio.is_none() && words.trim().is_empty() {
             crate::desktop::AudioFeedback::beep_error().ok();
