@@ -223,6 +223,29 @@ struct MicLevels {
     clip_rate: f32,
 }
 
+/// How often the same microphone quality state may reach the log above DEBUG.
+const MIC_LOG_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Whether a change to `state` is logged at its own level: the first time, and
+/// then at most once per [`MIC_LOG_INTERVAL`] for each distinct state.
+fn mic_log_due(
+    logged: &mut Vec<(Option<&'static str>, std::time::Instant)>,
+    state: Option<&'static str>,
+    now: std::time::Instant,
+) -> bool {
+    match logged.iter_mut().find(|(seen, _)| *seen == state) {
+        Some((_, at)) if now.duration_since(*at) < MIC_LOG_INTERVAL => false,
+        Some((_, at)) => {
+            *at = now;
+            true
+        }
+        None => {
+            logged.push((state, now));
+            true
+        }
+    }
+}
+
 /// Capture chunks (100 ms) of each kind before their level is judged.
 const MIC_SETTLE_CHUNKS: u32 = 20;
 
@@ -614,6 +637,7 @@ impl HealthMonitor {
         let worker = thread::Builder::new().name("ears-health".into()).spawn(move || {
             let mut previous_problem = None;
             let mut previous_mic = None;
+            let mut mic_logged = Vec::new();
             let mut write_failed = false;
             loop {
                 let done = rx.recv_timeout(Duration::from_secs(1)) != Err(mpsc::RecvTimeoutError::Timeout);
@@ -633,7 +657,11 @@ impl HealthMonitor {
                     previous_problem = problem;
                 }
                 if snapshot.mic_warning != previous_mic && !done {
+                    // A level hovering at a threshold flips this every few
+                    // seconds: repeats inside MIC_LOG_INTERVAL are debug detail.
+                    let due = mic_log_due(&mut mic_logged, snapshot.mic_warning, std::time::Instant::now());
                     match snapshot.mic_warning {
+                        _ if !due => tracing::debug!(session = %snapshot.session_id, state = ?snapshot.mic_warning, "Microphone quality changed again"),
                         Some(reason) => tracing::warn!(
                             session = %snapshot.session_id,
                             reason,
@@ -678,6 +706,24 @@ impl Drop for HealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flapping_mic_state_is_logged_once_per_interval() {
+        let start = std::time::Instant::now();
+        let mut logged = Vec::new();
+        assert!(mic_log_due(&mut logged, Some("noisy background"), start));
+        assert!(mic_log_due(&mut logged, None, start));
+        // Flips straight back: both states were just logged.
+        let soon = start + Duration::from_secs(5);
+        assert!(!mic_log_due(&mut logged, Some("noisy background"), soon));
+        assert!(!mic_log_due(&mut logged, None, soon));
+        // A different problem is news.
+        assert!(mic_log_due(&mut logged, Some("speech too quiet"), soon));
+        // The interval runs from the last line logged, not the last flip.
+        let later = start + MIC_LOG_INTERVAL;
+        assert!(mic_log_due(&mut logged, Some("noisy background"), later));
+        assert!(!mic_log_due(&mut logged, Some("speech too quiet"), later));
+    }
 
     #[test]
     fn stage_guards_restore_on_error_and_snapshot_is_consistent() {

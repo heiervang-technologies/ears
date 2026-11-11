@@ -875,6 +875,9 @@ RUST_LOG=info,ears::health=debug ears vad
 
 `ears vad` is a toggle: stop an existing VAD session before starting this way.
 The health snapshot is always available; debug logging is selected at startup.
+By default `debug.log` holds INFO and above (ONNX Runtime: warnings only);
+`RUST_LOG=debug` brings back the per-invocation and repeated lines. Levels are
+listed under Logging in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Only one desktop VAD health owner may run per state directory. Starting another
 returns `desktop VAD health owner already active`; stop the existing desktop
 session first. The operating system releases this ownership lock after a crash.
