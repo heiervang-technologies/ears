@@ -1270,7 +1270,7 @@ async fn test_wake_phrase_enters_standby_and_marks_it() {
 #[tokio::test]
 async fn test_standby_types_and_publishes_nothing() {
     let (mut engine, mut rx, _server, _dir) = command_engine("Over.").await;
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     let events = run_one(&mut engine, &mut rx).await;
     assert!(engine.is_standby());
     assert!(engine.accumulated_text.is_empty());
@@ -1298,7 +1298,7 @@ async fn test_audio_wake_detector_skips_transcription_in_standby() {
     let dir = tempfile::tempdir().unwrap();
     let (mut engine, mut rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
     engine.typing_mode = TypingMode::None;
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::NotWake)));
     assert!(run_one(&mut engine, &mut rx).await.is_empty());
     engine.set_wake(Box::new(Model(crate::wake::AudioVerdict::Wake(
@@ -1335,7 +1335,7 @@ async fn test_ears_off_and_on_switch_one_way_and_are_never_typed() {
         !events.iter().any(|e| e.starts_with("SegmentCompleted")),
         "{events:?}"
     );
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     run_one(&mut engine, &mut rx).await;
     assert!(!engine.is_standby());
 }
@@ -1450,7 +1450,7 @@ async fn test_run_command_works_in_standby_without_resuming() {
     let (mut engine, mut rx, _server, dir) = command_engine("Hey friend.").await;
     let out = dir.path().join("argv");
     engine.set_commands(recording_run_commands(&out, true));
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     let events = run_one(&mut engine, &mut rx).await;
     assert_eq!(ran_with(&out).await, ["wake"]);
     assert!(engine.is_standby(), "standby is kept");
@@ -1544,7 +1544,7 @@ async fn test_run_command_with_resume_runs_and_leaves_standby() {
          command = [\"sh\", \"-c\", {script:?}, \"sh\", \"stick\", \"centurion\"]\n"
     );
     engine.set_commands(toml::from_str(&toml).unwrap());
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     let events = run_one(&mut engine, &mut rx).await;
     assert_eq!(ran_with(&out).await, ["stick", "centurion"]);
     assert!(!engine.is_standby(), "resume = true leaves standby");
@@ -1566,7 +1566,7 @@ async fn test_resume_run_command_outranks_a_wake_phrase() {
          command = [\"sh\", \"-c\", {script:?}, \"sh\", \"cursor\"]\n"
     );
     engine.set_commands(toml::from_str(&toml).unwrap());
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     run_one(&mut engine, &mut rx).await;
     assert_eq!(ran_with(&out).await, ["cursor"]);
     assert!(!engine.is_standby());
@@ -1652,11 +1652,11 @@ fn test_shell_prompt_picks_bash_per_utterance() {
 
     // Standing by, the wake phrase must stay hearable: no grammar.
     engine.shell_probe = || true;
-    engine.standby = true;
+    engine.mode = crate::vad_mode::Mode::Standby;
     feed(&mut engine, &[0.9]);
     assert_eq!(engine.guided_grammar, None);
     feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
-    engine.standby = false;
+    engine.mode = crate::vad_mode::Mode::Dictation;
 
     // A configured grammar (bash_mode) holds everywhere.
     engine.shell_probe = || false;
@@ -1709,4 +1709,287 @@ async fn test_request_wake_switches_standby_like_the_phrases() {
 
     engine.request_wake(crate::wake::Wake::Toggle);
     assert!(engine.is_standby());
+}
+
+// --- Modes: the files and switches each transition leaves behind ----------
+//
+// Captured from `main` before modes became one value (`crate::vad_mode`), so
+// that the refactor is checked against what ears did, not what it should do.
+// Only the last three rows changed with it: they were two modes at once.
+
+/// Marker files other programs read (haios-ears-led, ears-motion, ears
+/// prompt), in the order they are listed.
+const MODE_MARKERS: [&str; 3] = ["vad.standby", "vad.command", "vad.vision"];
+
+fn markers_in(dir: &std::path::Path) -> Vec<&'static str> {
+    MODE_MARKERS
+        .into_iter()
+        .filter(|m| dir.join(m).exists())
+        .collect()
+}
+
+/// The published mode switches (`VoiceCommand` names) and errors.
+fn switches(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| {
+            if let Some(rest) = e.strip_prefix("VoiceCommand { name: \"") {
+                rest.split('"').next().map(str::to_string)
+            } else if e.starts_with("Error(") {
+                Some("error".into())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// An engine wired as `ears vad` wires it: standby marker, command mode
+/// (actions from a server that is never up), vision on; its ASR at
+/// `whisper_url`.
+fn mode_engine(
+    whisper_url: &str,
+) -> (
+    StreamingEngine,
+    mpsc::UnboundedReceiver<StreamingEvent>,
+    tempfile::TempDir,
+) {
+    crate::desktop::AudioFeedback::set_volume(0);
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (mut engine, rx) = seq_engine_at(whisper_url, d.to_path_buf());
+    // Never drive the real keyboard from a test.
+    engine.typing_mode = TypingMode::None;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        ..Default::default()
+    });
+    engine.set_standby_marker(d.join("vad.standby"));
+    engine.set_command_mode_dir(d);
+    std::fs::write(
+        d.join("actions.toml"),
+        "server = \"http://127.0.0.1:9\"\n[[action]]\nname = \"enter\"\nkeys = \"enter\"\ntext = [\"press enter\"]\n",
+    )
+    .unwrap();
+    engine.command_paths = Some(crate::command_mode::Paths {
+        actions: d.join("actions.toml"),
+        voice: d.join("command-anchors.json"),
+        text_cache: d.join("command-text-anchors.json"),
+        state_dir: d.to_path_buf(),
+    });
+    engine.set_vision_enabled(true);
+    (engine, rx, dir)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ModeStep {
+    Wake(crate::wake::Wake),
+    Command(Option<bool>),
+    Colour(Option<crate::colour_mode::Colour>),
+}
+
+/// Drive the IPC requests (`ears standby|command|colour`) in `steps` from a
+/// fresh engine: the markers left, and the switches published.
+async fn after_steps(steps: &[ModeStep]) -> (Vec<&'static str>, Vec<String>) {
+    use crate::vad_mode::{Marker, ModeKind};
+    let (mut engine, mut rx, dir) = mode_engine("http://127.0.0.1:9");
+    for step in steps {
+        match *step {
+            ModeStep::Wake(w) => engine.request_wake(w),
+            ModeStep::Command(on) => engine.request_command_mode(on).await,
+            ModeStep::Colour(c) => engine.request_colour(c).await,
+        }
+    }
+    let events = drain(&mut rx);
+    // mode.json always agrees with the engine, and the markers with it.
+    let kind = engine.mode();
+    assert_eq!(crate::vad_mode::read(dir.path()), Some(kind), "{steps:?}");
+    let expected: Vec<&str> = kind.markers().into_iter().map(Marker::name).collect();
+    assert_eq!(markers_in(dir.path()), expected, "{steps:?}");
+    assert_eq!(engine.is_standby(), kind == ModeKind::Standby);
+    assert_eq!(engine.in_command_mode(), kind == ModeKind::Command);
+    (markers_in(dir.path()), switches(&events))
+}
+
+/// Blue and yellow are left out: they start `haios-voice-route` (or this
+/// test binary as `ears typing`), which must not run from a test.
+fn mode_table() -> Vec<(Vec<ModeStep>, Vec<&'static str>, Vec<&'static str>)> {
+    use crate::colour_mode::Colour::*;
+    use crate::wake::Wake::*;
+    use ModeStep::*;
+    vec![
+        (vec![], vec![], vec![]),
+        (vec![Wake(Off)], vec!["vad.standby"], vec!["standby"]),
+        (
+            vec![Wake(Off), Wake(Off)],
+            vec!["vad.standby"],
+            vec!["standby"],
+        ),
+        (vec![Wake(Off), Wake(On)], vec![], vec!["standby", "resume"]),
+        (
+            vec![Wake(Toggle), Wake(Toggle)],
+            vec![],
+            vec!["standby", "resume"],
+        ),
+        (vec![Wake(On)], vec![], vec![]),
+        (
+            vec![Command(Some(true))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Command(Some(true)), Command(Some(true))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Command(Some(true)), Command(Some(false))],
+            vec![],
+            vec!["command-mode", "dictation-mode"],
+        ),
+        (
+            vec![Command(None), Command(None)],
+            vec![],
+            vec!["command-mode", "dictation-mode"],
+        ),
+        (vec![Command(Some(false))], vec![], vec![]),
+        (
+            vec![Colour(Some(Purple))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Colour(Some(Purple)), Colour(Some(Purple))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Colour(Some(Purple)), Colour(Some(Orange))],
+            vec!["vad.standby"],
+            vec!["command-mode", "dictation-mode", "standby"],
+        ),
+        (
+            vec![Colour(Some(Orange)), Colour(Some(Purple))],
+            vec!["vad.command"],
+            vec!["standby", "resume", "command-mode"],
+        ),
+        (vec![Colour(Some(Pink))], vec!["vad.vision"], vec![]),
+        (
+            vec![Colour(Some(Pink)), Colour(Some(Purple))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Colour(Some(Purple)), Colour(Some(Pink))],
+            vec!["vad.vision"],
+            vec!["command-mode", "dictation-mode"],
+        ),
+        (
+            vec![Colour(Some(Pink)), Colour(Some(Orange))],
+            vec!["vad.standby"],
+            vec!["standby"],
+        ),
+        (
+            vec![Colour(Some(Orange)), Colour(Some(Pink))],
+            vec!["vad.vision"],
+            vec!["standby", "resume"],
+        ),
+        (vec![Colour(None)], vec!["vad.standby"], vec!["standby"]),
+        (
+            vec![Command(Some(true)), Wake(Off)],
+            vec!["vad.standby"],
+            vec!["command-mode", "dictation-mode", "standby"],
+        ),
+        (
+            vec![Command(Some(true)), Wake(On)],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        (
+            vec![Colour(Some(Pink)), Wake(On)],
+            vec!["vad.vision"],
+            vec![],
+        ),
+        (
+            vec![Colour(Some(Pink)), Command(Some(true))],
+            vec!["vad.command"],
+            vec!["command-mode"],
+        ),
+        // Two modes at once before `vad_mode`: `ears command on` in standby
+        // left both markers (orange light, yet actions fired) and is now
+        // woken first, as saying "command" is; standing by in vision mode
+        // left both (pink light while standing by, back to vision on
+        // waking) and now leaves vision mode, as "orange" does.
+        (
+            vec![Wake(Off), Command(Some(true))],
+            vec!["vad.command"],
+            vec!["standby", "resume", "command-mode"],
+        ),
+        (
+            vec![Colour(Some(Pink)), Wake(Off)],
+            vec!["vad.standby"],
+            vec!["standby"],
+        ),
+        (
+            vec![Colour(Some(Pink)), Wake(Off), Wake(On)],
+            vec![],
+            vec!["standby", "resume"],
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn test_mode_transitions_leave_the_markers_main_leaves() {
+    for (steps, markers, published) in mode_table() {
+        let (got_markers, got_published) = after_steps(&steps).await;
+        assert_eq!(got_markers, markers, "markers after {steps:?}");
+        assert_eq!(got_published, published, "published after {steps:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_saying_command_in_standby_wakes_into_command_mode() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Command."))
+        .mount(&whisper)
+        .await;
+    let (mut engine, mut rx, dir) = mode_engine(&whisper.uri());
+    engine.request_wake(crate::wake::Wake::Off);
+    let events = run_one(&mut engine, &mut rx).await;
+    assert!(engine.in_command_mode() && !engine.is_standby());
+    assert_eq!(markers_in(dir.path()), vec!["vad.command"]);
+    assert_eq!(
+        switches(&events),
+        vec!["standby", "resume", "command-mode"],
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_markers_left_by_an_earlier_run_are_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    for m in MODE_MARKERS {
+        std::fs::write(dir.path().join(m), b"").unwrap();
+    }
+    std::fs::write(dir.path().join("mode.json"), r#"{"mode":"vision"}"#).unwrap();
+    let (mut engine, _rx) = seq_engine();
+    engine.set_standby_marker(dir.path().join("vad.standby"));
+    engine.set_command_mode_dir(dir.path());
+    assert_eq!(markers_in(dir.path()), Vec::<&str>::new());
+    assert_eq!(
+        crate::vad_mode::read(dir.path()),
+        Some(crate::vad_mode::ModeKind::Dictation)
+    );
+}
+
+#[tokio::test]
+async fn test_ws_listen_publishes_no_mode_files() {
+    // ws-listen wires neither the standby marker nor the command dir.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at("http://127.0.0.1:9", dir.path().to_path_buf());
+    engine.request_wake(crate::wake::Wake::Off);
+    assert!(engine.is_standby());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
