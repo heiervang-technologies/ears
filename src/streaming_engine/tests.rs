@@ -2190,7 +2190,7 @@ async fn command_latency(
     engine.command_paths = Some(paths);
     engine.wait_for_embedding = before;
     engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
-        crate::vad_mode::CommandState { mode },
+        crate::vad_mode::CommandState::new(mode),
     )));
     let wav = dir.path().join("segment.wav");
     let tone: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
@@ -2274,7 +2274,7 @@ async fn test_words_first_still_teaches_the_voice() {
     engine.typing_mode = TypingMode::None;
     engine.command_paths = Some(paths.clone());
     engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
-        crate::vad_mode::CommandState { mode },
+        crate::vad_mode::CommandState::new(mode),
     )));
     let wav = dir.path().join("segment.wav");
     let tone: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
@@ -2363,7 +2363,7 @@ async fn test_a_whole_command_ends_the_utterance_at_a_short_pause() {
         }
         let mode = crate::command_mode::CommandMode::start_loading(paths.clone()).unwrap();
         engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
-            crate::vad_mode::CommandState { mode },
+            crate::vad_mode::CommandState::new(mode),
         )));
         for (partial, case) in cases_command {
             if before {
@@ -2401,6 +2401,26 @@ async fn test_a_whole_command_ends_the_utterance_at_a_short_pause() {
             assert_eq!(after(partial), *was, "{partial}");
         }
     }
+}
+
+/// A chant is not cut at its first pause: no early end while chanting, so
+/// "close window ... close window" stays one breath and fills the meters.
+#[tokio::test]
+async fn test_no_early_end_while_chanting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    let paths = latency_paths(dir.path(), "http://127.0.0.1:9");
+    engine.command_paths = Some(paths.clone());
+    let mode = crate::command_mode::CommandMode::start_loading(paths).unwrap();
+    engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
+        crate::vad_mode::CommandState::new(mode),
+    )));
+    assert_eq!(silence_to_end(&mut engine, "Close window."), 160);
+    engine.set_chant(Some(true));
+    assert!(engine.chanting());
+    assert_eq!(silence_to_end(&mut engine, "Close window."), 1216);
+    engine.set_chant(Some(false));
+    assert_eq!(silence_to_end(&mut engine, "Close window."), 160);
 }
 
 #[tokio::test]
@@ -2443,4 +2463,49 @@ async fn test_a_dictated_voice_command_records_its_timing() {
     );
     assert!(last["timing"].get("embedding_ms").is_none(), "{last}");
     assert_eq!(last["timing"]["silence_ms"], 96);
+}
+/// Chanting is a sub-state of command mode: every way out of command mode
+/// ends it and takes down its files (`vad.chant`, `chant.json`); "chant"
+/// toggled off keeps command mode; outside command mode there is no chant.
+#[tokio::test]
+async fn test_leaving_command_mode_ends_a_chant() {
+    use crate::chant::{FILE, MARKER};
+    use crate::colour_mode::Colour;
+    let chant_files = |d: &std::path::Path| (d.join(MARKER).exists(), d.join(FILE).exists());
+    let (mut engine, _rx, dir) = mode_engine("http://127.0.0.1:9");
+    let d = dir.path().to_path_buf();
+
+    engine.set_chant(Some(true));
+    assert!(!engine.chanting(), "no chant outside command mode");
+    assert_eq!(chant_files(&d), (false, false));
+
+    #[derive(Debug, Clone, Copy)]
+    enum Out {
+        Toggle,
+        Leave,
+        Standby,
+        Vision,
+    }
+    for out in [Out::Toggle, Out::Leave, Out::Standby, Out::Vision] {
+        engine.request_command_mode(Some(true)).await;
+        assert!(engine.in_command_mode(), "{out:?}");
+        engine.set_chant(Some(true));
+        assert!(engine.chanting(), "{out:?}");
+        assert_eq!(chant_files(&d), (true, true), "{out:?}");
+        match out {
+            Out::Toggle => engine.set_chant(None),
+            Out::Leave => engine.request_command_mode(Some(false)).await,
+            Out::Standby => engine.request_wake(crate::wake::Wake::Off),
+            Out::Vision => engine.request_colour(Some(Colour::Pink)).await,
+        }
+        assert!(!engine.chanting(), "{out:?}");
+        assert_eq!(chant_files(&d), (false, false), "{out:?}");
+        assert_eq!(
+            engine.in_command_mode(),
+            matches!(out, Out::Toggle),
+            "{out:?}"
+        );
+        engine.request_colour(Some(Colour::Orange)).await;
+        engine.request_wake(crate::wake::Wake::On);
+    }
 }

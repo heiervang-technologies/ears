@@ -193,6 +193,26 @@ async fn main() -> Result<()> {
         }
         // answered before config loading, above
         Some(Commands::VadFile { .. }) => {}
+        Some(Commands::ChantFile { file }) => {
+            let state_dir = std::env::temp_dir().join("ears-chant-file");
+            std::fs::create_dir_all(&state_dir)?;
+            let mut mode =
+                ears::command_mode::CommandMode::start(ears::command_mode::Paths::new(&state_dir))
+                    .await?;
+            let bytes = std::fs::read(file)?;
+            let samples = ears::pcm::samples_f32(bytes.get(44..).unwrap_or_default());
+            let language = config.language.clone();
+            let (server_url, model) = config.resolve_server(language.as_deref());
+            let whisper = std::sync::Arc::new(
+                WhisperClient::new(server_url.to_string())
+                    .with_language(language)
+                    .with_api_key(config.api_key.clone())
+                    .with_model(model)
+                    .with_silence_filter(config.filter_silence_artifacts)
+                    .with_prompt(config.prompt.clone()),
+            );
+            ears::chant::replay(&mut mode, whisper, &samples).await;
+        }
         Some(Commands::Test { file }) => {
             test_config(&config, file.as_deref()).await?;
         }

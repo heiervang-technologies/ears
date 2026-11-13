@@ -169,6 +169,14 @@ pub enum Commands {
         threshold: f32,
     },
 
+    /// Replay a recording as a chant (chant mode): print the action meters
+    /// as it would be heard, against the configured ASR and embedding servers
+    #[command(hide = true)]
+    ChantFile {
+        /// The WAV to replay (16 kHz mono)
+        file: std::path::PathBuf,
+    },
+
     /// Validate the active config: print a summary and check server health
     Test {
         /// Optional audio file (WAV) to run a sample transcription against

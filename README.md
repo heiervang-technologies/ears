@@ -384,6 +384,34 @@ recordings of the same voice looks close whatever was said. An action fires
 only on a clear winner (`floor`, `margin`); otherwise nothing happens. Design:
 the wiki page "Embedding-Driven Voice Control".
 
+### Chant mode (VAD)
+
+Say "chant" on its own and command mode turns on with chanting: say the
+command again and again until it lands. "close close close", "open terminal
+open terminal". While you chant, the last two seconds are heard every third
+of a second, embedded and transcribed with the repeats folded to one ("open
+terminal open terminal" -> "open terminal"). Each hearing fills the meter of
+the action it points to; meters fade within seconds. The action fires the
+moment its meter is full and well ahead of the next, mid-chant, and the rest
+of that breath is ignored. With the ears LED, the leading meters show above
+the subtitles, so you see it converge. A breath that fires nothing is a miss.
+Chanting is part of command mode: leaving command mode (any way: "command",
+a colour, standby) ends it. While command mode's text anchors are still
+loading, a chant goes by its words alone, as command mode does, so its
+hearings do not wait behind the load. A chant's breath never ends early at a
+pause (`[vad] exact_silence_ms`). With the cs journal on, a breath that fires
+is journaled with its other readings (`alts`), evidence for `ears cs mine`.
+
+The escape hatch, in chant and command mode alike: "agent ..." (or "send to
+agent ...") hands what follows to an agent, and "agent" alone hands over the
+last miss. It runs the `agent` program of `actions.toml` (default
+`ears-chant-agent`, which sends it to the `os-agent` director agent, starting
+it if needed) with what you meant as one argument. Say "chant" again for plain
+command mode, "command" to leave.
+
+`ears chant-file clip.wav` replays a recording as a chant against the
+configured servers and prints the meters, for tuning.
+
 ### Colour words (VAD)
 
 Each mode has the colour the ears light shows for it; say the colour on its
