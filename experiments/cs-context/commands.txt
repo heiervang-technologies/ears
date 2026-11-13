@@ -1,0 +1,50 @@
+# Command phrases, one per line. "a | b" lists forms that count as the same
+# phrase (digits vs words). The first form is spoken and goes in the context.
+ears on
+ears off
+hey clanker
+listen clanker
+fuck off clanker
+ears help
+regular mode
+talking stick
+show commands
+talk to centurion
+cursor mode
+new line
+scratch that
+backtrack | back track
+over and out
+peace out
+literal
+enter
+command
+wrong
+pause the music
+next track
+previous track
+volume up
+turn it down
+full screen | fullscreen
+close window
+scroll to the top
+zoom in
+pan left
+voronoi
+tmux split
+tmux next window
+tmux detach
+tmux copy mode
+tmux show a clock
+tmux kill the active pane
+tmux rotate through the panes in reverse
+switch to workspace three | switch to workspace 3
+move window to workspace six | move window to workspace 6
+toggle scratchpad
+dismiss all notifications
+screenshot window
+lock the screen
+keyboard backlight cycle
+brightness up
+cycle monitor scaling
+toggle window gaps

@@ -1,0 +1,692 @@
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 0, "heard": "Airman.", "seconds": 0.0964}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 0, "heard": "Ears off.", "seconds": 0.096}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 0, "heard": "Hey, Klanker!", "seconds": 0.077}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 0, "heard": "Listen, planker.", "seconds": 0.0821}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 0, "heard": "Fuck off, Glanker.", "seconds": 0.0797}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 0, "heard": "Ears held.", "seconds": 0.0691}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 0, "heard": "Regular mode.", "seconds": 0.0639}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 0, "heard": "Talking Stick.", "seconds": 0.064}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 0, "heard": "Show commands.", "seconds": 0.064}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 0, "heard": "Talk to Centurion.", "seconds": 0.0869}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 0, "heard": "Cursor mode.", "seconds": 0.0679}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 0, "heard": "New line.", "seconds": 0.0673}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 0, "heard": "Scratch that.", "seconds": 0.0728}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 0, "heard": "Backtrack.", "seconds": 0.0694}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 0, "heard": "Over and out.", "seconds": 0.0728}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 0, "heard": "Peace out.", "seconds": 0.059}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 0, "heard": "Literal.", "seconds": 0.0621}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 0, "heard": "Enter.", "seconds": 0.0569}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 0, "heard": "Command.", "seconds": 0.0582}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 0, "heard": "Run.", "seconds": 0.058}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 0, "heard": "Pause the music.", "seconds": 0.0687}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 0, "heard": "Next track.", "seconds": 0.0636}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 0, "heard": "Previous track.", "seconds": 0.0646}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 0, "heard": "Volume up.", "seconds": 0.0701}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["turn it down"], "context_chars": 0, "heard": "Turn it down.", "seconds": 0.0695}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 0, "heard": "Full screen.", "seconds": 0.0641}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 0, "heard": "Close window.", "seconds": 0.0646}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["scroll to the top"], "context_chars": 0, "heard": "Scroll to the top.", "seconds": 0.0893}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["zoom in"], "context_chars": 0, "heard": "Zoom in.", "seconds": 0.0674}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["pan left"], "context_chars": 0, "heard": "Pan left.", "seconds": 0.0669}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["voronoi"], "context_chars": 0, "heard": "Varinoid.", "seconds": 0.0727}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux split"], "context_chars": 0, "heard": "Timux leeft.", "seconds": 0.0699}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux next window"], "context_chars": 0, "heard": "Max next window.", "seconds": 0.0858}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux detach"], "context_chars": 0, "heard": "Tmux detach.", "seconds": 0.0693}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 0, "heard": "Teamokscopie-mod.", "seconds": 0.0877}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 0, "heard": "T-mix show clock.", "seconds": 0.0825}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 0, "heard": "Demux kill the active pain.", "seconds": 0.0967}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 0, "heard": "T marks rotate through the panes in reverse.", "seconds": 0.1268}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 0, "heard": "Switch to workspace three.", "seconds": 0.0848}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 0, "heard": "Move window to workspace six.", "seconds": 0.0888}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 0, "heard": "Toddl scratch pad.", "seconds": 0.0845}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 0, "heard": "Dismiss all notifications.", "seconds": 0.0792}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["screenshot window"], "context_chars": 0, "heard": "Screenshot window.", "seconds": 0.0683}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["lock the screen"], "context_chars": 0, "heard": "Lock the screen.", "seconds": 0.0736}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 0, "heard": "Keyboard backlight cycle.", "seconds": 0.0795}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["brightness up"], "context_chars": 0, "heard": "Brighten us up.", "seconds": 0.0797}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 0, "heard": "Cycle monitor scaling.", "seconds": 0.0738}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 0, "heard": "Toddle window gaps.", "seconds": 0.0852}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 0, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.119}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 0, "heard": "The dog turned its ears after the noise.", "seconds": 0.1078}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 0, "heard": "Hey, can you send me that file later?", "seconds": 0.1133}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 0, "heard": "Listen to this song before the meeting.", "seconds": 0.0954}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 0, "heard": "She said the music was too loud.", "seconds": 0.103}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 0, "heard": "Can you scroll through the photos with me?", "seconds": 0.097}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 0, "heard": "We should close the window before it rains.", "seconds": 0.1045}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 0, "heard": "The next track on the album is better.", "seconds": 0.0992}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 0, "heard": "Turn it down a little bit, please.", "seconds": 0.1028}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 0, "heard": "My screen went full black for a second.", "seconds": 0.1028}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 0, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1007}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 0, "heard": "I need to lock the door when I leave.", "seconds": 0.1063}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 0, "heard": "The backlight on this keyboard is broken.", "seconds": 0.0978}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 0, "heard": "Let me check the weather for tomorrow.", "seconds": 0.0922}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 0, "heard": "We went over the plan, and then went out.", "seconds": 0.114}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 0, "heard": "Peace and quiet is all I want today.", "seconds": 0.1032}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 0, "heard": "Take a new line of thought on this problem.", "seconds": 0.1093}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 0, "heard": "Scratch the paint off that old table.", "seconds": 0.104}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 0, "heard": "I was wrong about the deadline.", "seconds": 0.0935}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 0, "heard": "The command line tool crashed again.", "seconds": 0.0991}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 0, "heard": "Zoom into the map near the station.", "seconds": 0.0935}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 0, "heard": "The brightness of the sun was blinding.", "seconds": 0.0986}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 0, "heard": "She split the bill with her brother.", "seconds": 0.0977}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 0, "heard": "My workspace is a mess this week.", "seconds": 0.0923}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 0, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.1017}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 0, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1017}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 0, "heard": "The talking points are in the shared document.", "seconds": 0.1029}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 0, "heard": "Show me the commands you ran yesterday.", "seconds": 0.0978}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 0, "heard": "What time does the train leave on Friday?", "seconds": 0.1128}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 0, "heard": "I think the bill is green now.", "seconds": 0.1022}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 0, "heard": "The coffee machine needs descaling again.", "seconds": 0.0972}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 0, "heard": "Remember to water the plants on Sunday.", "seconds": 0.092}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 0, "heard": "The quarterly report is almost finished.", "seconds": 0.09}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 0, "heard": "We can meet at the cafe around three.", "seconds": 0.101}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 0, "heard": "This function returns an empty list.", "seconds": 0.0977}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 0, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1155}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 0, "heard": "The battery lasts about ten hours.", "seconds": 0.0964}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 0, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1136}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 0, "heard": "Send the invoice to the accounting team.", "seconds": 0.1015}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 0, "heard": "The window seat was already taken.", "seconds": 0.0957}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 0, "heard": "There is a typo in the second paragraph.", "seconds": 0.1073}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 0, "heard": "The cat knocked the glass off the table.", "seconds": 0.1076}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 0, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.1078}
+{"path": "http", "cond": "none", "voice": "us150", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 0, "heard": "The river flows over during the cold snap.", "seconds": 0.1082}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["ears on"], "context_chars": 0, "heard": "Is on.", "seconds": 0.0704}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["ears off"], "context_chars": 0, "heard": "\u7535\u8111\u3002", "seconds": 0.0619}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["hey clanker"], "context_chars": 0, "heard": "Hey klanke.", "seconds": 0.0715}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["listen clanker"], "context_chars": 0, "heard": "Listen, Klanker.", "seconds": 0.0788}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 0, "heard": "Fuck off, Kranke.", "seconds": 0.0901}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["ears help"], "context_chars": 0, "heard": "Is held.", "seconds": 0.0699}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["regular mode"], "context_chars": 0, "heard": "Regular mode.", "seconds": 0.0676}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["talking stick"], "context_chars": 0, "heard": "Talking Stick.", "seconds": 0.0673}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["show commands"], "context_chars": 0, "heard": "Show commands.", "seconds": 0.0675}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["talk to centurion"], "context_chars": 0, "heard": "Talk to Centurion.", "seconds": 0.0828}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["cursor mode"], "context_chars": 0, "heard": "Cursor mode.", "seconds": 0.0673}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["new line"], "context_chars": 0, "heard": "Urein.", "seconds": 0.0733}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["scratch that"], "context_chars": 0, "heard": "Scrotch hot.", "seconds": 0.0799}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 0, "heard": "Pack truck.", "seconds": 0.0688}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["over and out"], "context_chars": 0, "heard": "Overrun, out.", "seconds": 0.0849}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["peace out"], "context_chars": 0, "heard": "Peace out.", "seconds": 0.0612}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["literal"], "context_chars": 0, "heard": "Literal.", "seconds": 0.0634}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["enter"], "context_chars": 0, "heard": "Enter.", "seconds": 0.058}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["command"], "context_chars": 0, "heard": "Command.", "seconds": 0.0548}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["wrong"], "context_chars": 0, "heard": "Wrong.", "seconds": 0.0495}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["pause the music"], "context_chars": 0, "heard": "Pause the music.", "seconds": 0.0739}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["next track"], "context_chars": 0, "heard": "Next track.", "seconds": 0.0634}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["previous track"], "context_chars": 0, "heard": "Previous track.", "seconds": 0.0674}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["volume up"], "context_chars": 0, "heard": "Volume up.", "seconds": 0.0623}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["turn it down"], "context_chars": 0, "heard": "Turn it down.", "seconds": 0.07}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 0, "heard": "Full screen.", "seconds": 0.0647}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["close window"], "context_chars": 0, "heard": "Close window.", "seconds": 0.0646}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["scroll to the top"], "context_chars": 0, "heard": "Scroll to the top.", "seconds": 0.0889}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["zoom in"], "context_chars": 0, "heard": "Zoom in.", "seconds": 0.0681}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["pan left"], "context_chars": 0, "heard": "Pang left.", "seconds": 0.0719}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["voronoi"], "context_chars": 0, "heard": "Voronoi.", "seconds": 0.0728}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux split"], "context_chars": 0, "heard": "Demux split.", "seconds": 0.0728}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux next window"], "context_chars": 0, "heard": "Tmux next window.", "seconds": 0.0784}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux detach"], "context_chars": 0, "heard": "Teamux Detach.", "seconds": 0.079}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 0, "heard": "Tmux copy mode.", "seconds": 0.079}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 0, "heard": "Demux show a clock.", "seconds": 0.0843}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 0, "heard": "Tmux kills the active pane.", "seconds": 0.0905}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 0, "heard": "Tea mugs rotate through the panes in reverse.", "seconds": 0.1244}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 0, "heard": "Switch to workspace three.", "seconds": 0.073}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 0, "heard": "Move window to workspace six.", "seconds": 0.0806}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 0, "heard": "Toddl Scratchpad.", "seconds": 0.0805}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 0, "heard": "Dismiss all notifications.", "seconds": 0.0745}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["screenshot window"], "context_chars": 0, "heard": "Screenshot window.", "seconds": 0.0692}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["lock the screen"], "context_chars": 0, "heard": "Lock the screen.", "seconds": 0.0706}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 0, "heard": "Keyboard backlight cycle.", "seconds": 0.0762}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["brightness up"], "context_chars": 0, "heard": "Write this up.", "seconds": 0.0685}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 0, "heard": "Cycle monitor scaling.", "seconds": 0.0687}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 0, "heard": "Toddl window gaps.", "seconds": 0.0807}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 0, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.1145}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 0, "heard": "The dog turned its ears off to the noise.", "seconds": 0.1134}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 0, "heard": "Hey, can you send me that file later?", "seconds": 0.1078}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 0, "heard": "Listen to this song before the meeting.", "seconds": 0.1022}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 0, "heard": "She said the music was too loud.", "seconds": 0.0985}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 0, "heard": "Can you scroll through the photos with me?", "seconds": 0.1079}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 0, "heard": "We should close the window before it rains.", "seconds": 0.1083}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 0, "heard": "The next track on the album is better.", "seconds": 0.1076}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 0, "heard": "Turn it down a little bit, please.", "seconds": 0.1081}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 0, "heard": "My screen went full black for a second.", "seconds": 0.1083}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 0, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1061}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 0, "heard": "I need to lock the door when I leave.", "seconds": 0.1091}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 0, "heard": "The backlight on this keyboard is broken.", "seconds": 0.0964}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 0, "heard": "Let me check the weather for tomorrow.", "seconds": 0.103}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 0, "heard": "We went over the plan, and then went out.", "seconds": 0.1173}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 0, "heard": "Peace and quiet is all I want today.", "seconds": 0.1083}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 0, "heard": "Take a new line of thought on this problem.", "seconds": 0.1116}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 0, "heard": "Scratch the paint off that old table.", "seconds": 0.1072}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 0, "heard": "I was wrong about the deadline.", "seconds": 0.0842}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 0, "heard": "The command line tool crashed again.", "seconds": 0.0919}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 0, "heard": "Zoom into the map near the station.", "seconds": 0.092}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 0, "heard": "The brightness of the sun was blinding.", "seconds": 0.1036}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 0, "heard": "She split the bill with her brother.", "seconds": 0.0927}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 0, "heard": "My workspace is a mess this week.", "seconds": 0.0992}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 0, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.1098}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 0, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1034}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 0, "heard": "The talking points are in the shared document.", "seconds": 0.0982}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 0, "heard": "Show me the commands you ran yesterday.", "seconds": 0.0938}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 0, "heard": "What time does the train leave on Friday?", "seconds": 0.0992}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 0, "heard": "I think the build is green now.", "seconds": 0.0971}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 0, "heard": "The coffee machine needs descaling again.", "seconds": 0.0916}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 0, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0947}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 0, "heard": "The quarterly report is almost finished.", "seconds": 0.0895}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 0, "heard": "We can meet at the cafe around three.", "seconds": 0.1054}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 0, "heard": "This function returns an empty list.", "seconds": 0.1}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 0, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1112}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 0, "heard": "The battery lasts about ten hours.", "seconds": 0.0894}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 0, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1088}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 0, "heard": "Send the invoice to the accounting team.", "seconds": 0.0924}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 0, "heard": "The window seat was already taken.", "seconds": 0.0923}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 0, "heard": "There is a typo in the second paragraph.", "seconds": 0.1087}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 0, "heard": "The cat knocked the glass off the table.", "seconds": 0.1086}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 0, "heard": "We will review the poll request tomorrow morning.", "seconds": 0.0976}
+{"path": "http", "cond": "none", "voice": "gb175", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 0, "heard": "The river flows over during the colds up.", "seconds": 0.1173}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 757, "heard": "", "seconds": 0.0553}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 757, "heard": "", "seconds": 0.0455}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 757, "heard": "Hey clanker.", "seconds": 0.0743}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 757, "heard": "Listen clanker.", "seconds": 0.0687}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 757, "heard": "Fuck off, clanker.", "seconds": 0.0869}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 757, "heard": "", "seconds": 0.0474}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 757, "heard": "regular mode.", "seconds": 0.0684}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 757, "heard": "Talking stick.", "seconds": 0.0683}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 757, "heard": "Show commands.", "seconds": 0.0682}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 757, "heard": "Talk to Centurion.", "seconds": 0.0856}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 757, "heard": "Cursor mode.", "seconds": 0.0624}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 757, "heard": "New line.", "seconds": 0.0687}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 757, "heard": "Scratch that.", "seconds": 0.0685}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 757, "heard": "Backtrack.", "seconds": 0.0682}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 757, "heard": "", "seconds": 0.0465}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 757, "heard": "Peace out.", "seconds": 0.0691}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 757, "heard": "Literal.", "seconds": 0.0582}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 757, "heard": "", "seconds": 0.0448}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 757, "heard": "Command.", "seconds": 0.0606}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 757, "heard": "", "seconds": 0.0568}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 757, "heard": "Pause the music.", "seconds": 0.075}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 757, "heard": "Next track.", "seconds": 0.0678}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 757, "heard": "Previous track.", "seconds": 0.0679}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 757, "heard": "Volume up.", "seconds": 0.068}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["turn it down"], "context_chars": 757, "heard": "Turn it down.", "seconds": 0.0735}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 757, "heard": "Full screen.", "seconds": 0.0681}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 757, "heard": "", "seconds": 0.0528}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["scroll to the top"], "context_chars": 757, "heard": "Scroll to the top.", "seconds": 0.0794}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["zoom in"], "context_chars": 757, "heard": "Zoom in.", "seconds": 0.0607}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["pan left"], "context_chars": 757, "heard": "pan left.", "seconds": 0.0643}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["voronoi"], "context_chars": 757, "heard": "Voronoi.", "seconds": 0.0695}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux split"], "context_chars": 757, "heard": "tmux split", "seconds": 0.0686}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux next window"], "context_chars": 757, "heard": "Tmux next window.", "seconds": 0.0824}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux detach"], "context_chars": 757, "heard": "Tmux detach.", "seconds": 0.0738}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 757, "heard": "tmux copy mode.", "seconds": 0.0834}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 757, "heard": "Tmux show a clock.", "seconds": 0.0853}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 757, "heard": "tmux kill the active pane.", "seconds": 0.091}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 757, "heard": "Tmux rotate through the panes in reverse.", "seconds": 0.114}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 757, "heard": "Switch to workspace three.", "seconds": 0.074}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 757, "heard": "Move window to workspace six.", "seconds": 0.0946}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 757, "heard": "Toggle scratchpad.", "seconds": 0.0701}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 757, "heard": "Dismiss all notifications.", "seconds": 0.0742}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["screenshot window"], "context_chars": 757, "heard": "Screenshot window.", "seconds": 0.0604}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["lock the screen"], "context_chars": 757, "heard": "Lock the screen.", "seconds": 0.0746}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 757, "heard": "Keyboard backlight cycle.", "seconds": 0.0694}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["brightness up"], "context_chars": 757, "heard": "Brightness up.", "seconds": 0.0639}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 757, "heard": "Cycle monitor scaling.", "seconds": 0.0697}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 757, "heard": "Toggle window gaps.", "seconds": 0.0748}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 757, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.115}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 757, "heard": "The dog turned its ears off to the noise.", "seconds": 0.1141}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 757, "heard": "Hey, can you send me that file later?", "seconds": 0.1141}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 757, "heard": "Listen to this song before the meeting.", "seconds": 0.1035}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 757, "heard": "She said the music was too loud.", "seconds": 0.098}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 757, "heard": "Can you scroll through the photos with me?", "seconds": 0.1026}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 757, "heard": "We should close the window before it rains.", "seconds": 0.1082}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 757, "heard": "The next track on the album is better.", "seconds": 0.1028}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 757, "heard": "Turn it down a little bit, please.", "seconds": 0.1023}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 757, "heard": "My screen went full black for a second.", "seconds": 0.1082}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 757, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1096}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 757, "heard": "I need to lock the door when I leave.", "seconds": 0.1089}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 757, "heard": "The backlight on this keyboard is broken.", "seconds": 0.1029}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 757, "heard": "Let me check the weather for tomorrow.", "seconds": 0.0973}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 757, "heard": "We went over the plan, and then went out.", "seconds": 0.1202}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 757, "heard": "Peace and quiet is all I want today.", "seconds": 0.1091}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 757, "heard": "Take a new line of thought on this problem.", "seconds": 0.114}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 757, "heard": "Scratch the paint off that old table.", "seconds": 0.1085}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 757, "heard": "I was wrong about the deadline.", "seconds": 0.0916}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 757, "heard": "The command line tool crashed again.", "seconds": 0.0913}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 757, "heard": "Zoom into the map near the station.", "seconds": 0.1014}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 757, "heard": "The brightness of the sun was blinding.", "seconds": 0.1085}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 757, "heard": "She split the bill with her brother.", "seconds": 0.0972}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 757, "heard": "My workspace is a mess this week.", "seconds": 0.0974}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 757, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.1085}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 757, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1078}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 757, "heard": "The talking points are in the shared document.", "seconds": 0.1084}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 757, "heard": "Show me the commands you ran yesterday.", "seconds": 0.103}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 757, "heard": "What time does the train leave on Friday?", "seconds": 0.1086}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 757, "heard": "I think the build is green now.", "seconds": 0.0903}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 757, "heard": "The coffee machine needs descaling again.", "seconds": 0.1032}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 757, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0924}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 757, "heard": "The quarterly report is almost finished.", "seconds": 0.0882}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 757, "heard": "We can meet at the cafe around three.", "seconds": 0.0993}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 757, "heard": "This function returns an empty list.", "seconds": 0.0986}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 757, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1168}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 757, "heard": "The battery lasts about ten hours.", "seconds": 0.0983}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 757, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1097}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 757, "heard": "Send the invoice to the accounting team.", "seconds": 0.1028}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 757, "heard": "The window seat was already taken.", "seconds": 0.0915}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 757, "heard": "There is a typo in the second paragraph.", "seconds": 0.1088}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 757, "heard": "The cat knocked the glass off the table.", "seconds": 0.1087}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 757, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.1099}
+{"path": "http", "cond": "list", "voice": "us150", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 757, "heard": "The river flows over during the cold snap.", "seconds": 0.1096}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["ears on"], "context_chars": 757, "heard": "", "seconds": 0.0453}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["ears off"], "context_chars": 757, "heard": "", "seconds": 0.0525}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["hey clanker"], "context_chars": 757, "heard": "Hey clanker.", "seconds": 0.0766}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["listen clanker"], "context_chars": 757, "heard": "Listen clanker.", "seconds": 0.0754}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 757, "heard": "Fuck off, clanker.", "seconds": 0.0858}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["ears help"], "context_chars": 757, "heard": "", "seconds": 0.0453}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["regular mode"], "context_chars": 757, "heard": "Regular mode.", "seconds": 0.0642}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["talking stick"], "context_chars": 757, "heard": "Talking stick.", "seconds": 0.0698}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["show commands"], "context_chars": 757, "heard": "Show commands.", "seconds": 0.066}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["talk to centurion"], "context_chars": 757, "heard": "Talk to Centurion.", "seconds": 0.0895}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["cursor mode"], "context_chars": 757, "heard": "Cursor mode.", "seconds": 0.0697}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["new line"], "context_chars": 757, "heard": "", "seconds": 0.0465}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["scratch that"], "context_chars": 757, "heard": "Scratch that.", "seconds": 0.0777}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 757, "heard": "", "seconds": 0.0474}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["over and out"], "context_chars": 757, "heard": "Over and out.", "seconds": 0.0831}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["peace out"], "context_chars": 757, "heard": "Peace out.", "seconds": 0.0674}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["literal"], "context_chars": 757, "heard": "Literal.", "seconds": 0.062}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["enter"], "context_chars": 757, "heard": "", "seconds": 0.0473}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["command"], "context_chars": 757, "heard": "Command.", "seconds": 0.0532}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["wrong"], "context_chars": 757, "heard": "", "seconds": 0.0363}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["pause the music"], "context_chars": 757, "heard": "Pause the music.", "seconds": 0.0751}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["next track"], "context_chars": 757, "heard": "next track.", "seconds": 0.064}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["previous track"], "context_chars": 757, "heard": "Previous track.", "seconds": 0.0698}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["volume up"], "context_chars": 757, "heard": "Volume up.", "seconds": 0.0641}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["turn it down"], "context_chars": 757, "heard": "Turn it down.", "seconds": 0.0713}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 757, "heard": "Full screen.", "seconds": 0.0657}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["close window"], "context_chars": 757, "heard": "Close window.", "seconds": 0.0645}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["scroll to the top"], "context_chars": 757, "heard": "Scroll to the top.", "seconds": 0.0896}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["zoom in"], "context_chars": 757, "heard": "Zoom in.", "seconds": 0.0691}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["pan left"], "context_chars": 757, "heard": "Pan left.", "seconds": 0.0687}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["voronoi"], "context_chars": 757, "heard": "Voronoi.", "seconds": 0.0751}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux split"], "context_chars": 757, "heard": "Tmux split.", "seconds": 0.0755}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux next window"], "context_chars": 757, "heard": "Tmux next window.", "seconds": 0.0817}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux detach"], "context_chars": 757, "heard": "Tmux detach.", "seconds": 0.0673}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 757, "heard": "Tmux copy mode.", "seconds": 0.0817}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 757, "heard": "Tmux show a clock.", "seconds": 0.0819}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 757, "heard": "tmux kill the active pane.", "seconds": 0.0924}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 757, "heard": "Tmux rotate through the panes in reverse.", "seconds": 0.1105}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 757, "heard": "Switch to workspace three.", "seconds": 0.08}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 757, "heard": "Move window to workspace six.", "seconds": 0.0852}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 757, "heard": "Toddl scratchpad.", "seconds": 0.0852}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 757, "heard": "Dismiss all notifications.", "seconds": 0.0759}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["screenshot window"], "context_chars": 757, "heard": "Screenshot window.", "seconds": 0.069}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["lock the screen"], "context_chars": 757, "heard": "Lock the screen.", "seconds": 0.073}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 757, "heard": "Keyboard backlight cycle.", "seconds": 0.0745}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["brightness up"], "context_chars": 757, "heard": "Bright this up.", "seconds": 0.0745}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 757, "heard": "Cycle monitor scaling.", "seconds": 0.0745}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 757, "heard": "Toggle window gaps.", "seconds": 0.0756}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 757, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.1197}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 757, "heard": "The dog turned its ears off to the noise.", "seconds": 0.1149}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 757, "heard": "Hey, can you send me that file later?", "seconds": 0.1094}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 757, "heard": "Listen to this song before the meeting.", "seconds": 0.0954}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 757, "heard": "She said the music was too loud.", "seconds": 0.1047}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 757, "heard": "Can you scroll through the photos with me?", "seconds": 0.1049}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 757, "heard": "We should close the window before it rains.", "seconds": 0.1128}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 757, "heard": "The next track on the album is better.", "seconds": 0.1073}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 757, "heard": "Turn it down a little bit, please.", "seconds": 0.1057}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 757, "heard": "My screen went full black for a second.", "seconds": 0.106}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 757, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1052}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 757, "heard": "I need to lock the door when I leave.", "seconds": 0.1106}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 757, "heard": "The backlight on this keyboard is broken.", "seconds": 0.1036}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 757, "heard": "Let me check the weather for tomorrow.", "seconds": 0.0978}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 757, "heard": "We went over the plan and then went out.", "seconds": 0.11}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 757, "heard": "Peace and quiet is all I want today.", "seconds": 0.1045}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 757, "heard": "Take a new line of thought on this problem.", "seconds": 0.1153}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 757, "heard": "Scratch the paint off that old table.", "seconds": 0.1044}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 757, "heard": "I was wrong about the deadline.", "seconds": 0.0922}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 757, "heard": "The command line tool crashed again.", "seconds": 0.0867}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 757, "heard": "Zoom into the map near the station.", "seconds": 0.0932}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 757, "heard": "The brightness of the sun was blinding.", "seconds": 0.0987}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 757, "heard": "She split the bill with her brother.", "seconds": 0.0982}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 757, "heard": "My workspace is a mess this week.", "seconds": 0.0927}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 757, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.0995}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 757, "heard": "Please talk to the landlord about the heating.", "seconds": 0.0996}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 757, "heard": "The talking points are in the shared document.", "seconds": 0.1005}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 757, "heard": "Show me the commands you ran yesterday.", "seconds": 0.0953}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 757, "heard": "What time does the train leave on Friday?", "seconds": 0.1071}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 757, "heard": "I think the build is green now.", "seconds": 0.0963}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 757, "heard": "The coffee machine needs scaling again.", "seconds": 0.0928}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 757, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0928}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 757, "heard": "The quarterly report is almost finished.", "seconds": 0.0918}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 757, "heard": "We can meet at the cafe around three.", "seconds": 0.1058}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 757, "heard": "This function returns an empty list.", "seconds": 0.0925}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 757, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1195}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 757, "heard": "The battery lasts about ten hours.", "seconds": 0.0918}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 757, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1089}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 757, "heard": "Send the invoice to the accounting team.", "seconds": 0.0981}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 757, "heard": "The window seat was already taken.", "seconds": 0.0916}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 757, "heard": "There is a typo in the second paragraph.", "seconds": 0.1025}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 757, "heard": "The cat knocked the glass off the table.", "seconds": 0.1033}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 757, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.1089}
+{"path": "http", "cond": "list", "voice": "gb175", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 757, "heard": "The river flows over during the cold zap.", "seconds": 0.104}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 242, "heard": "Air on.", "seconds": 0.0638}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 242, "heard": "", "seconds": 0.0468}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 242, "heard": "Hey clanker.", "seconds": 0.0753}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 242, "heard": "Listen, clanker.", "seconds": 0.0806}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 242, "heard": "Fuck off, clanker.", "seconds": 0.0866}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 242, "heard": "", "seconds": 0.0457}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 242, "heard": "Regular mode.", "seconds": 0.0638}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 242, "heard": "Talking stick.", "seconds": 0.0639}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 242, "heard": "Show commands.", "seconds": 0.0663}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 242, "heard": "Talk to Centurion.", "seconds": 0.0897}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 242, "heard": "Cursor mode.", "seconds": 0.0699}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 242, "heard": "", "seconds": 0.0463}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 242, "heard": "Scratch that.", "seconds": 0.0707}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 242, "heard": "Backtrack.", "seconds": 0.0653}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 242, "heard": "", "seconds": 0.0516}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 242, "heard": "Peace out.", "seconds": 0.0716}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 242, "heard": "Literal.", "seconds": 0.0574}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 242, "heard": "", "seconds": 0.0425}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 242, "heard": "Command.", "seconds": 0.0576}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 242, "heard": "", "seconds": 0.0469}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 242, "heard": "Pause the music.", "seconds": 0.0695}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 242, "heard": "Next track.", "seconds": 0.0638}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 242, "heard": "Previous track.", "seconds": 0.0632}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 242, "heard": "Volume up.", "seconds": 0.0687}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["turn it down"], "context_chars": 242, "heard": "Turn it down.", "seconds": 0.069}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 242, "heard": "Full screen.", "seconds": 0.0636}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 242, "heard": "", "seconds": 0.0468}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["scroll to the top"], "context_chars": 242, "heard": "Scroll to the top.", "seconds": 0.086}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["zoom in"], "context_chars": 242, "heard": "Zoom in.", "seconds": 0.0674}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["pan left"], "context_chars": 242, "heard": "Pan left.", "seconds": 0.0677}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["voronoi"], "context_chars": 242, "heard": "Varanoid.", "seconds": 0.073}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux split"], "context_chars": 242, "heard": "tmux split", "seconds": 0.0676}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux next window"], "context_chars": 242, "heard": "tmux next window.", "seconds": 0.0794}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux detach"], "context_chars": 242, "heard": "tmux detach.", "seconds": 0.074}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 242, "heard": "tmux scapy mode.", "seconds": 0.0851}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 242, "heard": "tmux show clock.", "seconds": 0.0814}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 242, "heard": "tmux kill the active pane.", "seconds": 0.0916}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 242, "heard": "tmux rotate through the panes in reverse.", "seconds": 0.1128}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 242, "heard": "Switch to workspace three.", "seconds": 0.08}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 242, "heard": "Move window to workspace six.", "seconds": 0.0854}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 242, "heard": "Toggle scratch pad.", "seconds": 0.0767}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 242, "heard": "Dismiss all notifications.", "seconds": 0.0745}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["screenshot window"], "context_chars": 242, "heard": "Screenshot window.", "seconds": 0.0602}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["lock the screen"], "context_chars": 242, "heard": "Lock the screen.", "seconds": 0.0744}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 242, "heard": "Keyboard backlight cycle.", "seconds": 0.0688}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["brightness up"], "context_chars": 242, "heard": "Bright this up.", "seconds": 0.0702}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 242, "heard": "Cycle monitor scaling.", "seconds": 0.0702}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 242, "heard": "Toggle window gaps.", "seconds": 0.0706}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 242, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.1244}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 242, "heard": "The dog turned its ears after the noise.", "seconds": 0.1164}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 242, "heard": "Hey, can you send me that file later?", "seconds": 0.1197}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 242, "heard": "Listen to this song before the meeting.", "seconds": 0.1064}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 242, "heard": "She said the music was too loud.", "seconds": 0.1042}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 242, "heard": "Can you scroll through the photos with me?", "seconds": 0.115}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 242, "heard": "We should close the window before it rains.", "seconds": 0.1155}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 242, "heard": "The next track on the album is better.", "seconds": 0.109}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 242, "heard": "Turn it down a little bit, please.", "seconds": 0.1077}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 242, "heard": "My screen went full black for a second.", "seconds": 0.1129}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 242, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1104}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 242, "heard": "I need to lock the door when I leave.", "seconds": 0.1089}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 242, "heard": "The backlight on this keyboard is broken.", "seconds": 0.1036}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 242, "heard": "Let me check the weather for tomorrow.", "seconds": 0.0971}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 242, "heard": "We went over the plan and then went out.", "seconds": 0.1154}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 242, "heard": "Peace and quiet is all I want today.", "seconds": 0.1099}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 242, "heard": "Take a new line of thought on this problem.", "seconds": 0.115}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 242, "heard": "Scratch the paint off that old table.", "seconds": 0.1096}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 242, "heard": "I was wrong about the deadline.", "seconds": 0.0924}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 242, "heard": "The command line tool crashed again.", "seconds": 0.0925}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 242, "heard": "Zoom into the map near the station.", "seconds": 0.0985}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 242, "heard": "The brightness of the sun was blinding.", "seconds": 0.104}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 242, "heard": "She split the bill with her brother.", "seconds": 0.0981}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 242, "heard": "My workspace is a mess this week.", "seconds": 0.0983}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 242, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.109}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 242, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1088}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 242, "heard": "The talking points are in the shared document.", "seconds": 0.1091}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 242, "heard": "Show me the commands you ran yesterday.", "seconds": 0.1029}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 242, "heard": "What time does the train leave on Friday?", "seconds": 0.1091}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 242, "heard": "I think the build is green now.", "seconds": 0.0922}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 242, "heard": "The coffee machine needs descaling again.", "seconds": 0.1042}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 242, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0925}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 242, "heard": "The quarterly report is almost finished.", "seconds": 0.0894}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 242, "heard": "We can meet at the cafe around three.", "seconds": 0.1003}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 242, "heard": "This function returns an empty list.", "seconds": 0.0997}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 242, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1187}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 242, "heard": "The battery lasts about ten hours.", "seconds": 0.0924}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 242, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1086}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 242, "heard": "Send the invoice to the accounting team.", "seconds": 0.1045}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 242, "heard": "The window seat was already taken.", "seconds": 0.0996}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 242, "heard": "There is a typo in the second paragraph.", "seconds": 0.1038}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 242, "heard": "The cat knocked the glass off the table.", "seconds": 0.1086}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 242, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.109}
+{"path": "http", "cond": "cap256", "voice": "us150", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 242, "heard": "The river flows over during the cold snap.", "seconds": 0.1154}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 1021, "heard": "", "seconds": 0.0521}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 1021, "heard": "", "seconds": 0.048}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 1021, "heard": "Hey clanker.", "seconds": 0.0768}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 1021, "heard": "Listen, clanker.", "seconds": 0.0799}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 1021, "heard": "Fuck off, clanker.", "seconds": 0.0859}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 1021, "heard": "", "seconds": 0.0457}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 1021, "heard": "Regular mode.", "seconds": 0.0644}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 1021, "heard": "Talking stick.", "seconds": 0.0648}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 1021, "heard": "Show commands.", "seconds": 0.0656}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 1021, "heard": "Talk to Centurion.", "seconds": 0.0891}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 1021, "heard": "Cursor mode.", "seconds": 0.0693}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 1021, "heard": "", "seconds": 0.0457}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 1021, "heard": "Scratch that.", "seconds": 0.0782}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 1021, "heard": "", "seconds": 0.0485}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 1021, "heard": "", "seconds": 0.0509}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 1021, "heard": "Peace out.", "seconds": 0.0675}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 1021, "heard": "Literal.", "seconds": 0.0652}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 1021, "heard": "", "seconds": 0.0521}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 1021, "heard": "Command.", "seconds": 0.0617}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 1021, "heard": "Run.", "seconds": 0.0632}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 1021, "heard": "Pause the music.", "seconds": 0.0748}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 1021, "heard": "Next track.", "seconds": 0.0707}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 1021, "heard": "Previous track.", "seconds": 0.0701}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 1021, "heard": "Volume up.", "seconds": 0.07}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["turn it down"], "context_chars": 1021, "heard": "Turn it down.", "seconds": 0.0748}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 1021, "heard": "Full screen.", "seconds": 0.0615}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 1021, "heard": "", "seconds": 0.053}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["scroll to the top"], "context_chars": 1021, "heard": "Scroll to the top.", "seconds": 0.0817}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["zoom in"], "context_chars": 1021, "heard": "Zoom in.", "seconds": 0.0689}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["pan left"], "context_chars": 1021, "heard": "Pan left.", "seconds": 0.0684}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["voronoi"], "context_chars": 1021, "heard": "Varanoid.", "seconds": 0.0739}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux split"], "context_chars": 1021, "heard": "", "seconds": 0.0449}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux next window"], "context_chars": 1021, "heard": "tmux next window.", "seconds": 0.0809}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux detach"], "context_chars": 1021, "heard": "tmux detach.", "seconds": 0.0699}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 1021, "heard": "tmux scapy mode.", "seconds": 0.0869}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 1021, "heard": "tmux show clock.", "seconds": 0.0869}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 1021, "heard": "tmux kill the active pane.", "seconds": 0.0934}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 1021, "heard": "tmux rotate through the panes in reverse.", "seconds": 0.1233}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 1021, "heard": "Switch to workspace three.", "seconds": 0.0813}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 1021, "heard": "Move window to workspace six.", "seconds": 0.0862}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 1021, "heard": "Toggle scratch pad.", "seconds": 0.076}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 1021, "heard": "Dismiss all notifications.", "seconds": 0.0758}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["screenshot window"], "context_chars": 1021, "heard": "Screenshot window.", "seconds": 0.0698}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["lock the screen"], "context_chars": 1021, "heard": "Lock the screen.", "seconds": 0.0758}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 1021, "heard": "Keyboard backlight cycle.", "seconds": 0.075}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["brightness up"], "context_chars": 1021, "heard": "Brighten this up.", "seconds": 0.0809}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 1021, "heard": "Cycle monitor scaling.", "seconds": 0.0749}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 1021, "heard": "Toggle window gaps.", "seconds": 0.0745}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 1021, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.1209}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 1021, "heard": "The dog turned its ears after the noise.", "seconds": 0.1102}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 1021, "heard": "Hey, can you send me that file later?", "seconds": 0.1154}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 1021, "heard": "Listen to this song before the meeting.", "seconds": 0.1053}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 1021, "heard": "She said the music was too loud.", "seconds": 0.0979}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 1021, "heard": "Can you scroll through the photos with me?", "seconds": 0.108}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 1021, "heard": "We should close the window before it rains.", "seconds": 0.1108}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 1021, "heard": "The next track on the album is better.", "seconds": 0.1051}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 1021, "heard": "Turn it down a little bit, please.", "seconds": 0.1037}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 1021, "heard": "My screen went full black for a second.", "seconds": 0.1094}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 1021, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1102}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 1021, "heard": "I need to lock the door when I leave.", "seconds": 0.1099}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 1021, "heard": "The backlight on this keyboard is broken.", "seconds": 0.1041}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 1021, "heard": "Let me check the weather for tomorrow.", "seconds": 0.1}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 1021, "heard": "We went over the plan and then went out.", "seconds": 0.1155}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 1021, "heard": "Peace and quiet is all I want today.", "seconds": 0.1015}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 1021, "heard": "Take a new line of thought on this problem.", "seconds": 0.1169}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 1021, "heard": "Scratch the paint off that old table.", "seconds": 0.1003}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 1021, "heard": "I was wrong about the deadline.", "seconds": 0.0935}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 1021, "heard": "The command line tool crashed again.", "seconds": 0.0988}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 1021, "heard": "Zoom into the map near the station.", "seconds": 0.096}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 1021, "heard": "The brightness of the sun was blinding.", "seconds": 0.1011}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 1021, "heard": "She split the bill with her brother.", "seconds": 0.0993}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 1021, "heard": "My workspace is a mess this week.", "seconds": 0.0942}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 1021, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.1022}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 1021, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1022}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 1021, "heard": "The talking points are in the shared document.", "seconds": 0.103}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 1021, "heard": "Show me the commands you ran yesterday.", "seconds": 0.0978}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 1021, "heard": "What time does the train leave on Friday?", "seconds": 0.1127}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 1021, "heard": "I think the build is green now.", "seconds": 0.1019}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 1021, "heard": "The coffee machine needs descaling again.", "seconds": 0.1001}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 1021, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0946}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 1021, "heard": "The quarterly report is almost finished.", "seconds": 0.0911}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 1021, "heard": "We can meet at the cafe around three.", "seconds": 0.1021}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 1021, "heard": "This function returns an empty list.", "seconds": 0.0989}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 1021, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1176}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 1021, "heard": "The battery lasts about ten hours.", "seconds": 0.0994}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 1021, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1114}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 1021, "heard": "Send the invoice to the accounting team.", "seconds": 0.1044}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 1021, "heard": "The window seat was already taken.", "seconds": 0.0986}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 1021, "heard": "There is a typo in the second paragraph.", "seconds": 0.1051}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 1021, "heard": "The cat knocked the glass off the table.", "seconds": 0.1054}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 1021, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.1105}
+{"path": "http", "cond": "cap1024", "voice": "us150", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 1021, "heard": "The river flows over during the cold snap.", "seconds": 0.1338}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 4080, "heard": "", "seconds": 0.0717}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 4080, "heard": "ears off.", "seconds": 0.0696}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 4080, "heard": "", "seconds": 0.0512}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 4080, "heard": "Listen clanker.", "seconds": 0.0784}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 4080, "heard": "Fuck off, clanker.", "seconds": 0.0929}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 4080, "heard": "", "seconds": 0.0547}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 4080, "heard": "regular mode.", "seconds": 0.0697}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 4080, "heard": "Talking stick.", "seconds": 0.0706}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 4080, "heard": "Show commands.", "seconds": 0.0718}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 4080, "heard": "Talk to Centurion.", "seconds": 0.0891}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 4080, "heard": "Cursor mode.", "seconds": 0.0733}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 4080, "heard": "", "seconds": 0.0552}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 4080, "heard": "", "seconds": 0.0537}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 4080, "heard": "Backtrack.", "seconds": 0.0704}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 4080, "heard": "", "seconds": 0.0459}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 4080, "heard": "Peace out.", "seconds": 0.0737}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 4080, "heard": "Literal.", "seconds": 0.0622}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 4080, "heard": "", "seconds": 0.0539}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 4080, "heard": "Command.", "seconds": 0.0684}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 4080, "heard": "Run.", "seconds": 0.0657}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 4080, "heard": "Pause the music.", "seconds": 0.0755}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 4080, "heard": "Next track.", "seconds": 0.0718}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 4080, "heard": "Previous track.", "seconds": 0.0715}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 4080, "heard": "Volume up.", "seconds": 0.0706}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["turn it down"], "context_chars": 4080, "heard": "Turn it down.", "seconds": 0.0775}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["full screen", "fullscreen"], "context_chars": 4080, "heard": "Full screen.", "seconds": 0.0718}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["close window"], "context_chars": 4080, "heard": "", "seconds": 0.0548}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["scroll to the top"], "context_chars": 4080, "heard": "Scroll to the top.", "seconds": 0.0837}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["zoom in"], "context_chars": 4080, "heard": "zoom in.", "seconds": 0.0641}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["pan left"], "context_chars": 4080, "heard": "pan left.", "seconds": 0.0679}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["voronoi"], "context_chars": 4080, "heard": "Voronoi.", "seconds": 0.0735}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux split"], "context_chars": 4080, "heard": "", "seconds": 0.0554}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux next window"], "context_chars": 4080, "heard": "tmux next window.", "seconds": 0.0857}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux detach"], "context_chars": 4080, "heard": "tmux detach.", "seconds": 0.0771}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux copy mode"], "context_chars": 4080, "heard": "tmux kopi\u00ebrmode.", "seconds": 0.1018}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux show a clock"], "context_chars": 4080, "heard": "tmux show a clock.", "seconds": 0.0829}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux kill the active pane"], "context_chars": 4080, "heard": "tmux kill the active pane.", "seconds": 0.102}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["tmux rotate through the panes in reverse"], "context_chars": 4080, "heard": "tmux rotate through the panes in reverse.", "seconds": 0.1167}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["switch to workspace three", "switch to workspace 3"], "context_chars": 4080, "heard": "Switch to workspace three.", "seconds": 0.0901}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["move window to workspace six", "move window to workspace 6"], "context_chars": 4080, "heard": "Move window to workspace six.", "seconds": 0.0951}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["toggle scratchpad"], "context_chars": 4080, "heard": "Toggle scratchpad.", "seconds": 0.0788}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["dismiss all notifications"], "context_chars": 4080, "heard": "Dismiss all notifications.", "seconds": 0.0865}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["screenshot window"], "context_chars": 4080, "heard": "Screenshot window.", "seconds": 0.0739}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["lock the screen"], "context_chars": 4080, "heard": "lock the screen.", "seconds": 0.0786}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["keyboard backlight cycle"], "context_chars": 4080, "heard": "Keyboard backlight cycle.", "seconds": 0.0795}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["brightness up"], "context_chars": 4080, "heard": "Brightness up.", "seconds": 0.0776}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["cycle monitor scaling"], "context_chars": 4080, "heard": "Cycle monitor scaling.", "seconds": 0.0768}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "command", "forms": ["toggle window gaps"], "context_chars": 4080, "heard": "Toggle window gaps.", "seconds": 0.0777}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["I put my ears on the pillow and fell asleep"], "context_chars": 4080, "heard": "I put my ears on the pillow and fell asleep.", "seconds": 0.1251}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the dog turned its ears off to the noise"], "context_chars": 4080, "heard": "The dog turned its ears after the noise.", "seconds": 0.1139}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["hey can you send me that file later"], "context_chars": 4080, "heard": "Hey, can you send me that file later?", "seconds": 0.1201}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["listen to this song before the meeting"], "context_chars": 4080, "heard": "Listen to this song before the meeting.", "seconds": 0.1003}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["she said the music was too loud"], "context_chars": 4080, "heard": "She said the music was too loud.", "seconds": 0.1089}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["can you scroll through the photos with me"], "context_chars": 4080, "heard": "Can you scroll through the photos with me?", "seconds": 0.1035}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["we should close the window before it rains"], "context_chars": 4080, "heard": "We should close the window before it rains.", "seconds": 0.1107}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the next track on the album is better"], "context_chars": 4080, "heard": "The next track on the album is better.", "seconds": 0.1052}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["turn it down a little bit please"], "context_chars": 4080, "heard": "Turn it down a little bit, please.", "seconds": 0.1058}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["my screen went full black for a second"], "context_chars": 4080, "heard": "My screen went full black for a second.", "seconds": 0.1059}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the clock on the wall stopped at noon"], "context_chars": 4080, "heard": "The clock on the wall stopped at noon.", "seconds": 0.1074}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["I need to lock the door when I leave"], "context_chars": 4080, "heard": "I need to lock the door when I leave.", "seconds": 0.1126}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the backlight on this keyboard is broken"], "context_chars": 4080, "heard": "The backlight on this keyboard is broken.", "seconds": 0.1044}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["let me check the weather for tomorrow"], "context_chars": 4080, "heard": "Let me check the weather for tomorrow.", "seconds": 0.0994}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["we went over the plan and then went out"], "context_chars": 4080, "heard": "We went over the plan, and then went out.", "seconds": 0.121}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["peace and quiet is all I want today"], "context_chars": 4080, "heard": "Peace and quiet is all I want today.", "seconds": 0.1095}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["take a new line of thought on this problem"], "context_chars": 4080, "heard": "Take a new line of thought on this problem.", "seconds": 0.1143}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["scratch the paint off that old table"], "context_chars": 4080, "heard": "Scratch the paint off that old table.", "seconds": 0.1086}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["I was wrong about the deadline"], "context_chars": 4080, "heard": "I was wrong about the deadline.", "seconds": 0.0991}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the command line tool crashed again"], "context_chars": 4080, "heard": "The command line tool crashed again.", "seconds": 0.1054}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["zoom into the map near the station"], "context_chars": 4080, "heard": "Zoom into the map near the station.", "seconds": 0.1004}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the brightness of the sun was blinding"], "context_chars": 4080, "heard": "The brightness of the sun was blinding.", "seconds": 0.1054}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["she split the bill with her brother"], "context_chars": 4080, "heard": "She split the bill with her brother.", "seconds": 0.1037}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["my workspace is a mess this week"], "context_chars": 4080, "heard": "My workspace is a mess this week.", "seconds": 0.0984}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the cursor keeps jumping around in the editor"], "context_chars": 4080, "heard": "The cursor keeps jumping around in the editor.", "seconds": 0.1084}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["please talk to the landlord about the heating"], "context_chars": 4080, "heard": "Please talk to the landlord about the heating.", "seconds": 0.1082}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the talking points are in the shared document"], "context_chars": 4080, "heard": "The talking points are in the shared document.", "seconds": 0.1085}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["show me the commands you ran yesterday"], "context_chars": 4080, "heard": "Show me the commands you ran yesterday.", "seconds": 0.103}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["what time does the train leave on Friday"], "context_chars": 4080, "heard": "What time does the train leave on Friday?", "seconds": 0.1183}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["I think the build is green now"], "context_chars": 4080, "heard": "I think the build is green now.", "seconds": 0.1061}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the coffee machine needs descaling again"], "context_chars": 4080, "heard": "The coffee machine needs descaling again.", "seconds": 0.1043}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["remember to water the plants on Sunday"], "context_chars": 4080, "heard": "Remember to water the plants on Sunday.", "seconds": 0.0973}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the quarterly report is almost finished"], "context_chars": 4080, "heard": "The quarterly report is almost finished.", "seconds": 0.0974}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["we can meet at the cafe around three"], "context_chars": 4080, "heard": "We can meet at the cafe around three.", "seconds": 0.109}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["this function returns an empty list"], "context_chars": 4080, "heard": "This function returns an empty list.", "seconds": 0.1039}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["my sister lives in a small town by the sea"], "context_chars": 4080, "heard": "My sister lives in a small town by the sea.", "seconds": 0.1234}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the battery lasts about ten hours"], "context_chars": 4080, "heard": "The battery lasts about ten hours.", "seconds": 0.1024}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["he bought a second hand bicycle last spring"], "context_chars": 4080, "heard": "He bought a second-hand bicycle last spring.", "seconds": 0.1139}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["send the invoice to the accounting team"], "context_chars": 4080, "heard": "Send the invoice to the accounting team.", "seconds": 0.1076}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the window seat was already taken"], "context_chars": 4080, "heard": "The window seat was already taken.", "seconds": 0.1012}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["there is a typo in the second paragraph"], "context_chars": 4080, "heard": "There is a typo in the second paragraph.", "seconds": 0.1129}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the cat knocked the glass off the table"], "context_chars": 4080, "heard": "The cat knocked the glass off the table.", "seconds": 0.1142}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["we will review the pull request tomorrow morning"], "context_chars": 4080, "heard": "We will review the pull request tomorrow morning.", "seconds": 0.1147}
+{"path": "http", "cond": "cap4096", "voice": "us150", "kind": "ordinary", "forms": ["the river froze over during the cold snap"], "context_chars": 4080, "heard": "The river flows over during the cold snap.", "seconds": 0.1135}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 0, "heard": "Airman.", "seconds": 0.07}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 0, "heard": "Ears off.", "seconds": 0.075}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 0, "heard": "Hey, Klanker.", "seconds": 0.0803}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 0, "heard": "Listen, planker.", "seconds": 0.08}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 0, "heard": "Fuck off, Glanker.", "seconds": 0.086}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 0, "heard": "Ears held.", "seconds": 0.0742}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 0, "heard": "Regular mode.", "seconds": 0.0683}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 0, "heard": "Talking Stick.", "seconds": 0.069}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 0, "heard": "Show commands.", "seconds": 0.069}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 0, "heard": "Talk to Centurion.", "seconds": 0.0861}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 0, "heard": "Cursor mode.", "seconds": 0.0623}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 0, "heard": "New line.", "seconds": 0.0683}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 0, "heard": "Scratch that.", "seconds": 0.0688}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 0, "heard": "Backtrack.", "seconds": 0.0699}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 0, "heard": "Over and out.", "seconds": 0.0699}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 0, "heard": "Peace out.", "seconds": 0.0686}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 0, "heard": "Literal.", "seconds": 0.0578}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 0, "heard": "Enter.", "seconds": 0.0633}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 0, "heard": "Command.", "seconds": 0.058}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 0, "heard": "Run.", "seconds": 0.0588}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 0, "heard": "Pause the music.", "seconds": 0.0794}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 0, "heard": "Next track.", "seconds": 0.0699}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 0, "heard": "Previous track.", "seconds": 0.0728}
+{"path": "chat", "cond": "none", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 0, "heard": "Volume up.", "seconds": 0.0692}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears on"], "context_chars": 757, "heard": "", "seconds": 0.0458}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears off"], "context_chars": 757, "heard": "", "seconds": 0.0367}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["hey clanker"], "context_chars": 757, "heard": "Hey clanker.", "seconds": 0.0599}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["listen clanker"], "context_chars": 757, "heard": "Listen clanker.", "seconds": 0.0636}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["fuck off clanker"], "context_chars": 757, "heard": "Fuck off, clanker.", "seconds": 0.0758}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["ears help"], "context_chars": 757, "heard": "", "seconds": 0.0404}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["regular mode"], "context_chars": 757, "heard": "regular mode.", "seconds": 0.0624}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["talking stick"], "context_chars": 757, "heard": "Talking stick.", "seconds": 0.0569}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["show commands"], "context_chars": 757, "heard": "Show commands.", "seconds": 0.0544}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["talk to centurion"], "context_chars": 757, "heard": "Talk to Centurion.", "seconds": 0.077}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["cursor mode"], "context_chars": 757, "heard": "Cursor mode.", "seconds": 0.0574}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["new line"], "context_chars": 757, "heard": "New line.", "seconds": 0.0586}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["scratch that"], "context_chars": 757, "heard": "Scratch that.", "seconds": 0.0639}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["backtrack", "back track"], "context_chars": 757, "heard": "Backtrack.", "seconds": 0.0576}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["over and out"], "context_chars": 757, "heard": "", "seconds": 0.0396}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["peace out"], "context_chars": 757, "heard": "Peace out.", "seconds": 0.0584}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["literal"], "context_chars": 757, "heard": "Literal.", "seconds": 0.0534}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["enter"], "context_chars": 757, "heard": "", "seconds": 0.0402}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["command"], "context_chars": 757, "heard": "Command.", "seconds": 0.0522}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["wrong"], "context_chars": 757, "heard": "Run.", "seconds": 0.0529}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["pause the music"], "context_chars": 757, "heard": "Pause the music.", "seconds": 0.0643}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["next track"], "context_chars": 757, "heard": "Next track.", "seconds": 0.0576}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["previous track"], "context_chars": 757, "heard": "Previous track.", "seconds": 0.0575}
+{"path": "chat", "cond": "list", "voice": "us150", "kind": "command", "forms": ["volume up"], "context_chars": 757, "heard": "Volume up.", "seconds": 0.0577}

@@ -303,6 +303,8 @@ pub struct StreamingEngine {
     /// partials are published as `Partial` events for it to show.
     claimed: bool,
     wake: Box<dyn crate::wake::WakeDetector>,
+    /// `[cs]`: ASR context in command mode and standby. Off until set.
+    cs: crate::config::CsConfig,
 }
 
 impl StreamingEngine {
@@ -372,6 +374,10 @@ impl StreamingEngine {
             keep_audio_dir: None,
             claimed: false,
             wake: Box::new(crate::wake::NoWake),
+            cs: crate::config::CsConfig {
+                context: false,
+                ..Default::default()
+            },
         })
     }
 
@@ -650,16 +656,41 @@ impl StreamingEngine {
             Some(id) if !self.final_correction && !verify => self.ghost_stream_final(id).await,
             _ => None,
         };
+        // A context written out is not what was said: transcribe in full,
+        // which falls back to no context.
+        let live_final = match live_final {
+            Some(text)
+                if self
+                    .asr_context()
+                    .is_some_and(|c| crate::cs::context::is_echo(&text, &c)) =>
+            {
+                info!("The live stream wrote out the context; transcribing in full");
+                None
+            }
+            other => other,
+        };
         let transcript = match live_final {
             Some(text) => {
                 info!("Committing the live stream's final");
                 Ok(text)
             }
             None => {
-                let result = self
-                    .whisper_client
-                    .transcribe_checked(&segment_file, self.guided_grammar.as_deref(), verify)
-                    .await;
+                let result = match self.asr_context() {
+                    Some(context) => {
+                        self.whisper_client
+                            .transcribe_with_context(&segment_file, verify, Some(&context))
+                            .await
+                    }
+                    None => {
+                        self.whisper_client
+                            .transcribe_checked(
+                                &segment_file,
+                                self.guided_grammar.as_deref(),
+                                verify,
+                            )
+                            .await
+                    }
+                };
                 if let Some(health) = &self.health {
                     use crate::whisper::WhisperError as E;
                     match &result {
@@ -1277,6 +1308,28 @@ impl StreamingEngine {
             Box::new(crate::wake::NoWake)
         };
         self.commands = commands;
+    }
+
+    /// `[cs]` settings: whether command mode and standby pass the phrases
+    /// they listen for to the ASR as context.
+    pub fn set_cs(&mut self, cs: crate::config::CsConfig) {
+        self.cs = cs;
+    }
+
+    /// The ASR context for the utterance in progress: the phrases the mode
+    /// listens for, in command mode and standby only (see
+    /// [`crate::cs::context`]). None in dictation, bash mode and while a
+    /// decision is open.
+    pub(crate) fn asr_context(&mut self) -> Option<String> {
+        if !self.cs.context || self.guided_grammar.is_some() || self.deciding() {
+            return None;
+        }
+        crate::cs::context::for_mode(
+            &self.mode,
+            &self.commands,
+            self.command_paths.is_some(),
+            &self.cs,
+        )
     }
 
     /// Replace the wake detector (e.g. with a wake word model).
@@ -2241,9 +2294,11 @@ impl StreamingEngine {
         // Heard both ways at once: the words, and the audio's embedding.
         // The words only count if they come back in time.
         let started = Instant::now();
+        let context = self.asr_context();
         let asr = tokio::time::timeout(
             COMMAND_ASR_BUDGET,
-            self.whisper_client.transcribe_checked(wav, None, false),
+            self.whisper_client
+                .transcribe_with_context(wav, false, context.as_deref()),
         );
         // While the text anchors load the server is busy with them and
         // nothing is routed by embedding: the words alone.

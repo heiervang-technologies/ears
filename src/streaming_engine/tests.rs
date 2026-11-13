@@ -1993,3 +1993,71 @@ async fn test_ws_listen_publishes_no_mode_files() {
     assert!(engine.is_standby());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
+
+/// Whether each transcription request carried a `prompt` (ASR context),
+/// and the prompts themselves.
+async fn asr_prompts(server: &wiremock::MockServer) -> Vec<Option<String>> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+        .map(|r| {
+            let body = String::from_utf8_lossy(&r.body).to_string();
+            body.split_once("name=\"prompt\"\r\n\r\n")
+                .map(|(_, rest)| rest.split("\r\n").next().unwrap_or("").to_string())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_asr_context_only_in_command_mode_and_standby() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Command."))
+        .mount(&whisper)
+        .await;
+    let (mut engine, mut rx, _dir) = mode_engine(&whisper.uri());
+    engine.set_cs(crate::config::CsConfig::default());
+    // Dictation: "command" enters command mode, heard with no context.
+    run_one(&mut engine, &mut rx).await;
+    assert!(engine.in_command_mode());
+    // Command mode: "command" leaves it, heard with the actions as context.
+    run_one(&mut engine, &mut rx).await;
+    assert!(!engine.in_command_mode());
+    // Standby: heard with the wake phrases and "command" as context.
+    engine.request_wake(crate::wake::Wake::Off);
+    run_one(&mut engine, &mut rx).await;
+
+    let prompts = asr_prompts(&whisper).await;
+    assert_eq!(prompts.len(), 3, "{prompts:?}");
+    assert_eq!(prompts[0], None, "never in dictation");
+    let command = prompts[1].as_deref().expect("command mode has a context");
+    assert!(command.starts_with("command, "), "{command}");
+    assert!(command.contains("press enter"), "{command}");
+    let standby = prompts[2].as_deref().expect("standby has a context");
+    assert!(standby.contains("command"), "{standby}");
+    assert!(!standby.contains("press enter"), "{standby}");
+}
+
+#[tokio::test]
+async fn test_asr_context_off_sends_no_prompt() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Command."))
+        .mount(&whisper)
+        .await;
+    let (mut engine, mut rx, _dir) = mode_engine(&whisper.uri());
+    engine.set_cs(crate::config::CsConfig {
+        context: false,
+        ..Default::default()
+    });
+    run_one(&mut engine, &mut rx).await;
+    run_one(&mut engine, &mut rx).await;
+    engine.request_wake(crate::wake::Wake::Off);
+    run_one(&mut engine, &mut rx).await;
+    assert_eq!(asr_prompts(&whisper).await, vec![None, None, None]);
+}

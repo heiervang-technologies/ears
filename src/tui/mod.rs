@@ -194,6 +194,7 @@ pub async fn start_vad_pipeline(
     engine.set_subtitles_dir(&config.state_dir, config.subtitles, &config.subtitle_modes);
     engine.set_final_correction(config.final_correction);
     engine.set_say_echo(config.say_echo.clone());
+    engine.set_cs(config.cs.clone());
 
     // Shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

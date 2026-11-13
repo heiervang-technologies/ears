@@ -9,6 +9,7 @@ pub mod audio;
 pub mod colour_mode;
 pub mod command_mode;
 pub mod commands;
+pub mod cs;
 pub mod decide;
 pub mod endpoint;
 pub mod pointer;
