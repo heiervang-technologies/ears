@@ -62,7 +62,7 @@ pub enum CommandModeError {
     Actions(PathBuf, String),
 }
 
-type Result<T> = std::result::Result<T, CommandModeError>;
+pub type Result<T> = std::result::Result<T, CommandModeError>;
 
 /// `actions.toml`.
 #[derive(Debug, Clone, Deserialize)]
@@ -886,6 +886,104 @@ pub struct Hearing {
     pub by: Option<&'static str>,
     /// Nothing fired: the action it came closest to, if not chatter.
     pub nearest: Option<String>,
+    /// Which mode heard it: "command" here; a voice command heard in
+    /// another mode says that one ([`DictationCommand`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<&'static str>,
+    /// When each stage was done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<Timing>,
+}
+
+/// When each stage of hearing a command was done, in milliseconds after
+/// VAD called the utterance ended (which was `silence_ms` after the last
+/// voiced frame). A stage that did not run is absent.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct Timing {
+    /// The silence VAD waited for before calling the utterance ended.
+    pub silence_ms: u64,
+    /// The transcript was in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asr_ms: Option<f64>,
+    /// The audio embedding was in (command mode; it may come in after the
+    /// decision when the words alone decided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_ms: Option<f64>,
+    /// What to do was decided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_ms: Option<f64>,
+    /// The action was done: the key pressed, the program started, the mode
+    /// switched. Includes the accept colour hold (`[commands] accept_ms`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_ms: Option<f64>,
+}
+
+/// The zero of a [`Timing`]: when VAD called the utterance ended.
+#[derive(Debug, Clone, Copy)]
+pub struct Clock {
+    pub ended: std::time::Instant,
+    pub silence_ms: u64,
+}
+
+impl Clock {
+    /// Milliseconds from the end to `at`, to a tenth.
+    pub fn ms(&self, at: std::time::Instant) -> f64 {
+        (at.saturating_duration_since(self.ended).as_secs_f64() * 10_000.0).round() / 10.0
+    }
+
+    pub fn timing(&self) -> Timing {
+        Timing {
+            silence_ms: self.silence_ms,
+            ..Default::default()
+        }
+    }
+}
+
+impl std::fmt::Display for Timing {
+    /// "asr 110 ms, embedding 300 ms, decision 112 ms, action 395 ms after
+    /// 400 ms of silence".
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stages = [
+            ("asr", self.asr_ms),
+            ("embedding", self.embedding_ms),
+            ("decision", self.decision_ms),
+            ("action", self.action_ms),
+        ];
+        let parts: Vec<String> = (stages.iter())
+            .filter_map(|(name, ms)| ms.map(|ms| format!("{name} {ms:.0} ms")))
+            .collect();
+        write!(
+            f,
+            "{} after {} ms of silence",
+            if parts.is_empty() {
+                "nothing".to_string()
+            } else {
+                parts.join(", ")
+            },
+            self.silence_ms
+        )
+    }
+}
+
+/// A voice command heard outside command mode (dictating, or a wake
+/// phrase in standby), as written to [`LAST`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DictationCommand {
+    /// The mode it was heard in.
+    pub mode: crate::vad_mode::ModeKind,
+    /// The command's label ("enter", "keys:ctrl+c", a run command's name).
+    pub command: String,
+    /// The words, as already logged.
+    pub words: String,
+    pub timing: Timing,
+}
+
+/// Write `record` to [`LAST`] in `state_dir`.
+pub fn write_last(state_dir: &Path, record: &impl Serialize) {
+    let _ = std::fs::write(
+        state_dir.join(LAST),
+        serde_json::to_vec(record).unwrap_or_default(),
+    );
 }
 
 /// Lowercase words, punctuation and filler gone: "Press Enter." -> "press enter".
@@ -1098,20 +1196,80 @@ impl CommandMode {
         Ok(self.hear_with(Some(u), "").await)
     }
 
-    /// Route one utterance from its audio embedding (`audio`, if the
-    /// embedding worked) and its transcript (`words`, "" if the ASR did not
-    /// answer in time). See [`combine`].
-    pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
-        let ready = self.ready();
+    /// Whether the words alone fire an action (its name or a phrasing,
+    /// cs variants included), so the audio embedding need not be waited
+    /// for. Not while `ears teach` waits to label the voice.
+    pub fn fires_by_words(&self, words: &str) -> bool {
+        self.by_words(words).0.is_some() && !self.paths.state_dir.join(TEACH).exists()
+    }
+
+    /// The action the words name, and for a `rest` action what follows.
+    fn by_words(&self, words: &str) -> (Option<usize>, Option<(usize, String)>) {
         let rest = self.router.by_rest(words);
         let by_words = self
             .router
             .by_words(words)
             .filter(|&i| !self.router.actions[i].rest)
             .or(rest.as_ref().map(|r| r.0));
+        (by_words, rest)
+    }
+
+    /// The phrasings that fire an action as said, for ending an utterance
+    /// early ([`crate::endpoint::Ending::Exact`]). A `rest` action's are
+    /// open: more words may follow them.
+    pub fn phrases(&self) -> crate::endpoint::Phrases {
+        let said = |a: &Action| {
+            std::iter::once(a.name.clone())
+                .chain(a.text.iter().cloned())
+                .collect::<Vec<_>>()
+        };
+        let (open, complete): (Vec<&Action>, Vec<&Action>) =
+            self.router.actions.iter().partition(|a| a.rest);
+        crate::endpoint::Phrases::new(
+            complete.into_iter().flat_map(said),
+            open.into_iter().flat_map(said),
+            plain,
+        )
+    }
+
+    /// The audio embedding of an utterance that already fired by its words
+    /// ([`CommandMode::fires_by_words`]), in late: the vote goes on the
+    /// record, and a firing teaches the voice its phrasing as it would
+    /// have had the embedding been in time.
+    pub fn heard_audio(&mut self, hearing: &mut Hearing, fired: Option<&str>, u: Vec<f32>) {
+        hearing.audio = Some(self.router.decide(&u));
+        let Some(i) = fired.and_then(|name| self.router.index(name)) else {
+            return;
+        };
+        if hearing.by == Some("words") && !self.router.actions[i].rest {
+            self.remember(i, u, "auto");
+        }
+    }
+
+    /// As [`CommandMode::heard_audio`] once command mode is off (the action
+    /// left it): the voice anchor goes straight to the file.
+    pub fn remember_after(paths: &Paths, action: &str, u: Vec<f32>) {
+        let mut voice = VoiceAnchors::load(&paths.voice);
+        voice.add(VoiceAnchor {
+            action: action.to_string(),
+            source: "auto".into(),
+            vec: u,
+        });
+        if let Err(e) = voice.save(&paths.voice) {
+            tracing::warn!("Cannot save command anchors: {}", e);
+        }
+    }
+
+    /// Route one utterance from its audio embedding (`audio`, if the
+    /// embedding worked) and its transcript (`words`, "" if the ASR did not
+    /// answer in time). See [`combine`].
+    pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
+        let ready = self.ready();
+        let (by_words, rest) = self.by_words(words);
         let mut hearing = Hearing {
             words: words.trim().to_string(),
             audio: audio.as_ref().map(|u| self.router.decide(u)),
+            mode: Some("command"),
             ..Default::default()
         };
         // What the words mean, unless they already name an action.
@@ -1185,10 +1343,7 @@ impl CommandMode {
     }
 
     fn write_last(&self, hearing: &Hearing) {
-        let _ = std::fs::write(
-            self.paths.state_dir.join(LAST),
-            serde_json::to_vec(hearing).unwrap_or_default(),
-        );
+        write_last(&self.paths.state_dir, hearing);
     }
 
     fn remember(&mut self, action: usize, vec: Vec<f32>, source: &str) {

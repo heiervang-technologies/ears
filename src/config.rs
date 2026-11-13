@@ -177,10 +177,21 @@ pub struct VadSettings {
     /// or "uh" (default: 700). 0 waits `max_silence_duration_ms`.
     #[serde(default = "default_finished_silence_ms")]
     pub finished_silence_ms: u64,
+    /// End an utterance after this much silence (ms) when the live
+    /// transcript is exactly a whole command of the current mode (an action
+    /// in command mode; "enter", "ears off" in dictation) that does not
+    /// start a longer one (default: 150). 0 falls back to
+    /// `command_silence_ms`.
+    #[serde(default = "default_exact_silence_ms")]
+    pub exact_silence_ms: u64,
 }
 
 fn default_command_silence_ms() -> u64 {
     400
+}
+
+fn default_exact_silence_ms() -> u64 {
+    150
 }
 
 fn default_finished_silence_ms() -> u64 {
@@ -202,6 +213,7 @@ impl Default for VadSettings {
             min_mean_probability: default_min_mean_probability(),
             command_silence_ms: default_command_silence_ms(),
             finished_silence_ms: default_finished_silence_ms(),
+            exact_silence_ms: default_exact_silence_ms(),
         }
     }
 }

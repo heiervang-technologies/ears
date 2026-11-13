@@ -119,6 +119,10 @@ pub struct VadConfig {
     /// End the segment after this much silence when the live transcript
     /// sounds finished (ends a sentence, not on "and" or "uh"). 0: never early.
     pub finished_silence_ms: u64,
+    /// End the segment after this much silence when the live transcript is
+    /// exactly a whole command of the mode ([`crate::endpoint::Ending::Exact`]).
+    /// 0: as `command_silence_ms`.
+    pub exact_silence_ms: u64,
 }
 
 impl VadConfig {
@@ -135,6 +139,7 @@ impl VadConfig {
             min_mean_probability: settings.min_mean_probability,
             command_silence_ms: settings.command_silence_ms,
             finished_silence_ms: settings.finished_silence_ms,
+            exact_silence_ms: settings.exact_silence_ms,
         }
     }
 
@@ -170,6 +175,7 @@ impl Default for VadConfig {
             min_mean_probability: 0.0,
             command_silence_ms: 0,
             finished_silence_ms: 0,
+            exact_silence_ms: 0,
         }
     }
 }

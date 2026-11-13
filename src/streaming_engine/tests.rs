@@ -20,15 +20,27 @@ fn seq_engine_at(
     whisper_url: &str,
     temp_dir: PathBuf,
 ) -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
-    let mut engine = StreamingEngine::new(
-        Arc::new(WhisperClient::new(whisper_url)),
-        StreamingConfig::default(),
+    seq_engine_vad(
+        whisper_url,
+        temp_dir,
         VadConfig {
             min_speech_duration_ms: 96,
             max_silence_duration_ms: 96,
             pre_speech_buffer_ms: 64,
             ..VadConfig::default()
         },
+    )
+}
+
+fn seq_engine_vad(
+    whisper_url: &str,
+    temp_dir: PathBuf,
+    vad: VadConfig,
+) -> (StreamingEngine, mpsc::UnboundedReceiver<StreamingEvent>) {
+    let mut engine = StreamingEngine::new(
+        Arc::new(WhisperClient::new(whisper_url)),
+        StreamingConfig::default(),
+        vad,
         ProgressiveTypingConfig::default(),
         temp_dir,
     )
@@ -2088,4 +2100,347 @@ async fn test_cs_journal_keeps_commands_and_standby_but_not_dictation() {
     assert_eq!(missed[0].text, "ears of");
     assert!(!missed[0].is_matched());
     assert!(journaled("What time is it?", true).await.is_empty());
+}
+
+// ---- Command latency: stage timing, words first, early end ----
+
+/// An actions file on `server` in `dir`: "close" (also "close window"),
+/// "next" and "next window" (two actions, one starting the other) and
+/// "call" taking a name.
+fn latency_paths(dir: &std::path::Path, server: &str) -> crate::command_mode::Paths {
+    let actions = format!(
+        "server = \"{server}\"\n\
+         [[action]]\nname = \"close\"\nkeys = \"ctrl+w\"\ntext = [\"close window\", \"shut it\"]\n\
+         [[action]]\nname = \"next\"\nkeys = \"tab\"\ntext = [\"next\"]\n\
+         [[action]]\nname = \"next-window\"\nkeys = \"super+tab\"\ntext = [\"next window\"]\n\
+         [[action]]\nname = \"call\"\nrun = [\"true\"]\nrest = true\ntext = [\"call\"]\n"
+    );
+    std::fs::write(dir.join("actions.toml"), actions).unwrap();
+    crate::command_mode::Paths {
+        actions: dir.join("actions.toml"),
+        voice: dir.join("command-anchors.json"),
+        text_cache: dir.join("command-text-anchors.json"),
+        state_dir: dir.to_path_buf(),
+    }
+}
+
+/// An ASR answering `text` after `asr`, and an embedding server that
+/// embeds audio in `embedding` (texts at once).
+async fn latency_servers(
+    text: &str,
+    asr: Duration,
+    embedding: Duration,
+) -> (wiremock::MockServer, wiremock::MockServer) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription(text).set_delay(asr))
+        .mount(&whisper)
+        .await;
+    let embed = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/props"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&embed)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(move |request: &Request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            match body["content"].as_array() {
+                Some(texts) => {
+                    let items: Vec<_> = (0..texts.len())
+                        .map(|i| serde_json::json!({"index": i, "embedding": [[1.0, i as f32]]}))
+                        .collect();
+                    ResponseTemplate::new(200).set_body_json(items)
+                }
+                None if body["content"].get("multimodal_data").is_some() => {
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!([{"embedding": [0.0, 1.0]}]))
+                        .set_delay(embedding)
+                }
+                None => ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{"embedding": [1.0, 0.5]}])),
+            }
+        })
+        .mount(&embed)
+        .await;
+    (whisper, embed)
+}
+
+/// What `command-last.json` says about one command-mode utterance heard
+/// as `text`, the ASR taking `asr` and the audio embedding `embedding`;
+/// `before`: wait for the embedding as before words fired first.
+async fn command_latency(
+    text: &str,
+    asr: Duration,
+    embedding: Duration,
+    before: bool,
+) -> serde_json::Value {
+    crate::desktop::AudioFeedback::set_volume(0);
+    let (whisper, embed) = latency_servers(text, asr, embedding).await;
+    let dir = tempfile::tempdir().unwrap();
+    let paths = latency_paths(dir.path(), &embed.uri());
+    let mode = crate::command_mode::CommandMode::start(paths.clone())
+        .await
+        .unwrap();
+    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.typing_mode = TypingMode::None;
+    engine.command_paths = Some(paths);
+    engine.wait_for_embedding = before;
+    engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
+        crate::vad_mode::CommandState { mode },
+    )));
+    let wav = dir.path().join("segment.wav");
+    let tone: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    engine.save_wav(&wav, &tone).unwrap();
+    engine.ended = Some((Instant::now(), 400));
+    engine.command_segment(&wav).await;
+    let last = std::fs::read(dir.path().join(crate::command_mode::LAST)).unwrap();
+    serde_json::from_slice(&last).unwrap()
+}
+
+fn ms(last: &serde_json::Value, stage: &str) -> f64 {
+    last["timing"][stage]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no {stage} in {last}"))
+}
+
+#[tokio::test]
+async fn test_exact_words_fire_without_waiting_for_the_audio_embedding() {
+    let asr = Duration::from_millis(110);
+    let embedding = Duration::from_millis(300);
+    let mut rows = Vec::new();
+    for (case, text) in [
+        ("exact", "Close window."),
+        ("not exact", "Could you shut the window"),
+    ] {
+        for before in [true, false] {
+            let last = command_latency(text, asr, embedding, before).await;
+            rows.push((case, before, last));
+        }
+    }
+    eprintln!("| utterance | routing | ASR done | embedding done | decision | by |");
+    eprintln!("|---|---|---|---|---|---|");
+    for (case, before, last) in &rows {
+        eprintln!(
+            "| {case} | {} | {:.0} ms | {:.0} ms | {:.0} ms | {} |",
+            if *before {
+                "before (wait for both)"
+            } else {
+                "after (words first)"
+            },
+            ms(last, "asr_ms"),
+            ms(last, "embedding_ms"),
+            ms(last, "decision_ms"),
+            last["by"].as_str().unwrap_or("-"),
+        );
+    }
+    let decision = |case: &str, before: bool| {
+        let (_, _, last) = rows.iter().find(|r| r.0 == case && r.1 == before).unwrap();
+        ms(last, "decision_ms")
+    };
+    // Words first: decided on the ASR, well before the embedding is in.
+    assert!(decision("exact", false) < 250.0, "{rows:?}");
+    assert!(decision("exact", true) >= 300.0, "{rows:?}");
+    // Not exact: both still wait for the embedding.
+    assert!(decision("not exact", false) >= 300.0, "{rows:?}");
+    assert!(decision("not exact", true) >= 300.0, "{rows:?}");
+    let (_, _, early) = rows.iter().find(|r| r.0 == "exact" && !r.1).unwrap();
+    assert_eq!(early["by"], "words");
+    assert_eq!(early["mode"], "command");
+    // The embedding still came in, after the action, for the record...
+    assert!(ms(early, "embedding_ms") >= 300.0 && ms(early, "action_ms") < 250.0);
+    assert!(early["audio"].is_object(), "{early}");
+    assert_eq!(early["timing"]["silence_ms"], 400);
+}
+
+#[tokio::test]
+async fn test_words_first_still_teaches_the_voice() {
+    crate::desktop::AudioFeedback::set_volume(0);
+    let (whisper, embed) = latency_servers(
+        "Shut it.",
+        Duration::from_millis(10),
+        Duration::from_millis(100),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let paths = latency_paths(dir.path(), &embed.uri());
+    let mode = crate::command_mode::CommandMode::start(paths.clone())
+        .await
+        .unwrap();
+    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.typing_mode = TypingMode::None;
+    engine.command_paths = Some(paths.clone());
+    engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
+        crate::vad_mode::CommandState { mode },
+    )));
+    let wav = dir.path().join("segment.wav");
+    let tone: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    engine.save_wav(&wav, &tone).unwrap();
+    engine.command_segment(&wav).await;
+    let voice = crate::command_mode::VoiceAnchors::load(&paths.voice);
+    assert_eq!(voice.anchors.len(), 1);
+    assert_eq!(voice.anchors[0].action, "close");
+    assert_eq!(voice.anchors[0].source, "auto");
+}
+
+/// Frames of silence (32 ms each) before VAD ends an utterance whose live
+/// partial is `partial`.
+fn silence_to_end(engine: &mut StreamingEngine, partial: &str) -> u64 {
+    feed(engine, &[0.9, 0.9, 0.9, 0.9]);
+    let ghost = engine.ghost.as_mut().unwrap();
+    let u = ghost.utterance;
+    ghost
+        .partial_tx
+        .send(Partial::streamed(u, partial.into(), 0))
+        .unwrap();
+    engine.ghost_poll_partials();
+    let mut frames = 0;
+    loop {
+        frames += 1;
+        let outcome = engine.vad_detector.inject_probability(0.0);
+        if engine.handle_vad_outcome(outcome).is_some() {
+            break;
+        }
+        engine.aim_early_end();
+        assert!(frames < 200, "never ended");
+    }
+    engine.ghost.as_mut().unwrap().next_utterance();
+    frames * 32
+}
+
+fn early_end_engine(dir: &std::path::Path) -> StreamingEngine {
+    let (mut engine, _lines) = ghost_engine(dir);
+    engine.vad_detector = VadSegmentDetector::new(VadConfig {
+        min_speech_duration_ms: 96,
+        max_silence_duration_ms: 1200,
+        pre_speech_buffer_ms: 64,
+        command_silence_ms: 400,
+        finished_silence_ms: 700,
+        exact_silence_ms: 150,
+        ..VadConfig::default()
+    })
+    .unwrap();
+    engine.typing_mode = TypingMode::None;
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        enter: vec!["enter".into(), "over".into()],
+        ..crate::commands::VoiceCommands::default()
+    });
+    engine
+}
+
+#[tokio::test]
+async fn test_a_whole_command_ends_the_utterance_at_a_short_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    let cases_dictation = [
+        ("Enter.", "dictation: whole command"),
+        ("Ears off.", "dictation: sleep phrase"),
+        ("Over.", "dictation: prefix of \"over and out\""),
+        ("Ship it over", "dictation: ends in a command"),
+        ("Ship it.", "dictation: finished sentence"),
+        ("Hey friend", "dictation: open run phrase"),
+    ];
+    let paths = latency_paths(dir.path(), "http://127.0.0.1:9");
+    let cases_command = [
+        ("Close window.", "command: whole action phrasing"),
+        ("Next window.", "command: whole action phrasing"),
+        ("Next.", "command: prefix of \"next window\""),
+        ("Call Moon.", "command: open (rest) action"),
+        ("Could you close it", "command: not a phrasing"),
+    ];
+    let mut rows = Vec::new();
+    for before in [true, false] {
+        engine.set_mode(crate::vad_mode::Mode::Dictation);
+        for (partial, case) in cases_dictation {
+            if before {
+                engine.exact_phrases = Some((engine.mode.kind(), None));
+            }
+            rows.push((case, partial, before, silence_to_end(&mut engine, partial)));
+        }
+        let mode = crate::command_mode::CommandMode::start_loading(paths.clone()).unwrap();
+        engine.set_mode(crate::vad_mode::Mode::Command(Box::new(
+            crate::vad_mode::CommandState { mode },
+        )));
+        for (partial, case) in cases_command {
+            if before {
+                engine.exact_phrases = Some((engine.mode.kind(), None));
+            }
+            rows.push((case, partial, before, silence_to_end(&mut engine, partial)));
+        }
+    }
+    eprintln!("| case | live partial | silence before end, before | after |");
+    eprintln!("|---|---|---|---|");
+    let after = |p: &str| rows.iter().find(|r| r.1 == p && !r.2).unwrap().3;
+    for (case, partial, _, was) in rows.iter().filter(|r| r.2) {
+        eprintln!(
+            "| {case} | {partial:?} | {was} ms | {} ms |",
+            after(partial)
+        );
+    }
+    // 150 ms is five 32 ms frames.
+    assert_eq!(after("Enter."), 160);
+    assert_eq!(after("Ears off."), 160);
+    assert_eq!(after("Close window."), 160);
+    assert_eq!(after("Next window."), 160);
+    // The prefix guard: the start of a longer phrase keeps its old wait.
+    assert_eq!(after("Over."), 416);
+    assert_eq!(after("Next."), 704);
+    assert_eq!(after("Call Moon."), 704);
+    // A run command ends like a key command: its phrase may take more words.
+    assert_eq!(after("Hey friend"), 416);
+    assert_eq!(after("Ship it over"), 416);
+    assert_eq!(after("Ship it."), 704);
+    assert_eq!(after("Could you close it"), 1216);
+    // Nothing that was not a whole command changed.
+    for (_, partial, _, was) in rows.iter().filter(|r| r.2) {
+        if after(partial) != 160 {
+            assert_eq!(after(partial), *was, "{partial}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_a_dictated_voice_command_records_its_timing() {
+    use wiremock::{matchers::path, Mock, MockServer};
+    crate::desktop::AudioFeedback::set_volume(0);
+    let whisper = MockServer::start().await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("Enter.").set_delay(Duration::from_millis(50)))
+        .mount(&whisper)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _rx) = seq_engine_at(&whisper.uri(), dir.path().to_path_buf());
+    engine.typing_mode = TypingMode::None;
+    engine.command_paths = Some(latency_paths(dir.path(), "http://127.0.0.1:9"));
+    engine.set_commands(crate::commands::VoiceCommands {
+        enabled: true,
+        ..crate::commands::VoiceCommands::default()
+    });
+    let segs = feed(&mut engine, &[0.9; 12]);
+    assert!(segs.is_empty());
+    let segs = feed(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+    let mut seg = segs.into_iter().next().expect("a segment");
+    seg.samples = (0..8000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    seg.mean_probability = 0.9;
+    engine.process_segment(seg).await.unwrap();
+    let last: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join(crate::command_mode::LAST)).unwrap())
+            .unwrap();
+    assert_eq!(last["mode"], "dictation");
+    assert_eq!(last["command"], "enter");
+    let (asr, decision, action) = (
+        ms(&last, "asr_ms"),
+        ms(&last, "decision_ms"),
+        ms(&last, "action_ms"),
+    );
+    assert!(
+        asr >= 50.0 && asr <= decision && decision <= action,
+        "{last}"
+    );
+    assert!(last["timing"].get("embedding_ms").is_none(), "{last}");
+    assert_eq!(last["timing"]["silence_ms"], 96);
 }
