@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ears vad` exits with an error when it gives up on a lost microphone (8
+  capture restarts in a row) or cannot restart itself, instead of exiting 0
+  like a VAD stopped on purpose. A supervisor such as
+  `contrib/systemd/ears-vad.service` now starts it again.
 - Entering command mode no longer waits for the embedding server on the
   audio path (the capture backed up and was killed, #259). Text anchors
   missing from the cache are embedded by a task, in batches; meanwhile the
