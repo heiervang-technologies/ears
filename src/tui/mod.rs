@@ -216,6 +216,7 @@ pub async fn start_vad_pipeline(
     engine.set_final_correction(config.final_correction);
     engine.set_say_echo(config.say_echo.clone());
     engine.set_cs(config.cs.clone());
+    engine.set_cs_journal(crate::cs::mine::Journal::from_config(&config.cs));
 
     // Shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

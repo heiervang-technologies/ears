@@ -326,8 +326,9 @@ pub struct Config {
     /// Dropping agents' `say` lines the mic picked up (`[say_echo]`).
     #[serde(default)]
     pub say_echo: crate::say_echo::SayEchoConfig,
-    /// Compensating scaffolding (`[cs]`, RFC 0002).
-    #[serde(default)]
+    /// Compensating scaffolding (`[cs]`, RFC 0002). Left out of a saved
+    /// config while it holds only defaults.
+    #[serde(default, skip_serializing_if = "CsConfig::is_default")]
     pub cs: CsConfig,
     /// Configuration directory (computed, not stored)
     #[serde(skip)]
@@ -351,6 +352,57 @@ pub struct CsConfig {
     /// Longest context, in characters; whole phrases only, in priority order.
     #[serde(default = "default_cs_context_chars")]
     pub context_chars: usize,
+    /// Keep the utterance journal for `ears cs mine` (see
+    /// [`crate::cs::mine`] and docs/CS_MINING.md). Default: false.
+    #[serde(default)]
+    pub journal: bool,
+    /// Rotate the journal past this size, in KiB (one old file is kept).
+    /// Default: 1024.
+    #[serde(default = "default_cs_journal_max_kb")]
+    pub journal_max_kb: u64,
+    /// Drop journal lines older than this many days. Default: 30.
+    #[serde(default = "default_cs_journal_max_days")]
+    pub journal_max_days: u64,
+    /// `ears cs mine`: an unmatched utterance pairs with a matched one at
+    /// most this many seconds later. Default: 6.
+    #[serde(default = "default_cs_mine_window_s")]
+    pub mine_window_s: f64,
+    /// `ears cs mine`: least evidence for a proposal. Default: 2.
+    #[serde(default = "default_cs_mine_min_count")]
+    pub mine_min_count: u32,
+    /// Most phonetic distance (0 same sound, 1 unrelated) between what was
+    /// heard and the phrase it is taken for: `ears cs mine` pairs no
+    /// further apart, and the journal keeps no unmatched standby speech
+    /// further from every standby phrase. Default: 0.35.
+    #[serde(default = "default_cs_mine_max_distance")]
+    pub mine_max_distance: f32,
+}
+
+impl CsConfig {
+    /// All defaults: nothing to save.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn default_cs_journal_max_kb() -> u64 {
+    1024
+}
+
+fn default_cs_journal_max_days() -> u64 {
+    30
+}
+
+fn default_cs_mine_window_s() -> f64 {
+    6.0
+}
+
+fn default_cs_mine_min_count() -> u32 {
+    2
+}
+
+fn default_cs_mine_max_distance() -> f32 {
+    0.35
 }
 
 impl Default for CsConfig {
@@ -358,6 +410,12 @@ impl Default for CsConfig {
         Self {
             context: default_cs_context(),
             context_chars: default_cs_context_chars(),
+            journal: false,
+            journal_max_kb: default_cs_journal_max_kb(),
+            journal_max_days: default_cs_journal_max_days(),
+            mine_window_s: default_cs_mine_window_s(),
+            mine_min_count: default_cs_mine_min_count(),
+            mine_max_distance: default_cs_mine_max_distance(),
         }
     }
 }

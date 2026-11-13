@@ -365,6 +365,29 @@ pub enum CsAction {
         #[arg(long, default_value = "any")]
         model: String,
     },
+
+    /// Propose variants from the utterance journal (`[cs] journal = true`):
+    /// what was heard seconds before a command matched. Writes a review
+    /// file where every entry is flagged; nothing is applied.
+    Mine {
+        /// Only utterances this recent: 90s, 30m, 12h, 7d, 2w.
+        #[arg(long, value_parser = parse_since)]
+        since: Option<std::time::Duration>,
+        /// The review file. Default: ~/.config/ears/cs.d/mined.toml.
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Read this journal instead of ~/.local/state/ears/cs-journal.jsonl.
+        #[arg(long, value_name = "FILE")]
+        journal: Option<std::path::PathBuf>,
+        /// `meta.model` of the file, and the model whose cs files are
+        /// checked for entries already there. Default: any.
+        #[arg(long)]
+        model: Option<String>,
+    },
+}
+
+fn parse_since(text: &str) -> Result<std::time::Duration, String> {
+    ears::cs::mine::parse_duration(text)
 }
 
 #[derive(Subcommand, Debug)]
@@ -477,6 +500,21 @@ mod tests {
     fn test_cli_select_compat() {
         let cli = Cli::try_parse_from(["ears", "select"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Select)));
+    }
+
+    #[test]
+    fn parse_cs_mine() {
+        let cli = Cli::parse_from(["ears", "cs", "mine", "--since", "7d", "--out", "x.toml"]);
+        match cli.command {
+            Some(Commands::Cs {
+                action: CsAction::Mine { since, out, .. },
+            }) => {
+                assert_eq!(since, Some(std::time::Duration::from_secs(7 * 86400)));
+                assert_eq!(out.as_deref(), Some(std::path::Path::new("x.toml")));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(Cli::try_parse_from(["ears", "cs", "mine", "--since", "7y"]).is_err());
     }
 
     #[test]
