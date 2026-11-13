@@ -98,6 +98,11 @@ async fn main() -> Result<()> {
 
     // Set up debug logging to file
     let log_file_path = config.state_dir.join("debug.log");
+    // Only the long-running owner caps the log, before opening it; the
+    // short-lived subcommands polled by bars and scripts only append.
+    let rotated = owns_debug_log(&cli.command, || vad_running(&config)).then(|| {
+        ears::log_rotate::rotate_if_larger(&log_file_path, ears::log_rotate::ROTATE_BYTES)
+    });
     if let Ok(log_file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -122,6 +127,14 @@ async fn main() -> Result<()> {
         tracing::debug!("ears started");
     }
     tracing::debug!("Log file: {}", log_file_path.display());
+    match rotated {
+        Some(Ok(true)) => tracing::info!(
+            "Rotated debug.log above {} bytes to debug.log.1",
+            ears::log_rotate::ROTATE_BYTES
+        ),
+        Some(Err(e)) => tracing::warn!("Could not rotate debug.log: {}", e),
+        _ => {}
+    }
 
     // Set audio cue volume from config
     AudioFeedback::set_volume(config.cue_volume);
@@ -988,6 +1001,20 @@ async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
 
 /// Toggle VAD mode: start or stop headless voice activity detection
 /// A VAD process is alive (its pid file names one).
+/// Whether this invocation is a long-running mode that owns `debug.log`
+/// rotation: the TUI, `ws-listen`, and `vad`/`ghost` when they start VAD
+/// (a toggle that stops a running VAD exits at once and must not rotate).
+fn owns_debug_log(command: &Option<Commands>, vad_running: impl FnOnce() -> bool) -> bool {
+    match command {
+        None | Some(Commands::WsListen { .. }) => true,
+        Some(Commands::Vad {
+            action: None | Some(VadAction::Start),
+        })
+        | Some(Commands::Ghost) => !vad_running(),
+        _ => false,
+    }
+}
+
 fn vad_running(config: &Config) -> bool {
     ears::health_report::pid_file_alive(&config.state_dir.join("vad.pid"))
 }
@@ -2001,6 +2028,28 @@ async fn stop_and_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_long_running_modes_rotate_debug_log() {
+        let vad = |action| Some(Commands::Vad { action });
+        // TUI and ws-listen always run long.
+        assert!(owns_debug_log(&None, || unreachable!()));
+        // VAD and ghost own it when they start VAD...
+        assert!(owns_debug_log(&vad(None), || false));
+        assert!(owns_debug_log(&vad(Some(VadAction::Start)), || false));
+        assert!(owns_debug_log(&Some(Commands::Ghost), || false));
+        // ...not when the toggle stops a running one, or start is a no-op.
+        assert!(!owns_debug_log(&vad(None), || true));
+        assert!(!owns_debug_log(&vad(Some(VadAction::Start)), || true));
+        assert!(!owns_debug_log(&Some(Commands::Ghost), || true));
+        // Short-lived subcommands never rotate.
+        assert!(!owns_debug_log(&vad(Some(VadAction::Stop)), || false));
+        assert!(!owns_debug_log(&vad(Some(VadAction::Status)), || false));
+        assert!(!owns_debug_log(
+            &Some(Commands::Toggle { ghost: false }),
+            || false
+        ));
+    }
 
     #[test]
     fn log_filter_keeps_ort_quiet_unless_rust_log_names_it() {

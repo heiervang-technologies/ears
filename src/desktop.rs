@@ -278,6 +278,48 @@ impl Notifications {
     }
 }
 
+/// How long a key press waits after a clipboard paste (`TypingMode::Paste`).
+///
+/// A paste is asynchronous in the target: Ctrl+V only asks the app to
+/// fetch the clipboard, and it inserts the text once that read finishes.
+/// A key pressed at once (auto-Enter, a spoken "over") can reach the app
+/// before the text and submit an empty or partial line. This was the 50 ms
+/// that #95 put before every Enter; it stays for this case only.
+///
+/// wtype needs none: it waits for a compositor round trip after every key
+/// event (`wl_display_roundtrip` in wtype's `type_keycode`), so when it
+/// exits every character has already been sent to the focused client, and
+/// a later ydotool key reaches that client through the same compositor
+/// after them. A key with nothing typed before it has nothing to wait for.
+/// Text committed by the fcitx5 ghost goes through the input method instead
+/// and has its own wait (`TAIL_KEY_DELAY` in the streaming engine).
+pub const PASTE_SETTLE: Duration = Duration::from_millis(50);
+
+/// When this process last pasted text with Ctrl+V.
+static LAST_PASTE: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn note_paste() {
+    if let Ok(mut last) = LAST_PASTE.lock() {
+        *last = Some(Instant::now());
+    }
+}
+
+/// The wait before a key press: what is left of [`PASTE_SETTLE`] since the
+/// last paste, else nothing.
+pub fn key_settle_delay(last_paste: Option<Instant>, now: Instant) -> Duration {
+    last_paste.map_or(Duration::ZERO, |pasted| {
+        PASTE_SETTLE.saturating_sub(now.saturating_duration_since(pasted))
+    })
+}
+
+fn settle_after_paste() {
+    let last = LAST_PASTE.lock().ok().and_then(|last| *last);
+    let delay = key_settle_delay(last, Instant::now());
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
+}
+
 /// Audio feedback manager
 ///
 /// Sounds (E5 start, E4 done, double-B4 error) are embedded in the binary.
@@ -720,8 +762,7 @@ impl TextInput {
     pub fn send_enter() -> Result<()> {
         use std::process::Stdio;
 
-        // Brief delay to ensure the target app has processed previously typed text
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        settle_after_paste();
 
         let mut cmd = Command::new("ydotool");
         cmd.args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
@@ -742,7 +783,7 @@ impl TextInput {
     pub fn send_new_line() -> Result<()> {
         use std::process::Stdio;
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        settle_after_paste();
 
         let mut cmd = Command::new("ydotool");
         // KEY_LEFTSHIFT down, KEY_ENTER press and release, KEY_LEFTSHIFT up
@@ -765,7 +806,7 @@ impl TextInput {
     pub fn send_backspaces(count: usize) -> Result<()> {
         use std::process::Stdio;
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        settle_after_paste();
 
         let mut cmd = Command::new("ydotool");
         cmd.args(["key", "-d", "2"])
@@ -793,7 +834,7 @@ impl TextInput {
     pub fn send_key_sequence(sequence: &[Vec<u16>]) -> Result<()> {
         use std::process::Stdio;
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        settle_after_paste();
 
         let mut args = vec!["key".to_string()];
         if sequence.len() > 1 {
@@ -904,6 +945,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool key failed with status: {}", status);
         }
+        note_paste();
 
         Ok(())
     }
@@ -969,6 +1011,25 @@ impl TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_press_waits_only_after_a_paste() {
+        let now = Instant::now();
+        // Nothing pasted (wtype typing, or a key with no text): no wait.
+        assert_eq!(key_settle_delay(None, now), Duration::ZERO);
+        // Right after Ctrl+V: the whole settle, so the paste lands first.
+        assert_eq!(key_settle_delay(Some(now), now), PASTE_SETTLE);
+        // Part of it already spent: only the rest.
+        assert_eq!(
+            key_settle_delay(Some(now), now + Duration::from_millis(30)),
+            Duration::from_millis(20)
+        );
+        // An old paste no longer delays anything.
+        assert_eq!(
+            key_settle_delay(Some(now), now + Duration::from_secs(5)),
+            Duration::ZERO
+        );
+    }
 
     #[test]
     fn key_combination_presses_then_releases_in_reverse() {
