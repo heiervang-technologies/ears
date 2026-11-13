@@ -475,7 +475,7 @@ impl WhisperClient {
     }
 
     /// First model the server lists, if it has an OpenAI model list.
-    async fn server_model(&self) -> Option<String> {
+    pub async fn server_model(&self) -> Option<String> {
         let url = format!("{}/v1/models", self.server_url.trim_end_matches('/'));
         let response = self
             .authenticated(self.client.get(&url))

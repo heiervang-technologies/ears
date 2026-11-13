@@ -53,6 +53,11 @@ pub struct Decision {
     /// else, even one word, comes back as an answer of your own.
     #[serde(default)]
     pub exact: bool,
+    /// Known mishearings of the options (normalized) and the option each
+    /// stands for: `decide:<option>` entries of Compensating Scaffolding
+    /// (`crate::cs`), filled when the decision is read. Not on the wire.
+    #[serde(skip)]
+    pub heard_as: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +177,9 @@ impl Decision {
         if self.exact {
             return Heard::Unclear;
         }
+        if let Some(&(_, i)) = self.heard_as.iter().find(|(h, _)| *h == said) {
+            return Heard::Chose(i);
+        }
         if let Some(i) = ORDINALS
             .iter()
             .take(options.len())
@@ -256,7 +264,11 @@ impl Decisions {
             self.open = stamp
                 .and_then(|_| std::fs::read_to_string(&path).ok())
                 .and_then(|s| serde_json::from_str::<Decision>(&s).ok())
-                .filter(|d| !d.options.is_empty());
+                .filter(|d| !d.options.is_empty())
+                .map(|mut d| {
+                    d.heard_as = crate::cs::decide_variants(&d.options, &crate::cs::active());
+                    d
+                });
         }
         if self.open.as_ref().is_some_and(|d| !alive(d.pid)) {
             self.open = None;
@@ -350,6 +362,7 @@ pub async fn ask(
         timeout_ms: left.map(|t| t.as_millis() as u64),
         other,
         exact,
+        heard_as: Vec::new(),
     };
     std::fs::create_dir_all(state_dir)?;
     let tmp = state_dir.join(format!("{FILE}.tmp"));
@@ -402,6 +415,7 @@ mod tests {
             timeout_ms: None,
             other: false,
             exact: false,
+            heard_as: Vec::new(),
         }
     }
 

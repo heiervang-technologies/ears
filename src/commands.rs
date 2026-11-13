@@ -181,6 +181,11 @@ pub struct RunCommands {
     /// it sets; `enabled = false` removes it.
     #[serde(flatten)]
     pub entries: BTreeMap<String, RunEntry>,
+    /// Extra phrases by entry name from Compensating Scaffolding
+    /// (`run:<name>` entries, see `crate::cs`), added when resolved. Never
+    /// read from or written to the config file.
+    #[serde(skip)]
+    pub heard_as: BTreeMap<String, Vec<String>>,
 }
 
 /// One `[commands.run.<name>]` table, as written in the config.
@@ -233,6 +238,7 @@ impl Default for RunCommands {
         Self {
             enabled: default_run_enabled(),
             entries: BTreeMap::new(),
+            heard_as: BTreeMap::new(),
         }
     }
 }
@@ -352,6 +358,13 @@ impl RunCommands {
             }
             if let Some(resume) = entry.resume {
                 run.resume = resume;
+            }
+        }
+        for run in &mut all {
+            for heard in self.heard_as.get(&run.name).into_iter().flatten() {
+                if !run.phrases.iter().any(|p| normalize(p) == normalize(heard)) {
+                    run.phrases.push(heard.clone());
+                }
             }
         }
         all.retain(|r| !r.command.is_empty() && r.phrases.iter().any(|p| !normalize(p).is_empty()));

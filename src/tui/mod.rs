@@ -116,6 +116,7 @@ pub async fn start_vad_pipeline(
     // Create whisper client with language from config/keyboard layout
     let language = KeyboardLayout::detect_language().or_else(|| config.language.clone());
     let (server_url, model) = config.resolve_server(language.as_deref());
+    let configured_model = model.clone();
     let continuous = (config.live_decoding == crate::config::LiveDecoding::Continuous).then(|| {
         crate::continuous::ContinuousSpec {
             server_url: server_url.to_string(),
@@ -141,6 +142,14 @@ pub async fn start_vad_pipeline(
         .health_check()
         .await
         .map_err(|e| anyhow::anyhow!("Whisper server health check failed: {}", e))?;
+
+    // The ASR model, for Compensating Scaffolding, resolved once per VAD
+    // start as the no-speech check does: the configured one, else the first
+    // the server lists (None when it does not say).
+    let asr_model = match configured_model {
+        Some(model) => Some(model),
+        None => whisper_client.server_model().await,
+    };
 
     let health_monitor = crate::health::HealthMonitor::start(&config.state_dir)?;
     let health = health_monitor.health();
@@ -185,7 +194,19 @@ pub async fn start_vad_pipeline(
     engine.set_event_sender(event_tx);
     engine.set_health(health.clone());
     engine.set_continuous(continuous);
-    engine.set_commands(config.commands.clone());
+    // Known mishearings for that model join the phrase lists here, at load
+    // time (docs/rfc/0002).
+    let scaffold = crate::cs::Scaffold::load(asr_model.as_deref());
+    tracing::info!(
+        model = asr_model.as_deref().unwrap_or("unknown"),
+        entries = scaffold.entries().count(),
+        "Compensating scaffolding loaded"
+    );
+    engine.set_commands(crate::cs::apply_commands(
+        config.commands.clone(),
+        &scaffold,
+    ));
+    crate::cs::set_active(scaffold);
     engine.set_shell_grammar(config.shell_grammar());
     engine.set_standby_marker(config.state_dir.join(crate::prompt::STANDBY_MARKER));
     engine.set_command_mode_dir(&config.state_dir);

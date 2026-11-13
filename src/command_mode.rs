@@ -1050,7 +1050,9 @@ impl CommandMode {
     /// Actions, voice anchors, and the text anchors the cache already has
     /// (all of them, or none until the rest are embedded).
     fn open(paths: Paths) -> Result<Self> {
-        let (file, actions) = load_actions(&paths.actions)?;
+        let (file, mut actions) = load_actions(&paths.actions)?;
+        // Known mishearings of the phrasings (`action:<name>`, see `crate::cs`).
+        crate::cs::apply_actions(&mut actions, &crate::cs::active());
         let embedder = Embedder::new(&file.server);
         let mut router = Router::new(actions, file.floor, file.margin, file.k);
         let load = AnchorLoad {

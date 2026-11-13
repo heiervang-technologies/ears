@@ -311,6 +311,13 @@ pub enum Commands {
         state: Option<String>,
     },
 
+    /// Compensating Scaffolding: known mishearings of command phrases for the
+    /// ASR model in use, kept in cs files (docs/rfc/0002-compensating-scaffolding.md)
+    Cs {
+        #[command(subcommand)]
+        action: CsAction,
+    },
+
     /// Select audio device with fzf (shortcut for `device select`)
     #[command(alias = "s", hide = true)]
     Select,
@@ -322,6 +329,42 @@ pub enum Commands {
     /// Show current device (shortcut for `device current`)
     #[command(alias = "c", hide = true)]
     Current,
+}
+
+/// `ears cs` subcommands. Each is dispatched in `main.rs` (`handle_cs`).
+#[derive(Subcommand, Debug)]
+pub enum CsAction {
+    /// List the entries that apply to the ASR model (file, target, meant,
+    /// heard, mode, source, risk, status), marking flagged ones. Exit 1 when
+    /// an active entry would now be rejected.
+    Check {
+        /// ASR model id to check for (default: as VAD resolves it, the
+        /// configured model or the first the server lists)
+        #[arg(long)]
+        model: Option<String>,
+        /// Also check this cs file, as if it were installed last in cs.d
+        /// (for reviewing one, e.g. from `ears cs migrate`)
+        #[arg(long, value_name = "FILE")]
+        file: Vec<std::path::PathBuf>,
+    },
+
+    /// Turn the hand-written variants in config.toml (and actions.toml) into
+    /// a reviewable cs file. Neither file is changed.
+    Migrate {
+        /// Write the cs file here instead of to stdout
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Config to read (default: the active profile's)
+        #[arg(long, value_name = "FILE")]
+        config: Option<std::path::PathBuf>,
+        /// Command-mode actions to read (default: actions.toml beside it)
+        #[arg(long, value_name = "FILE")]
+        actions: Option<std::path::PathBuf>,
+        /// `meta.model` of the file: "any", or the ASR model the variants
+        /// were collected with
+        #[arg(long, default_value = "any")]
+        model: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -342,6 +385,32 @@ pub enum DeviceAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cli_cs() {
+        let cli = Cli::try_parse_from(["ears", "cs", "check", "--model", "m", "--file", "a.toml"])
+            .unwrap();
+        match cli.command {
+            Some(Commands::Cs {
+                action: CsAction::Check { model, file },
+            }) => {
+                assert_eq!(model.as_deref(), Some("m"));
+                assert_eq!(file, vec![std::path::PathBuf::from("a.toml")]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let cli = Cli::try_parse_from(["ears", "cs", "migrate"]).unwrap();
+        match cli.command {
+            Some(Commands::Cs {
+                action: CsAction::Migrate { out, model, .. },
+            }) => {
+                assert!(out.is_none());
+                assert_eq!(model, "any");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(Cli::try_parse_from(["ears", "cs"]).is_err());
+    }
 
     #[test]
     fn test_cli_no_args() {
