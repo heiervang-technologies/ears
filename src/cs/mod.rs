@@ -27,6 +27,7 @@ pub mod check;
 pub mod context;
 pub mod migrate;
 pub mod mine;
+pub mod probe;
 pub mod risk;
 
 use serde::{Deserialize, Serialize};
@@ -479,6 +480,28 @@ pub fn apply_actions(actions: &mut [crate::command_mode::Action], scaffold: &Sca
             scaffold.variants(&format!("action:{}", action.name)),
         );
     }
+}
+
+/// The risk of `heard` as a way of saying `meant` in the list `target`:
+/// [`risk::assess`] against `others`, leaving out every phrase that is
+/// `meant` itself (normalized). Another target that answers those very
+/// words ("ears on" both wakes and, on some desks, runs `regular`) already
+/// fires whenever `meant` is said, so hearing it differently adds no new
+/// ambiguity. `ears cs build` and `ears cs check` both score through here.
+pub fn assess_entry(
+    heard: &str,
+    meant: &str,
+    target: &str,
+    others: &[risk::Phrase<'_>],
+    lexicon: &risk::Lexicon,
+) -> risk::Risk {
+    let meant = normalize(meant);
+    let others: Vec<risk::Phrase<'_>> = others
+        .iter()
+        .filter(|p| meant.is_empty() || normalize(p.text) != meant)
+        .copied()
+        .collect();
+    risk::assess(heard, target, &others, lexicon)
 }
 
 /// For `ears decide`: each active `decide:<option>` variant (normalized)

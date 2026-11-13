@@ -324,6 +324,10 @@ async fn handle_cs(config: &ears::Config, action: CsAction) -> Result<i32> {
             ears::cs::mine::run(config, &args)?;
             Ok(0)
         }
+        CsAction::Build(args) => {
+            ears::cs::probe::build(config, &args).await?;
+            Ok(0)
+        }
     }
 }
 
