@@ -17,13 +17,17 @@ use std::time::Duration;
 /// which is what tells wide band from narrow band.
 pub const SENTENCE: &str = "The quick brown fox jumps over the lazy dog, and six sheep follow.";
 
-/// Background above this is loud enough to matter (fans, hiss, a noisy room).
+/// Background above this is a loud room (fans, hiss, voices). On its own it
+/// is not a problem; it only decides whether too little signal to noise is
+/// blamed on the room ("noisy") or on the speech ("low signal to noise").
 pub const NOISY_DBFS: f32 = -45.0;
-/// Speech below this is quiet enough to hurt recognition.
+/// Speech below this, after any gain, is quiet enough to hurt recognition.
 pub const QUIET_DBFS: f32 = -40.0;
 /// Background at or below this is digital silence: a muted or dead source.
 pub const DEAD_DBFS: f32 = -100.0;
-/// Speech must stand this far above the background (dB).
+/// Speech must stand this far above the background (dB). This, not the
+/// background level, is what decides whether the background is a problem:
+/// a gain raises both alike, so it cannot repair a small difference.
 pub const MIN_SNR_DB: f32 = 15.0;
 /// Speech this close to the background was probably not heard at all.
 pub const NO_SPEECH_SNR_DB: f32 = 6.0;
@@ -39,6 +43,36 @@ pub const MAX_CLIPPED: f32 = 0.001;
 pub const NARROW_BAND_DB: f32 = -40.0;
 /// Narrow band audio has nothing above about 4 kHz.
 pub const HIGH_BAND_HZ: f32 = 4_500.0;
+
+/// A problem with the speech level relative to the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelIssue {
+    /// Speech is below [`QUIET_DBFS`] even after the gain.
+    TooQuiet,
+    /// Speech is less than [`MIN_SNR_DB`] above a background louder than
+    /// [`NOISY_DBFS`]: the room is the problem.
+    Noisy,
+    /// Speech is less than [`MIN_SNR_DB`] above a quiet background: the
+    /// speech is too far from the microphone.
+    LowSnr,
+}
+
+/// Judge a speech level against the background, shared by `ears mic-check`
+/// and the live VAD warning. Levels are raw input (dBFS); `gain` is the
+/// gain the speech reached the detector with (1.0 = none). Signal to noise
+/// does not depend on the gain, the speech level does.
+pub fn level_issue(noise_dbfs: f32, speech_dbfs: f32, gain: f32) -> Option<LevelIssue> {
+    let gained_dbfs = speech_dbfs + 20.0 * gain.max(f32::MIN_POSITIVE).log10();
+    if gained_dbfs < QUIET_DBFS {
+        Some(LevelIssue::TooQuiet)
+    } else if speech_dbfs - noise_dbfs >= MIN_SNR_DB {
+        None
+    } else if noise_dbfs > NOISY_DBFS {
+        Some(LevelIssue::Noisy)
+    } else {
+        Some(LevelIssue::LowSnr)
+    }
+}
 
 /// Measurements and verdict.
 #[derive(Debug, Clone, Serialize)]
@@ -106,7 +140,6 @@ pub fn analyze(device: &str, silence: &[f32], speech: &[f32]) -> MicReport {
 
 fn issues(r: &mut MicReport) -> Vec<Issue> {
     let mut out = Vec::new();
-    let level_reported = r.speech_dbfs < QUIET_DBFS || r.noise_dbfs > NOISY_DBFS;
     let mut add = |code, advice: &str| {
         out.push(Issue {
             code,
@@ -141,23 +174,22 @@ fn issues(r: &mut MicReport) -> Vec<Issue> {
             "Speech hits full scale and distorts: lower the input volume (pavucontrol or wpctl set-volume).",
         );
     }
-    if r.speech_dbfs < QUIET_DBFS {
-        add(
+    // `mic-check` records the raw microphone, as push to talk hears it:
+    // no gain.
+    match level_issue(r.noise_dbfs, r.speech_dbfs, 1.0) {
+        Some(LevelIssue::TooQuiet) => add(
             "too quiet",
             "Speech is quiet: move closer to the microphone or raise its input volume.",
-        );
-    }
-    if r.noise_dbfs > NOISY_DBFS {
-        add(
+        ),
+        Some(LevelIssue::Noisy) => add(
             "noisy",
-            "The background is loud: a fan, hiss or a noisy room. Lower it, or use a closer microphone.",
-        );
-    }
-    if r.snr_db < MIN_SNR_DB && !level_reported {
-        add(
+            "The background is loud next to your speech: a fan, hiss or a noisy room. Lower it, or use a closer microphone.",
+        ),
+        Some(LevelIssue::LowSnr) => add(
             "low signal to noise",
             "Speech is not far enough above the background: move closer to the microphone.",
-        );
+        ),
+        None => {}
     }
     out
 }
@@ -487,11 +519,46 @@ mod tests {
         let quiet = analyze("mic", &noise(0.0001, 1.0), &noise(0.004, 1.0));
         assert_eq!(quiet.verdict(), "too quiet");
 
-        let noisy = analyze("mic", &noise(0.02, 1.0), &noise(0.5, 1.0));
+        // Speech about 10 dB above a loud background.
+        let noisy = analyze("mic", &noise(0.02, 1.0), &noise(0.065, 1.0));
         assert!(noisy.issues.iter().any(|i| i.code == "noisy"), "{noisy:?}");
+
+        // A loud background is fine when the speech is far above it.
+        let loud_room = analyze(
+            "mic",
+            &noise(0.02, 1.0),
+            &mix(&tone(300.0, 0.3, 1.0), &noise(0.02, 1.0)),
+        );
+        assert!(loud_room.noise_dbfs > NOISY_DBFS, "{loud_room:?}");
+        assert_eq!(loud_room.issues, vec![], "{loud_room:?}");
+
+        // Quiet room, speech too close to it.
+        let far = analyze("mic", &noise(0.008, 1.0), &noise(0.03, 1.0));
+        assert_eq!(far.verdict(), "low signal to noise", "{far:?}");
 
         let clipped = analyze("mic", &noise(0.0005, 1.0), &noise(1.2, 1.0));
         assert!(clipped.issues.iter().any(|i| i.code == "clipping"));
+    }
+
+    #[test]
+    fn level_issue_is_signal_to_noise_then_loudness() {
+        use LevelIssue::*;
+        let cases = [
+            ((-43.0, -20.0, 1.0), None),
+            ((-62.0, -44.0, 8.0), None),
+            ((-62.0, -44.0, 1.0), Some(TooQuiet)),
+            ((-80.0, -60.0, 8.0), Some(TooQuiet)),
+            ((-38.0, -26.0, 1.0), Some(Noisy)),
+            ((-55.0, -43.0, 4.0), Some(LowSnr)),
+            ((f32::NEG_INFINITY, -30.0, 1.0), None),
+        ];
+        for ((noise, speech, gain), want) in cases {
+            assert_eq!(
+                level_issue(noise, speech, gain),
+                want,
+                "{noise} {speech} {gain}"
+            );
+        }
     }
 
     #[test]
@@ -518,7 +585,8 @@ mod tests {
 
     #[test]
     fn render_names_every_issue() {
-        let r = analyze("mic", &noise(0.02, 1.0), &noise(1.2, 1.0));
+        // Clipped speech, about 8 dB above a very loud background.
+        let r = analyze("mic", &noise(0.5, 1.0), &noise(1.2, 1.0));
         let text = render(&r);
         assert!(text.contains("Verdict: clipping."), "{text}");
         assert!(text.contains("Verdict: noisy."), "{text}");

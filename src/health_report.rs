@@ -491,6 +491,15 @@ mod tests {
         assert_eq!(report.warnings, ["speech too quiet"]);
         assert!(render(&report).contains("speech too quiet (noise -56 dBFS"));
 
+        for warning in ["noisy background", "low signal to noise"] {
+            let mut snap = healthy();
+            snap["mic_warning"] = json!(warning);
+            let report = judge(&snap);
+            assert_eq!(report.status, Status::Warning, "{warning}");
+            assert_eq!(report.exit_code, 3);
+            assert_eq!(report.warnings, [warning]);
+        }
+
         let mut snap = healthy();
         snap["asr"] = json!({"state": "degraded", "path": "http"});
         let report = judge(&snap);

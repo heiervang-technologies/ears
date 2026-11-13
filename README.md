@@ -239,6 +239,10 @@ Transcript    0% wrong    "The quick brown fox jumps over the lazy dog and six s
 Verdict: narrow band. The audio stops near 4 kHz: a Bluetooth headset in its call profile, ...
 ```
 
+A loud background is only reported (`noisy`) when the speech is less than
+15 dB above it. `mic-check` judges the raw microphone, without the VAD's
+auto gain, as push to talk hears it.
+
 While VAD runs, the same thresholds are applied to the live input: see
 `mic_warning` under [VAD appears unresponsive](#vad-appears-unresponsive).
 
@@ -915,10 +919,21 @@ missing audio or slow processing in `debug.log`, even if the processing task
 is blocked. These are diagnostic warnings, not automatic restarts.
 
 The snapshot also tracks the raw input level: `noise_dbfs` between
-utterances, `speech_dbfs` while speaking, and `clipped_samples`. When they
-cross the `ears mic-check` thresholds, `mic_warning` is set to `mic silent`,
-`mic clipping`, `speech too quiet` or `noisy background`, and `debug.log`
-records the change. Run `ears mic-check` for the full picture.
+utterances (a floor that rises over about a minute, so a burst of sound is
+not taken as the room), `speech_dbfs` while speaking, and `clipped_samples`.
+They are judged by the `ears mic-check` rules, and `mic_warning` is set to:
+
+| `mic_warning` | When |
+|---|---|
+| `mic silent` | digital silence and no speech heard |
+| `mic clipping` | more than 0.1% of samples at full scale |
+| `speech too quiet` | speech below -40 dBFS as the detector hears it, after `auto_gain` (up to 8x) |
+| `noisy background` | speech less than 15 dB above a background louder than -45 dBFS |
+| `low signal to noise` | speech less than 15 dB above a quieter background: too far from the microphone |
+
+A loud background alone is no warning: what matters is how far the speech
+stands above it, and a gain raises both alike. `debug.log` records each
+change. Run `ears mic-check` for the full picture.
 
 Each time capture starts, `device` is checked against PipeWire. If it is not
 there, capture uses the first of `device_fallbacks` that is, or else

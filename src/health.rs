@@ -210,7 +210,9 @@ pub struct HealthSnapshot {
     /// Speech level while speaking (dBFS, smoothed; raw input).
     pub speech_dbfs: f32,
     pub clipped_samples: u64,
-    /// Microphone quality problem, if any. `ears mic-check` explains more.
+    /// Microphone quality problem, if any: `mic silent`, `mic clipping`,
+    /// `speech too quiet`, `noisy background`, `low signal to noise` or
+    /// [`MIC_MISSING`]. `ears mic-check` explains more.
     pub mic_warning: Option<&'static str>,
     /// Transcription server reachability.
     pub asr: AsrHealth,
@@ -226,8 +228,11 @@ pub const MIC_MISSING: &str = "configured mic missing";
 /// Smoothed input levels behind [`HealthSnapshot::mic_warning`].
 #[derive(Clone, Debug, Default)]
 struct MicLevels {
-    noise_power: f32,
+    /// Background floor (dBFS).
+    noise_db: f32,
     speech_power: f32,
+    /// Speech power as the detector heard it, after the gain.
+    gained_speech_power: f32,
     noise_chunks: u32,
     speech_chunks: u32,
     /// Smoothed fraction of clipped samples.
@@ -260,36 +265,64 @@ fn mic_log_due(
 /// Capture chunks (100 ms) of each kind before their level is judged.
 const MIC_SETTLE_CHUNKS: u32 = 20;
 
+/// Weight of a louder quiet chunk in the noise floor, in dB (time constant
+/// ~50 s): five seconds 30 dB above the floor lift it by about 3 dB.
+const NOISE_RISE: f32 = 0.002;
+
 impl MicLevels {
-    fn observe(&mut self, rms: f32, clipped: f32, speaking: bool) {
-        let power = rms * rms;
+    /// One capture chunk of raw input; `gain` is the gain the detector
+    /// applies to it.
+    fn observe(&mut self, rms: f32, clipped: f32, speaking: bool, gain: f32) {
         if speaking {
+            let power = rms * rms;
             let alpha = if self.speech_chunks == 0 { 1.0 } else { 0.1 };
             self.speech_power += alpha * (power - self.speech_power);
+            self.gained_speech_power += alpha * (power * gain * gain - self.gained_speech_power);
             self.speech_chunks = self.speech_chunks.saturating_add(1);
         } else {
-            // A floor tracker: falls fast, rises slowly, so speech onsets the
-            // detector has not flagged yet barely lift it.
+            // A floor tracker, in dB so a loud burst weighs no more than its
+            // level: falls within about half a second, rises over about a
+            // minute (like the gain's own noise floor in `agc`), so speech
+            // the detector has not flagged, a reply played through the
+            // speakers or a knock is not taken as the room's noise. A
+            // faster rise let conversation lift the floor to the speech
+            // level. Leaving digital silence (unmuting) is immediate.
+            let db = crate::pcm::dbfs(rms);
             let alpha = match self.noise_chunks {
                 0 => 1.0,
-                _ if power < self.noise_power => 0.2,
-                _ => 0.02,
+                _ if db < self.noise_db => 0.2,
+                _ if self.noise_db <= crate::mic_check::DEAD_DBFS => 1.0,
+                _ => NOISE_RISE,
             };
-            self.noise_power += alpha * (power - self.noise_power);
+            self.noise_db += alpha * (db - self.noise_db);
             self.noise_chunks = self.noise_chunks.saturating_add(1);
         }
         self.clip_rate += 0.05 * (clipped - self.clip_rate);
     }
 
     fn noise_dbfs(&self) -> f32 {
-        crate::pcm::dbfs(self.noise_power.sqrt())
+        if self.noise_chunks == 0 {
+            crate::pcm::dbfs(0.0)
+        } else {
+            self.noise_db
+        }
     }
 
     fn speech_dbfs(&self) -> f32 {
         crate::pcm::dbfs(self.speech_power.sqrt())
     }
 
-    /// Same thresholds as `ears mic-check`, judged on live audio.
+    /// The gain speech reached the detector with, on average (1.0 = none).
+    fn speech_gain(&self) -> f32 {
+        if self.speech_power > 0.0 {
+            (self.gained_speech_power / self.speech_power).sqrt()
+        } else {
+            1.0
+        }
+    }
+
+    /// The `ears mic-check` rules, judged on live audio: signal to noise on
+    /// the raw levels, loudness on the speech as the detector heard it.
     fn warning(&self) -> Option<&'static str> {
         use crate::mic_check as mc;
         let noise_known = self.noise_chunks >= MIC_SETTLE_CHUNKS;
@@ -300,13 +333,20 @@ impl MicLevels {
         if self.clip_rate > mc::MAX_CLIPPED {
             return Some("mic clipping");
         }
-        if speech_known && self.speech_dbfs() < mc::QUIET_DBFS {
-            return Some("speech too quiet");
+        if !speech_known {
+            return None;
         }
-        if noise_known && self.noise_dbfs() > mc::NOISY_DBFS {
-            return Some("noisy background");
+        // Until the background is known, only loudness can be judged.
+        let noise_dbfs = if noise_known {
+            self.noise_dbfs()
+        } else {
+            f32::NEG_INFINITY
+        };
+        match mc::level_issue(noise_dbfs, self.speech_dbfs(), self.speech_gain())? {
+            mc::LevelIssue::TooQuiet => Some("speech too quiet"),
+            mc::LevelIssue::Noisy => Some("noisy background"),
+            mc::LevelIssue::LowSnr => Some("low signal to noise"),
         }
-        None
     }
 }
 
@@ -418,8 +458,12 @@ impl PipelineHealth {
         let rms = crate::pcm::rms(samples);
         let clipped = crate::pcm::clipped(samples);
         self.update(|s| {
-            s.levels
-                .observe(rms, clipped as f32 / samples.len() as f32, s.speaking);
+            s.levels.observe(
+                rms,
+                clipped as f32 / samples.len() as f32,
+                s.speaking,
+                s.gain,
+            );
             s.clipped_samples += clipped as u64;
             s.capture_last_ms = Some(monotonic_ms());
             s.captured_samples += samples.len() as u64;
@@ -851,7 +895,8 @@ mod tests {
         }
         assert_eq!(health.snapshot().mic_warning, Some("mic silent"));
 
-        // A quiet room and normal speech.
+        // A quiet room and normal speech. Leaving digital silence resets
+        // the floor at once.
         for _ in 0..200 {
             health.captured(&chunk(0.001));
         }
@@ -870,6 +915,16 @@ mod tests {
         }
         assert_eq!(health.snapshot().mic_warning, Some("speech too quiet"));
 
+        // A reply played through the speakers between utterances is not
+        // taken as the room's noise.
+        health.frame(0.1, 0.5, 0, false, None);
+        for _ in 0..50 {
+            health.captured(&chunk(0.05));
+        }
+        let snap = health.snapshot();
+        assert!(snap.noise_dbfs < -50.0, "{snap:?}");
+        health.frame(0.9, 0.5, 5, true, None);
+
         // Clipping wins, and is counted.
         for _ in 0..60 {
             health.captured(&chunk(1.0));
@@ -880,6 +935,72 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&snap).unwrap();
         assert_eq!(value["mic_warning"], "mic clipping");
         assert!(value.get("levels").is_none());
+    }
+
+    /// Settled levels: `noise` and `speech` raw dBFS, speech heard at `gain`.
+    fn levels(noise: f32, speech: f32, gain: f32) -> MicLevels {
+        let rms = |dbfs: f32| 10f32.powf(dbfs / 20.0);
+        let mut l = MicLevels::default();
+        for _ in 0..MIC_SETTLE_CHUNKS {
+            l.observe(rms(noise), 0.0, false, gain);
+            l.observe(rms(speech), 0.0, true, gain);
+        }
+        l
+    }
+
+    #[test]
+    fn mic_warnings_judge_signal_to_noise_not_the_floor() {
+        let cases: &[(f32, f32, f32, Option<&str>, &str)] = &[
+            // Live desk, 2026-11-13: a loud floor, but speech 23 dB above it.
+            (-43.0, -20.0, 1.0, None, "loud floor, clear speech"),
+            (-43.0, -20.0, 3.75, None, "same, with gain"),
+            // 2026-11-11: quiet speech in a quiet room, gain at its 8x
+            // ceiling. 18 dB apart, and -26 dBFS at the detector.
+            (-62.0, -44.0, 8.0, None, "quiet speech lifted by the gain"),
+            // The same speech without auto gain reaches the detector at -44.
+            (-62.0, -44.0, 1.0, Some("speech too quiet"), "no gain"),
+            // Pinned at 8x (+18 dB) and still under -40 at the detector.
+            (
+                -80.0,
+                -60.0,
+                8.0,
+                Some("speech too quiet"),
+                "beyond the gain",
+            ),
+            (
+                -38.0,
+                -26.0,
+                1.0,
+                Some("noisy background"),
+                "loud room, 12 dB",
+            ),
+            (
+                -30.0,
+                -20.0,
+                1.0,
+                Some("noisy background"),
+                "speech in a din",
+            ),
+            (
+                -55.0,
+                -43.0,
+                4.0,
+                Some("low signal to noise"),
+                "quiet room, 12 dB",
+            ),
+            (-60.0, -45.0, 8.0, None, "exactly 15 dB"),
+            (-90.0, -24.0, 1.0, None, "studio"),
+        ];
+        for &(noise, speech, gain, want, what) in cases {
+            let l = levels(noise, speech, gain);
+            assert!((l.noise_dbfs() - noise).abs() < 0.01, "{what}");
+            assert!((l.speech_gain() - gain).abs() < 0.01, "{what}");
+            assert_eq!(
+                l.warning(),
+                want,
+                "{what}: noise {noise} speech {speech} gain {gain}"
+            );
+        }
     }
 
     #[test]
