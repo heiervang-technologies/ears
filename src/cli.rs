@@ -384,6 +384,11 @@ pub enum CsAction {
         #[arg(long)]
         model: Option<String>,
     },
+
+    /// Speak each canonical command phrase through TTS (several voices,
+    /// rates and noise levels) into the configured ASR and write what it
+    /// hears to cs/<model>/commands.toml
+    Build(ears::cs::probe::BuildArgs),
 }
 
 fn parse_since(text: &str) -> Result<std::time::Duration, String> {

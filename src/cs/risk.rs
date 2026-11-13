@@ -39,6 +39,12 @@
 //!   and `.18*mean(word_f)/sqrt(word_count)` for a multiword variant. An unknown
 //!   word has `f=0`. Common component words alone do not imply a common phrase:
 //!   this deliberately keeps `years off` below the flag threshold.
+//!   Normalization splits contractions ("here's" -> `here s`), so a
+//!   contraction fragment (`s t re ll ve d m`) is rejoined with the word
+//!   before it into one unit first: a unit that is a known bigram (`it s`,
+//!   `don t`) counts with the bigram's frequency, any other with its head
+//!   word's (`here s` as `here`). Words, counts and the mean above are over
+//!   units, so a stray `s` no longer dilutes `here s that`.
 //! * `S` is .64/.38/.18/.05/0 for <=2/3/4/5/>5 phonemes, plus .06 for at
 //!   most one estimated syllable, capped at .75. Syllables are vowel runs in
 //!   the key (minimum one for nonempty text). Thus very short novel triggers
@@ -108,26 +114,56 @@ impl Lexicon {
         Lexicon { words, bigrams }
     }
 
+    /// Whether `word` (normalized, one word) is in the lexicon.
+    pub fn contains(&self, word: &str) -> bool {
+        self.words.contains_key(word)
+    }
+
     fn frequency(&self, word: &str) -> f32 {
         self.words.get(word).map_or(0.0, |&r| rank_frequency(r))
     }
 
     fn lexical_risk(&self, text: &str) -> f32 {
-        let mut words = text.split_whitespace();
-        let first = words.next().unwrap_or("");
-        if words.clone().next().is_none() {
-            return 0.88 * self.frequency(first);
-        }
-        let (sum, count) = words.fold((self.frequency(first), 1usize), |(sum, n), word| {
-            (sum + self.frequency(word), n + 1)
-        });
-        let components = 0.18 * sum / (count as f32 * (count as f32).sqrt());
+        let units = contraction_units(text);
         let whole = self
             .bigrams
             .get(text)
             .map_or(0.0, |&r| 0.86 * rank_frequency(r));
+        if let [(_, head)] = units.as_slice() {
+            return (0.88 * self.frequency(head)).max(whole);
+        }
+        let count = units.len() as f32;
+        let sum: f32 = units
+            .iter()
+            .map(|(unit, head)| match self.bigrams.get(unit.as_str()) {
+                Some(&r) if unit != head => rank_frequency(r),
+                _ => self.frequency(head),
+            })
+            .sum();
+        let components = 0.18 * sum / (count * count.sqrt());
         whole.max(components)
     }
+}
+
+/// What `commands::normalize` leaves of a contraction's tail: "here's" is
+/// `here s`, "don't" `don t`, "we'll" `we ll`.
+const CONTRACTION_FRAGMENTS: &[&str] = &["s", "t", "re", "ll", "ve", "d", "m"];
+
+/// Words with contraction fragments rejoined to the word before them, each
+/// as (unit, head word): `here s that` is [(`here s`, `here`), (`that`,
+/// `that`)]. A fragment with no word before it stays a unit of its own.
+fn contraction_units(text: &str) -> Vec<(String, &str)> {
+    let mut units: Vec<(String, &str)> = Vec::new();
+    for word in text.split_whitespace() {
+        match units.last_mut() {
+            Some((unit, _)) if CONTRACTION_FRAGMENTS.contains(&word) => {
+                unit.push(' ');
+                unit.push_str(word);
+            }
+            _ => units.push((word.to_string(), word)),
+        }
+    }
+    units
 }
 
 fn rank_frequency(rank: usize) -> f32 {
@@ -792,6 +828,53 @@ they re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contraction_fragments_rejoin_their_word() {
+        assert_eq!(
+            contraction_units("here s that"),
+            vec![("here s".to_string(), "here"), ("that".to_string(), "that")]
+        );
+        assert_eq!(
+            contraction_units("don t"),
+            vec![("don t".to_string(), "don")]
+        );
+        assert_eq!(
+            contraction_units("s on"),
+            vec![("s".to_string(), "s"), ("on".to_string(), "on")]
+        );
+        let lexicon = Lexicon::builtin();
+        // What the stray fragment used to leave: every word counted alone.
+        let diluted = |text: &str| {
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let n = words.len() as f32;
+            0.18 * words.iter().map(|w| lexicon.frequency(w)).sum::<f32>() / (n * n.sqrt())
+        };
+        for text in ["here s that", "it s on"] {
+            let now = lexicon.lexical_risk(text);
+            assert!(
+                now > diluted(text) * 1.3,
+                "{text}: {now} vs {}",
+                diluted(text)
+            );
+        }
+        // As common as the same words without the contraction.
+        let here = lexicon.lexical_risk("here s that");
+        assert!(
+            (here - lexicon.lexical_risk("here that")).abs() < 1e-6,
+            "{here}"
+        );
+        assert!(lexicon.lexical_risk("don t") > 0.5);
+        assert_eq!(
+            lexicon.lexical_risk("don t"),
+            0.86 * rank_frequency(lexicon.bigrams["don t"])
+        );
+        // No fragment: unchanged.
+        assert_eq!(lexicon.lexical_risk("years off"), {
+            let f = lexicon.frequency("years") + lexicon.frequency("off");
+            (0.18 * f / (2.0 * 2f32.sqrt())).max(0.0)
+        });
+    }
 
     // Snapshot of .lists-fixture.toml [commands], supplied 2026-11-13.
     // Keep this self-contained: the private fixture is deliberately not committed.
