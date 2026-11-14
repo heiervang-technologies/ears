@@ -701,6 +701,20 @@ local function listen()
   end)
 end
 
+-- Any claim connection that is not vad.claim is a leak: ears keeps
+-- publishing to this Neovim instead of typing, even after focus left
+-- (2026-11-19: an unfocused Neovim held the claim with vad.claim nil).
+-- Closing it releases the claim.
+local function close_stray_claims()
+  local cmd_sock = socket_path("EARS_CMD_SOCKET", "ears-cmd.sock")
+  vim.uv.walk(function(h)
+    if h ~= vad.claim and h ~= vad.events and h:get_type() == "pipe" and not h:is_closing() then
+      local ok, peer = pcall(h.getpeername, h)
+      if ok and peer == cmd_sock then h:close() end
+    end
+  end)
+end
+
 -- Hold the claim exactly while this Neovim is focused on a code buffer.
 resolve = function()
   local want = vad.focused and vad.events ~= nil and not SKIP_BUFTYPES[vim.bo.buftype]
@@ -723,6 +737,7 @@ resolve = function()
     vim.cmd("redrawstatus")
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
   end
+  if not want then close_stray_claims() end
 end
 
 local group = vim.api.nvim_create_augroup("ears_code", { clear = true })
