@@ -424,6 +424,7 @@ pub(super) async fn run_ghost_preview(
         .with_api_key(config.api_key.clone())
         .with_model(model.clone())
         .with_silence_filter(config.filter_silence_artifacts)
+        .with_language_id(config.language_id)
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
     let mut ghost = PreviewGhost {

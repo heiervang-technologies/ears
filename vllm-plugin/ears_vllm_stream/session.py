@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -38,6 +39,26 @@ from .protocol import (
 )
 
 logger = logging.getLogger("ears_vllm_stream")
+
+# For a fine-tune that never names the language (it answers `language None`
+# to everything, speech included): set EARS_STREAM_NO_LID=1 on that server
+# only. `language None` then pins as the header instead of meaning silence,
+# and a transcript of nothing but CJK filler ("嗯。", which such a model
+# writes on quiet audio) is dropped instead.
+NO_LID = os.environ.get("EARS_STREAM_NO_LID") == "1"
+NO_LID_HEADER = f"language None{ASR_TAG}"
+FILLER_CHARS = frozenset("啊嗯呃哦噢哎哇呀吧呢")
+
+
+def only_filler(text: str) -> bool:
+    """Nothing but CJK filler characters, punctuation and spaces."""
+    has_filler = False
+    for c in text:
+        if c in FILLER_CHARS:
+            has_filler = True
+        elif c.isalnum():
+            return False
+    return has_filler
 
 
 class Decoder(Protocol):
@@ -246,7 +267,9 @@ class StreamSession:
             grammar=grammar,
             min_step=max(1, int(min_step_ms * SAMPLE_RATE / 1000)),
             max_samples=self._max_samples,
-            header=header_for(name) if name else None,
+            # A no-LID model only knows `language None`: a client's language
+            # (ears sends the keyboard layout's) is not forced on it.
+            header=NO_LID_HEADER if NO_LID else (header_for(name) if name else None),
         )
 
     def _end(self, msg: dict) -> None:
@@ -412,7 +435,7 @@ class StreamSession:
             lang, tag, rest = continuation.partition(ASR_TAG)
             if tag:
                 header = f"{lang.strip()}{ASR_TAG}"
-                silent = header_language(header) in (None, "None")
+                silent = not NO_LID and header_language(header) in (None, "None")
                 if utt.header is None and silent:
                     utt.candidate = None
                 elif utt.header is None and n >= MIN_PIN_SAMPLES and utt.candidate == header:
@@ -428,6 +451,8 @@ class StreamSession:
             else:
                 hypothesis = continuation
         hypothesis = hypothesis.lstrip()
+        if NO_LID and only_filler(hypothesis):
+            hypothesis = ""
         if not final and settles:
             settled = settled_prefix(hypothesis, utt.rollback_words)
             if len(settled) > len(utt.stable) and settled.startswith(utt.stable):

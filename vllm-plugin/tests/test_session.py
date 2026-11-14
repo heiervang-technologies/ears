@@ -562,3 +562,41 @@ def test_pinned_language_is_not_forced_onto_silence():
         texts = [p["text"] for p in h.of("partial")]
         assert texts == ["Hello there friend", "Hello there my friend."]
     run(go())
+
+
+NO_LID_HEADER = "language None<asr_text>"
+
+
+def test_no_lid_pins_language_none_and_drops_filler(monkeypatch):
+    """EARS_STREAM_NO_LID: a fine-tune that answers `language None` to all
+    speech still streams text, and its "嗯。" on quiet audio stays hidden."""
+    import ears_vllm_stream.session as session_mod
+    monkeypatch.setattr(session_mod, "NO_LID", True)
+
+    async def go():
+        d = FakeDecoder(
+            "language None<asr_text>嗯。",
+            "language None<asr_text>Hello there friend",
+            " my friend.",
+        )
+        h = Harness(d)
+        # The keyboard layout's language is not forced on a no-LID model.
+        await h.text(type="start", utterance=1, language="en", rollback_words=1)
+        for _ in range(3):
+            await h.audio(0.3)
+        assert [c["prefix"] for c in d.calls] == ["", "", NO_LID_HEADER + "Hello there"]
+        texts = [p["text"] for p in h.of("partial")]
+        assert "嗯。" not in texts
+        assert texts[-2:] == ["Hello there friend", "Hello there my friend."]
+        assert h.of("partial")[-1]["language"] == "None"
+    run(go())
+
+
+def test_without_no_lid_language_none_stays_silence():
+    async def go():
+        d = FakeDecoder("language None<asr_text>Hello")
+        h = Harness(d)
+        await h.text(type="start", utterance=1)
+        await h.audio(0.3)
+        assert all(p["text"] == "" for p in h.of("partial"))
+    run(go())

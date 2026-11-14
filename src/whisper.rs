@@ -95,6 +95,10 @@ pub struct WhisperClient {
     /// Prompt for context biasing (None = no prompt)
     prompt: Option<String>,
     filter_silence_artifacts: bool,
+    /// The model names the language it hears (stock Qwen3-ASR). `false` for
+    /// a fine-tune that answers `language None` to all audio: the
+    /// no-speech check then judges by the text instead.
+    language_id: bool,
     /// Model for the no-speech check: resolved once from the config or the
     /// server's model list; `None` inside when the server cannot do it.
     check_model: Arc<tokio::sync::OnceCell<Option<String>>>,
@@ -134,6 +138,7 @@ impl WhisperClient {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            language_id: true,
             check_model: Arc::new(tokio::sync::OnceCell::new()),
             max_retries: 3,
             initial_backoff_ms: 100,
@@ -146,6 +151,12 @@ impl WhisperClient {
     /// Disable to retain legitimate utterances such as "Thank you".
     pub fn with_silence_filter(mut self, enabled: bool) -> Self {
         self.filter_silence_artifacts = enabled;
+        self
+    }
+
+    /// Whether the model names the language (see the `language_id` field).
+    pub fn with_language_id(mut self, enabled: bool) -> Self {
+        self.language_id = enabled;
         self
     }
 
@@ -222,6 +233,7 @@ impl WhisperClient {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            language_id: true,
             check_model: Arc::new(tokio::sync::OnceCell::new()),
             max_retries,
             initial_backoff_ms,
@@ -544,7 +556,12 @@ impl WhisperClient {
         }
         let completion: ChatCompletionResponse = response.json().await.ok()?;
         let raw = completion.choices.into_iter().next()?.message.content?;
-        let (header, _) = raw.split_once("<asr_text>")?;
+        let (header, body) = raw.split_once("<asr_text>")?;
+        if !self.language_id {
+            // Every header is `language None`: speech is any text that the
+            // silence filter keeps ("嗯。" on a breath is not).
+            return Some(!self.filter_silence_artifacts(body).trim().is_empty());
+        }
         Some(header.trim() != "language None")
     }
 
@@ -1125,6 +1142,23 @@ mod tests {
         let server = no_speech_server("Okay.", "language None<asr_text>").await;
         let client = WhisperClient::new(server.uri()).with_language(Some("en".into()));
         let wav = wav_file();
+        assert!(matches!(
+            client.transcribe(wav.path()).await,
+            Err(WhisperError::EmptyTranscription)
+        ));
+    }
+
+    #[tokio::test]
+    async fn no_language_id_model_judges_speech_by_text() {
+        // A fine-tune answering `language None` to everything: a short real
+        // word stays, its "嗯。" on a breath does not.
+        let server = no_speech_server("Stop.", "language None<asr_text>Stop.").await;
+        let client = WhisperClient::new(server.uri()).with_language_id(false);
+        let wav = wav_file();
+        assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Stop.");
+
+        let server = no_speech_server("Okay.", "language None<asr_text>嗯。").await;
+        let client = WhisperClient::new(server.uri()).with_language_id(false);
         assert!(matches!(
             client.transcribe(wav.path()).await,
             Err(WhisperError::EmptyTranscription)

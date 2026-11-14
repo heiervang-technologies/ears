@@ -134,6 +134,7 @@ pub async fn start_vad_pipeline(
             .with_api_key(config.api_key.clone())
             .with_model(model)
             .with_silence_filter(config.filter_silence_artifacts)
+            .with_language_id(config.language_id)
             .with_speech_check_overlap_ms(config.speech_check_overlap_ms)
             .with_prompt(config.prompt.clone()),
     );

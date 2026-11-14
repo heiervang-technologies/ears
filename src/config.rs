@@ -22,6 +22,10 @@ fn default_filter_silence_artifacts() -> bool {
     true
 }
 
+fn default_language_id() -> bool {
+    true
+}
+
 fn default_speech_check_overlap_ms() -> u64 {
     3000
 }
@@ -277,6 +281,12 @@ pub struct Config {
     /// Suppress known whole-transcript silence hallucinations in HTTP transcription.
     #[serde(default = "default_filter_silence_artifacts")]
     pub filter_silence_artifacts: bool,
+    /// The ASR model names the language it hears (stock Qwen3-ASR does).
+    /// Set false for a fine-tune that answers `language None` to all audio;
+    /// the no-speech check then goes by the text. Pair with
+    /// EARS_STREAM_NO_LID=1 on that model's vLLM stream plugin.
+    #[serde(default = "default_language_id")]
+    pub language_id: bool,
     /// Segments up to this long (ms) send the no-speech check (the second
     /// request that drops "Okay." heard in a click) together with the
     /// transcription instead of after it: a short utterance then waits for
@@ -523,6 +533,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            language_id: true,
             speech_check_overlap_ms: default_speech_check_overlap_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
@@ -687,6 +698,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            language_id: true,
             speech_check_overlap_ms: default_speech_check_overlap_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
