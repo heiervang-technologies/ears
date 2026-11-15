@@ -489,6 +489,8 @@ impl StreamingEngine {
             if segment.is_none() {
                 self.ghost_maybe_start_partial();
             }
+        } else if self.ghost.is_some() && self.deciding() {
+            self.decide_listen(segment.is_some());
         }
         self.aim_early_end();
 
@@ -512,11 +514,17 @@ impl StreamingEngine {
     /// A finished sentence ends after `finished_silence_ms`, or after
     /// `early_finish_ms` once it has settled: the stream heard [`SETTLE_MS`]
     /// of the silence and did not change it.
+    ///
+    /// Command mode and decisions never wait `max_silence_duration_ms`:
+    /// with no reading (command mode is not streamed) an utterance there
+    /// ends after `command_silence_ms`, or `finished_silence_ms` while a
+    /// decision leaves room for an answer of your own ([`Self::mode_wait`]).
     fn aim_early_end(&mut self) {
         use crate::endpoint::Ending;
         let silence = self.vad_detector.silence_ms();
         let utterance = self.ghost.as_ref().map(|g| g.utterance);
         let chanting = self.chanting();
+        let mode_wait = self.mode_wait(chanting);
         let config = self.vad_detector.config();
         let mut why = "no finished reading";
         // A reading older than the pause stopped changing before the speech
@@ -572,6 +580,13 @@ impl StreamingEngine {
             let ms = if ms > 0 { ms.max(floor) } else { ms };
             (ms > 0 && ms < max).then_some((ending, ms, rule))
         });
+        // The mode's own wait, when there is no reading or it is sooner.
+        let mode_wait = mode_wait.filter(|&(_, ms, _)| ms > 0 && ms < max);
+        let early = match (early, mode_wait) {
+            (Some(e), Some(m)) if m.1 < e.1 => Some(m),
+            (None, m) => m,
+            (e, _) => e,
+        };
         if early != self.early_end {
             debug!("Early end: {:?}", early);
             self.early_end = early;
@@ -579,6 +594,91 @@ impl StreamingEngine {
         }
         self.no_early = why;
         self.track_pause(silence, reading.map(|(ending, ..)| ending));
+    }
+
+    /// The wait of a mode that never waits `max_silence_duration_ms`:
+    /// command mode (`command_silence_ms`; its actions are short and it is
+    /// not streamed, so there is no reading) and an open decision
+    /// (`command_silence_ms` for its short option answers, or
+    /// `finished_silence_ms` when it leaves room for an answer of your own,
+    /// as dictation waits for an unread sentence end). Never while
+    /// chanting. With the rule for the log.
+    fn mode_wait(
+        &mut self,
+        chanting: bool,
+    ) -> Option<(crate::endpoint::Ending, u64, &'static str)> {
+        use crate::endpoint::Ending;
+        if chanting {
+            return None;
+        }
+        let config = self.vad_detector.config().clone();
+        if self.deciding() {
+            let other = (self.decisions.as_ref())
+                .and_then(|d| d.current())
+                .is_some_and(|d| d.other);
+            return Some(if other {
+                (
+                    Ending::Finished,
+                    config.finished_silence_ms,
+                    "no reading, decision with an answer of your own",
+                )
+            } else {
+                (
+                    Ending::Command,
+                    config.command_silence_ms,
+                    "no reading, decision",
+                )
+            });
+        }
+        self.mode.is_command().then_some((
+            Ending::Command,
+            config.command_silence_ms,
+            "no reading, command mode",
+        ))
+    }
+
+    /// While a decision is open: feed the utterance to the ears stream and
+    /// read how its live transcript ends, as dictation does, so an answer
+    /// ends at a short pause. Nothing is drawn or typed. A whole option
+    /// (or its number, or cancel) reads as [`crate::endpoint::Ending::Exact`],
+    /// or as a command where an answer of your own may still go on ("yes,
+    /// but later"); other text by the dictation rule (a finished sentence).
+    /// `ended`: the segment just ended; nothing more to feed.
+    fn decide_listen(&mut self, ended: bool) {
+        use crate::endpoint::Ending;
+        let Some(decision) = (self.decisions.as_ref()).and_then(|d| d.current()).cloned() else {
+            return;
+        };
+        self.ghost_stream_events();
+        let heard = self.vad_detector.silence_ms();
+        let speaking = self.vad_detector.is_speaking();
+        if let Some(ghost) = self.ghost.as_mut() {
+            while let Ok(partial) = ghost.partial_rx.try_recv() {
+                if !partial.streamed {
+                    ghost.partial_in_flight = false;
+                }
+                let current = partial.streamed && partial.utterance == ghost.utterance;
+                let Ok(raw) = partial.result else {
+                    continue;
+                };
+                if !current || !speaking {
+                    continue;
+                }
+                let ending = if decision.is_whole(&raw) {
+                    Some(if decision.other {
+                        Ending::Command
+                    } else {
+                        Ending::Exact
+                    })
+                } else {
+                    crate::endpoint::ending(&raw, &raw, None)
+                };
+                self.ending = ending.map(|e| (ghost.utterance, e, Instant::now(), heard));
+            }
+        }
+        if !ended {
+            self.ghost_stream_feed();
+        }
     }
 
     /// The stream's decode step, in milliseconds.
@@ -676,10 +776,14 @@ impl StreamingEngine {
             let waited = match self.early_end.take() {
                 Some((ending, ms, rule)) => {
                     let sep = if rule.is_empty() { "" } else { ", " };
-                    info!(
-                        "Utterance ended after {} ms of silence ({:?}{}{})",
-                        ms, ending, sep, rule
-                    );
+                    // A kept short word never waited (the mode's wait is
+                    // set all along in command mode and decisions).
+                    if !segment.verify {
+                        info!(
+                            "Utterance ended after {} ms of silence ({:?}{}{})",
+                            ms, ending, sep, rule
+                        );
+                    }
                     ms
                 }
                 None => {
@@ -880,8 +984,21 @@ impl StreamingEngine {
         let segment_ms = segment.samples.len() as u64 * 1000 / u64::from(crate::pcm::SAMPLE_RATE);
         let speech_end_ms = segment_ms.saturating_sub(waited);
         let mut final_by = "http";
+        // An option answer to a decision is a word or two: its final would
+        // be short and transcribed in full anyway (the no-speech check), so
+        // do not wait for it.
+        let short_answer = decision_audio.is_some()
+            && streamed_id.is_some_and(|id| {
+                (self.ghost.as_ref())
+                    .and_then(|g| g.stream_tail.as_ref())
+                    .is_some_and(|t| {
+                        t.id == id
+                            && t.text.split_whitespace().count()
+                                <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS
+                    })
+            });
         let live_final = match streamed_id {
-            Some(id) if !self.final_correction && !verify => {
+            Some(id) if !self.final_correction && !verify && !short_answer => {
                 match self.final_from_partial(id, speech_end_ms, waited) {
                     Some((text, how)) => {
                         info!(
