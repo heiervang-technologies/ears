@@ -162,6 +162,14 @@ pub struct StreamingStats {
 /// end the utterance early: the closing word is decoded while its sound is
 /// still fading above the end threshold.
 const PARTIAL_LEAD_MS: u64 = 250;
+/// How much of the silence the stream must hear after a finished-sounding
+/// partial, without changing it, before `early_finish_ms` may end the
+/// utterance: it decodes every 150 ms of new audio and a decode takes about
+/// 40-60 ms, so a change (a last word still being decoded, a "the" or "uh"
+/// replacing the full stop) would have arrived by then.
+const SETTLE_MS: u64 = 250;
+/// Pauses shorter than this inside an utterance are not logged.
+const PAUSE_LOG_MS: u64 = 150;
 /// Between committing an utterance's text and pressing the key its closing
 /// command asks for.
 const TAIL_KEY_DELAY: std::time::Duration = std::time::Duration::from_millis(40);
@@ -292,10 +300,19 @@ pub struct StreamingEngine {
     /// The per-tick HTTP decoder still works (false: repeat instead).
     continuous_http: bool,
     /// How the live transcript of the utterance in progress ends: ghost
-    /// utterance, ending, and when that partial arrived ([`crate::endpoint`]).
-    ending: Option<(u64, crate::endpoint::Ending, Instant)>,
-    /// The early end currently asked of VAD.
-    early_end: Option<(crate::endpoint::Ending, u64)>,
+    /// utterance, ending, when that partial arrived, and how much silence
+    /// VAD had counted then ([`crate::endpoint`]).
+    ending: Option<(u64, crate::endpoint::Ending, Instant, u64)>,
+    /// The early end currently asked of VAD: ending, silence (ms), and
+    /// whether it is the settled finish (`early_finish_ms`).
+    early_end: Option<(crate::endpoint::Ending, u64, bool)>,
+    /// Why no early end is asked of VAD right now, for the log line of an
+    /// utterance that waits `max_silence_duration_ms`.
+    no_early: &'static str,
+    /// The pause in progress while the transcript read as an ending: that
+    /// ending, the silence (ms) when it first did, and the silence so far.
+    /// Logged when speech goes on, as the data for choosing the waits.
+    pause: Option<(crate::endpoint::Ending, u64, u64)>,
     /// The whole commands of the mode they were built for
     /// ([`crate::endpoint::Ending::Exact`]); rebuilt when the mode or the
     /// commands change.
@@ -390,6 +407,8 @@ impl StreamingEngine {
             ended: None,
             wait_for_embedding: false,
             early_end: None,
+            no_early: "no finished reading",
+            pause: None,
             keep_audio_dir: None,
             claimed: false,
             wake: Box::new(crate::wake::NoWake),
@@ -471,32 +490,88 @@ impl StreamingEngine {
     /// command said again and again, and ending its breath at the first
     /// pause would make each repeat a breath of its own (heard whole and
     /// missed) instead of filling the meters mid-chant ([`crate::chant`]).
+    ///
+    /// A finished sentence ends after `finished_silence_ms`, or after
+    /// `early_finish_ms` once it has settled: the stream heard [`SETTLE_MS`]
+    /// of the silence and did not change it.
     fn aim_early_end(&mut self) {
         use crate::endpoint::Ending;
         let silence = self.vad_detector.silence_ms();
         let utterance = self.ghost.as_ref().map(|g| g.utterance);
         let chanting = self.chanting();
         let config = self.vad_detector.config();
-        let early = match self.ending {
-            Some((u, ending, at))
-                if silence > 0
-                    && !chanting
-                    && Some(u) == utterance
-                    && (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS =>
-            {
-                let ms = match ending {
-                    Ending::Exact if config.exact_silence_ms > 0 => config.exact_silence_ms,
-                    Ending::Exact | Ending::Command => config.command_silence_ms,
-                    Ending::Finished => config.finished_silence_ms,
-                };
-                (ms > 0 && ms < config.max_silence_duration_ms).then_some((ending, ms))
+        let mut why = "no finished reading";
+        // How the transcript ends now, whatever the configured waits.
+        let reading = match self.ending {
+            _ if chanting => {
+                why = "chanting";
+                None
+            }
+            Some((u, ending, at, heard)) if silence > 0 && Some(u) == utterance => {
+                if (at.elapsed().as_millis() as u64) < silence + PARTIAL_LEAD_MS {
+                    Some((ending, heard))
+                } else {
+                    why = "reading older than the pause";
+                    None
+                }
             }
             _ => None,
         };
+        let max = config.max_silence_duration_ms;
+        let early = reading.and_then(|(ending, heard)| {
+            let (ms, settled) = match ending {
+                Ending::Exact if config.exact_silence_ms > 0 => (config.exact_silence_ms, false),
+                Ending::Exact | Ending::Command => (config.command_silence_ms, false),
+                Ending::Finished => {
+                    let finished = match config.finished_silence_ms {
+                        0 => max,
+                        ms => ms,
+                    };
+                    let settled = config.early_finish_ms.max(heard + SETTLE_MS);
+                    if config.early_finish_ms > 0 && settled < finished {
+                        (settled, true)
+                    } else {
+                        (config.finished_silence_ms, false)
+                    }
+                }
+            };
+            if ms == 0 || ms >= max {
+                why = "early end off";
+            }
+            (ms > 0 && ms < max).then_some((ending, ms, settled))
+        });
         if early != self.early_end {
             debug!("Early end: {:?}", early);
             self.early_end = early;
-            self.vad_detector.end_early(early.map(|(_, ms)| ms));
+            self.vad_detector.end_early(early.map(|(_, ms, _)| ms));
+        }
+        self.no_early = why;
+        self.track_pause(silence, reading.map(|(ending, _)| ending));
+    }
+
+    /// Follow a pause inside the utterance; when speech goes on after one
+    /// that read as an ending, log it: every such pause at least as long as
+    /// a wait is an utterance that wait would have cut in two.
+    fn track_pause(&mut self, silence: u64, reading: Option<crate::endpoint::Ending>) {
+        if silence == 0 {
+            if let Some((ending, armed_at, longest)) = self.pause.take() {
+                if self.vad_detector.is_speaking() && longest >= PAUSE_LOG_MS {
+                    info!(
+                        "Pause of {} ms reading {:?} from {} ms; speech went on",
+                        longest, ending, armed_at
+                    );
+                }
+            }
+            return;
+        }
+        match (self.pause.as_mut(), reading) {
+            (Some(pause), Some(ending)) => {
+                pause.0 = ending;
+                pause.2 = silence;
+            }
+            (Some(pause), None) => pause.2 = silence,
+            (None, Some(ending)) => self.pause = Some((ending, silence, silence)),
+            (None, None) => {}
         }
     }
 
@@ -510,12 +585,28 @@ impl StreamingEngine {
     fn handle_vad_outcome(&mut self, outcome: Option<SpeechSegment>) -> Option<SpeechSegment> {
         if let Some(segment) = outcome {
             let waited = match self.early_end.take() {
-                Some((ending, ms)) => {
-                    info!("Utterance ended after {} ms of silence ({:?})", ms, ending);
+                Some((ending, ms, settled)) => {
+                    let rule = if settled { ", settled" } else { "" };
+                    info!(
+                        "Utterance ended after {} ms of silence ({:?}{})",
+                        ms, ending, rule
+                    );
                     ms
                 }
-                None => self.vad_detector.config().max_silence_duration_ms,
+                None => {
+                    let ms = self.vad_detector.config().max_silence_duration_ms;
+                    // A short word kept from a rejected candidate never
+                    // waited for silence.
+                    if !segment.verify {
+                        info!(
+                            "Utterance ended after {} ms of silence (no early end: {})",
+                            ms, self.no_early
+                        );
+                    }
+                    ms
+                }
             };
+            self.pause = None;
             self.ended = Some((Instant::now(), waited));
             // Complete speech segment detected. A short word kept from a
             // rejected candidate was never announced as started.

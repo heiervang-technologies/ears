@@ -123,6 +123,10 @@ pub struct VadConfig {
     /// exactly a whole command of the mode ([`crate::endpoint::Ending::Exact`]).
     /// 0: as `command_silence_ms`.
     pub exact_silence_ms: u64,
+    /// End the segment after this much silence when the live transcript
+    /// sounds finished and the stream has heard some of the silence without
+    /// changing it. 0: off; only shorter than `finished_silence_ms` counts.
+    pub early_finish_ms: u64,
 }
 
 impl VadConfig {
@@ -140,6 +144,7 @@ impl VadConfig {
             command_silence_ms: settings.command_silence_ms,
             finished_silence_ms: settings.finished_silence_ms,
             exact_silence_ms: settings.exact_silence_ms,
+            early_finish_ms: settings.early_finish_ms,
         }
     }
 
@@ -176,6 +181,7 @@ impl Default for VadConfig {
             command_silence_ms: 0,
             finished_silence_ms: 0,
             exact_silence_ms: 0,
+            early_finish_ms: 0,
         }
     }
 }
