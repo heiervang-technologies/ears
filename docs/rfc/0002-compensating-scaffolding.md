@@ -48,7 +48,7 @@ status = "active"              # active | flagged | rejected
 
 **Targets** name the list an entry extends: `wake`, `sleep`, `standby`,
 `enter`, `new_line`, `undo`, `back`, `backtrack`, `sign_off`, `literal`,
-`steer`, any other `[commands]` list key, `run:<name>` for run commands,
+`steer`, any other `[commands]` list key, `run:<name>` for run commands, `keys` for a `[commands.keys]` phrase (`meant` names it),
 `action:<name>` for command-mode actions (actions.toml), and
 `decide:<option>` for `ears decide` options.
 

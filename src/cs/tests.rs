@@ -294,6 +294,40 @@ fn command_lists_take_their_variants() {
 }
 
 #[test]
+fn key_phrases_take_their_variants() {
+    let key = |target: &str, meant: &str, heard: &str| {
+        format!("[[entry]]\nmeant = \"{meant}\"\ntarget = \"{target}\"\nheard = \"{heard}\"\n")
+    };
+    let text = [
+        key("keys", "clear", "Claire"),
+        key("keys:ctrl+b", "background", "back ground"),
+        // Not configured, or already a key phrase of its own: skipped.
+        key("keys", "nothing", "nuthin"),
+        key("keys", "clear", "erase"),
+    ]
+    .concat();
+    let s = Scaffold::merge(Vec::new(), vec![loaded("user.toml", &text)], None);
+    let mut commands = VoiceCommands {
+        enabled: true,
+        ..VoiceCommands::default()
+    };
+    for (phrase, combo) in [
+        ("clear", "ctrl+u"),
+        ("erase", "ctrl+w"),
+        ("background", "ctrl+b"),
+    ] {
+        commands.keys.insert(phrase.into(), combo.into());
+    }
+    let c = apply_commands(commands, &s);
+    assert_eq!(c.parse("Claire."), Some(Command::Keys("ctrl+u".into())));
+    assert_eq!(c.parse("back ground"), Some(Command::Keys("ctrl+b".into())));
+    assert_eq!(c.parse("erase"), Some(Command::Keys("ctrl+w".into())));
+    assert_eq!(c.parse("nuthin"), None);
+    // Standalone only, like every key phrase.
+    assert_eq!(c.parse("Claire is here"), None);
+}
+
+#[test]
 fn wake_phrases_take_their_variants() {
     let s = with(&[
         ("standby", "ears bad"),
