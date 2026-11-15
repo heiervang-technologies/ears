@@ -126,6 +126,20 @@ pub(super) struct Streamed {
     pub(super) sent: usize,
 }
 
+/// The latest partial the ears stream pushed for an utterance.
+#[derive(Debug, Clone)]
+pub(super) struct StreamTail {
+    /// Stream utterance id.
+    pub(super) id: u64,
+    /// Ghost utterance it belongs to.
+    pub(super) utterance: u64,
+    pub(super) text: String,
+    /// Audio the partial covers, from the start of the segment.
+    pub(super) audio_ms: u64,
+    /// How far it trailed the audio sent when it arrived: the stream's pace.
+    pub(super) lag_ms: u64,
+}
+
 /// Start connecting the stream in the background. None without a runtime
 /// (sync tests): the link stays as it is.
 fn connect(spec: &crate::continuous::ContinuousSpec) -> Option<StreamLink> {
@@ -157,6 +171,8 @@ pub(super) struct GhostState {
     pub(super) stream: StreamLink,
     /// Stream utterance of the ghost utterance in progress, if streaming.
     pub(super) streamed: Option<Streamed>,
+    /// The stream's latest partial ([`StreamTail`]).
+    pub(super) stream_tail: Option<StreamTail>,
     /// Last stream utterance id used.
     pub(super) stream_id: u64,
     /// Ghost utterance decoded per tick to its end (the stream was not up
@@ -187,6 +203,7 @@ impl GhostState {
             decoder: None,
             stream: StreamLink::Down { retry_at: None },
             streamed: None,
+            stream_tail: None,
             stream_id: 0,
             per_tick: None,
             stream_state: None,
@@ -428,6 +445,14 @@ impl StreamingEngine {
                     Some(s) if s.id == partial.utterance => {
                         ghost.stream_state = Some(partial.snapshot());
                         let text = partial.text.trim().to_string();
+                        let sent_ms = s.sent as u64 * 1000 / u64::from(crate::pcm::SAMPLE_RATE);
+                        ghost.stream_tail = Some(StreamTail {
+                            id: s.id,
+                            utterance: s.utterance,
+                            text: text.clone(),
+                            audio_ms: partial.audio_ms,
+                            lag_ms: sent_ms.saturating_sub(partial.audio_ms),
+                        });
                         let frozen_bytes = partial.stable().trim_start().len();
                         let _ = ghost.partial_tx.send(Partial::streamed(
                             s.utterance,

@@ -1089,6 +1089,136 @@ async fn test_live_final_is_committed_without_a_second_transcription() {
     );
 }
 
+/// The next commit the addon gets, past the partials it drew.
+async fn next_commit(
+    engine: &mut StreamingEngine,
+    lines: &std::sync::mpsc::Receiver<String>,
+) -> String {
+    loop {
+        let line = next_cmd_ticking(engine, lines).await;
+        if !line.starts_with("P ") {
+            return line;
+        }
+    }
+}
+
+/// Speak, have the stream push `partial` covering `audio_ms`, end the
+/// segment after silence and send the final `final_text` (if any) once the
+/// client asks for it. Returns how long processing the segment took.
+async fn speak_partial_and_finish(
+    engine: &mut StreamingEngine,
+    server: &crate::stream_client::fake::FakeServer,
+    partial: &str,
+    audio_ms: u64,
+    final_text: Option<&str>,
+) -> Duration {
+    feed(engine, &[0.9, 0.9, 0.9]);
+    ghost_tick(engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let id = server.starts()[0];
+    server.say(
+        serde_json::json!({"type": "partial", "utterance": id, "seq": 1,
+        "text": partial, "stable_chars": 0, "audio_ms": audio_ms}),
+    );
+    tick_until(engine, |e| e.ghost.as_ref().unwrap().stream_tail.is_some()).await;
+    let segs = feed(engine, &[0.9, 0.0, 0.0, 0.0]);
+    let finish = async {
+        server.wait_for(|l| l == format!("end {id}")).await;
+        if let Some(text) = final_text {
+            server.say(
+                serde_json::json!({"type": "final", "utterance": id, "text": text,
+                    "audio_ms": 1000, "decode_ms": 40}),
+            );
+        }
+    };
+    let start = Instant::now();
+    let (result, ()) = tokio::join!(
+        engine.process_segment(segs.into_iter().next().unwrap()),
+        finish
+    );
+    result.unwrap();
+    start.elapsed()
+}
+
+/// `final_from_partial = covered`: a last partial that decoded the audio up
+/// to the end of speech is committed without its final (none is sent here,
+/// which would otherwise mean the 1.5 s timeout and a full transcription).
+#[tokio::test]
+async fn test_a_covering_partial_is_committed_without_its_final() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 0).await;
+    engine.set_final_from_partial(crate::config::FinalFromPartial::Covered);
+    let took =
+        speak_partial_and_finish(&mut engine, &server, "Here is the partial.", 60_000, None).await;
+    assert_eq!(
+        next_commit(&mut engine, &lines).await,
+        "C Here is the partial."
+    );
+    assert_eq!(engine.final_by, Some("partial"));
+    assert!(took < Duration::from_millis(1000), "{took:?}");
+}
+
+/// A partial short of the end of speech: the final is awaited, as before.
+#[tokio::test]
+async fn test_a_short_partial_waits_for_the_final() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 0).await;
+    engine.set_final_from_partial(crate::config::FinalFromPartial::Covered);
+    speak_partial_and_finish(
+        &mut engine,
+        &server,
+        "Here is the",
+        0,
+        Some("Here is the live final."),
+    )
+    .await;
+    assert_eq!(
+        next_commit(&mut engine, &lines).await,
+        "C Here is the live final."
+    );
+    assert_eq!(engine.final_by, Some("final"));
+}
+
+#[test]
+fn test_final_from_partial_needs_coverage() {
+    use crate::config::FinalFromPartial as F;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _lines) = ghost_engine(dir.path());
+    let tail = |audio_ms, lag_ms, text: &str| super::ghost::StreamTail {
+        id: 7,
+        utterance: 0,
+        text: text.into(),
+        audio_ms,
+        lag_ms,
+    };
+    let text = "That is the whole thing.";
+    let mut check = |mode, t: super::ghost::StreamTail, id, waited| {
+        engine.set_final_from_partial(mode);
+        engine.ghost.as_mut().unwrap().stream_tail = Some(t);
+        engine
+            .final_from_partial(id, 3000, waited)
+            .map(|(_, how)| how)
+    };
+    assert_eq!(check(F::Off, tail(3100, 20, text), 7, 700), None);
+    assert_eq!(
+        check(F::Covered, tail(3000, 20, text), 7, 700),
+        Some("decoded to the end of speech")
+    );
+    // Stopped changing before the end: only `settled` trusts that, and
+    // only when the stream kept pace and had time to decode the end.
+    assert_eq!(check(F::Covered, tail(2800, 20, text), 7, 700), None);
+    assert_eq!(
+        check(F::Settled, tail(2800, 20, text), 7, 700),
+        Some("unchanged to the end of speech")
+    );
+    assert_eq!(check(F::Settled, tail(2800, 500, text), 7, 700), None);
+    assert_eq!(check(F::Settled, tail(2800, 20, text), 7, 200), None);
+    // Another stream utterance, or a result short enough for the
+    // no-speech check.
+    assert_eq!(check(F::Covered, tail(3100, 20, text), 8, 700), None);
+    assert_eq!(check(F::Covered, tail(3100, 20, "Okay."), 7, 700), None);
+}
+
 #[tokio::test]
 async fn test_short_live_final_goes_through_the_full_transcription() {
     let dir = tempfile::tempdir().unwrap();
@@ -2466,6 +2596,62 @@ async fn test_a_settled_finished_sentence_ends_at_early_finish() {
     // Only shorter than `finished_silence_ms` counts.
     with_early_finish(&mut engine, 700);
     assert_eq!(silence_to_end(&mut engine, "Ship it."), 704);
+}
+
+/// A finished reading whose last change came well before the pause still
+/// ends the utterance early when the stream kept pace: it decoded the end
+/// of speech and found nothing to change. Not when it lagged.
+#[tokio::test]
+async fn test_an_unchanged_reading_older_than_the_pause_still_ends_early() {
+    use crate::endpoint::Ending;
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = early_end_engine(dir.path());
+    engine.set_mode(crate::vad_mode::Mode::Dictation);
+    let run = |engine: &mut StreamingEngine, lag_ms: Option<u64>| {
+        feed(engine, &[0.9, 0.9, 0.9, 0.9]);
+        let ghost = engine.ghost.as_mut().unwrap();
+        let u = ghost.utterance;
+        ghost.stream_tail = lag_ms.map(|lag_ms| super::ghost::StreamTail {
+            id: 1,
+            utterance: u,
+            text: "Ship it.".into(),
+            audio_ms: 100,
+            lag_ms,
+        });
+        let old = Instant::now() - Duration::from_secs(2);
+        engine.ending = Some((u, Ending::Finished, old, 0));
+        let mut frames = 0;
+        let rule = loop {
+            frames += 1;
+            let rule = engine.early_end.map(|(_, _, rule)| rule);
+            let outcome = engine.vad_detector.inject_probability(0.0);
+            if engine.handle_vad_outcome(outcome).is_some() {
+                break rule;
+            }
+            engine.aim_early_end();
+            assert!(frames < 200, "never ended");
+        };
+        engine.ghost.as_mut().unwrap().next_utterance();
+        engine.ending = None;
+        (frames * 32, rule)
+    };
+    // Before: "reading older than the pause", the full wait.
+    assert_eq!(run(&mut engine, None), (1216, None));
+    assert_eq!(engine.no_early, "reading older than the pause");
+    assert_eq!(run(&mut engine, Some(500)), (1216, None));
+    // Keeping pace: the finished wait.
+    assert_eq!(run(&mut engine, Some(20)), (704, Some("unchanged")));
+    // With early_finish_ms, at least a decode step + lag + margin (270).
+    with_early_finish(&mut engine, 350);
+    assert_eq!(
+        run(&mut engine, Some(20)),
+        (352, Some("settled, unchanged"))
+    );
+    with_early_finish(&mut engine, 200);
+    assert_eq!(
+        run(&mut engine, Some(20)),
+        (288, Some("settled, unchanged"))
+    );
 }
 
 /// A pause that read as an ending is followed while it lasts and forgotten

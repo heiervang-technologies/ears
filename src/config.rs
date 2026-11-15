@@ -98,6 +98,22 @@ fn default_final_correction() -> bool {
 /// without updates for most of an utterance.
 pub const MAX_LIVE_MIN_STEP_MS: u64 = 5_000;
 
+/// When the ears stream's last partial may stand in for its `final`
+/// (`final_correction = false`, VAD ghost mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FinalFromPartial {
+    /// Always wait for the stream's `final`.
+    #[default]
+    Off,
+    /// When the last partial decoded the audio up to the end of speech.
+    Covered,
+    /// Also when it stopped changing before the end of speech and the
+    /// stream kept pace long enough after it to have decoded the end
+    /// unchanged.
+    Settled,
+}
+
 /// How the live ghost preview decodes a growing recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -348,6 +364,13 @@ pub struct Config {
     /// true.
     #[serde(default = "default_final_correction")]
     pub final_correction: bool,
+    /// With `final_correction` off: commit the ears stream's last partial
+    /// instead of waiting for its `final` (about 100 ms) when it already
+    /// covers the end of speech: `covered` when it decoded the audio up to
+    /// there, `settled` also when it stopped changing earlier and the stream
+    /// kept pace. Its `final` is still awaited otherwise. Default: off.
+    #[serde(default)]
+    pub final_from_partial: FinalFromPartial,
     /// How ghost text looks, written into supported apps (`[ghost]`).
     #[serde(default)]
     pub ghost: crate::ghost_style::GhostStyle,
@@ -522,6 +545,7 @@ impl Config {
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
+            final_from_partial: FinalFromPartial::default(),
             ghost: Default::default(),
             commands: Default::default(),
             config_dir,
@@ -685,6 +709,7 @@ impl Config {
             live_rollback_words: None,
             live_min_step_ms: None,
             final_correction: default_final_correction(),
+            final_from_partial: FinalFromPartial::default(),
             ghost: Default::default(),
             commands: Default::default(),
             config_dir: PathBuf::new(),

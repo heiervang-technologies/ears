@@ -955,6 +955,11 @@ pub struct Timing {
     /// switched. Includes the accept colour hold (`[commands] accept_ms`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_ms: Option<f64>,
+    /// Where a dictated utterance's text came from: "partial" (the
+    /// stream's last partial), "final" (the stream's final) or "http" (a
+    /// full transcription).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_by: Option<&'static str>,
 }
 
 /// The zero of a [`Timing`]: when VAD called the utterance ended.

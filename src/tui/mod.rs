@@ -215,6 +215,7 @@ pub async fn start_vad_pipeline(
     engine.set_decisions_dir(&config.state_dir);
     engine.set_subtitles_dir(&config.state_dir, config.subtitles, &config.subtitle_modes);
     engine.set_final_correction(config.final_correction);
+    engine.set_final_from_partial(config.final_from_partial);
     engine.set_say_echo(config.say_echo.clone());
     engine.set_cs(config.cs.clone());
     engine.set_cs_journal(crate::cs::mine::Journal::from_config(&config.cs));
