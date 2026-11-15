@@ -182,12 +182,21 @@ fn builtins() -> Vec<Action> {
             "orange",
             Effect::Colour(crate::colour_mode::Colour::Orange),
             // "out": out of command mode, into standby
-            &["orange", "orange mode", "out"],
+            &["orange", "orange mode", "out", "passive", "passive mode"],
         ),
         a(
             "blue",
             Effect::Colour(crate::colour_mode::Colour::Blue),
-            &["blue", "blue mode", "cyan"],
+            // Not "write" alone: it sounds like "right" (the arrow key).
+            &[
+                "blue",
+                "blue mode",
+                "cyan",
+                "write mode",
+                "type mode",
+                "typing",
+                "typing mode",
+            ],
         ),
         a(
             "yellow",
@@ -1531,6 +1540,29 @@ run = ["playerctl", "next"]
             Effect::Colour(crate::colour_mode::Colour::Orange)
         );
         assert!(orange.text.iter().any(|t| t == "out"));
+    }
+
+    #[test]
+    fn mode_names_switch_inside_command_mode() {
+        use crate::colour_mode::Colour;
+        let (_, actions) = parse_actions(DEFAULT_ACTIONS).unwrap();
+        let by = |name: &str| actions.iter().find(|a| a.name == name).unwrap();
+        assert_eq!(by("blue").effect, Effect::Colour(Colour::Blue));
+        assert!(by("blue").text.iter().any(|t| t == "write mode"));
+        assert!(by("blue").text.iter().any(|t| t == "typing"));
+        // "write" alone sounds like "right", the arrow key.
+        assert!(!by("blue").text.iter().any(|t| t == "write"));
+        assert!(by("orange").text.iter().any(|t| t == "passive"));
+        // No two actions share a phrasing.
+        let mut seen = std::collections::HashMap::new();
+        for a in &actions {
+            for t in &a.text {
+                let t = crate::commands::normalize(t);
+                if let Some(other) = seen.insert(t.clone(), a.name.clone()) {
+                    assert_eq!(other, a.name, "{t:?} in both");
+                }
+            }
+        }
     }
 
     #[test]

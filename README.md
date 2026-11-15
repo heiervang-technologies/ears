@@ -345,7 +345,7 @@ either alone, fires, and two that disagree fire nothing. The words only count
 if they arrive within 1.5 s; after that the embedding decides alone. The file
 ships with keys (enter, escape, tab, arrows) and media controls and takes any
 number of `keys`/`run` actions. Say "command" again to go back to dictation,
-or "out" to drop to standby (orange).
+or "out" (or "passive") to drop to passive mode (standby, orange).
 An action with `exact = true` fires only on its exact words, never on how it
 sounds or what it means: for things a misfire would quietly leave changed,
 like the keyboard layout or notifications off.
@@ -416,19 +416,27 @@ command mode, "command" to leave.
 `ears chant-file clip.wav` replays a recording as a chant against the
 configured servers and prints the meters, for tuning.
 
-### Colour words (VAD)
+### Mode names and colour words (VAD)
 
-Each mode has the colour the ears light shows for it; say the colour on its
-own to switch to that mode, from any mode including standby and command mode:
+Each mode has a name and the colour the ears light shows for it; say either
+on its own to switch to that mode, from any mode including passive and
+command mode:
 
-| say | mode |
-|---|---|
-| orange | standby: only the wake phrase acts |
-| blue, cyan | dictation: typed where the cursor is |
-| yellow | the talking stick (typing off, `haios-voice-route stick`) |
-| purple, violet | command mode |
+| name | say | colour | what happens |
+|---|---|---|---|
+| passive mode | passive, passive mode, orange | orange | standby: only the wake phrase acts |
+| write mode | write mode, typing, typing mode, type mode, blue, cyan | blue | dictation: typed where the cursor is |
+| stick mode | yellow | yellow | the talking stick (typing off, `haios-voice-route stick`) |
+| command mode | command, command mode, purple, violet | violet | command mode |
+| vision mode | vision, vision mode, look, pink, magenta | pink | vision mode (when enabled) |
+| call mode | (an agent rings: talking-stick grab) | green | an agent is calling |
+| decision mode | (an agent asks: `ears decide`) | red | a decision (reply mode) is open |
 
-A colour word said alone is therefore never typed.
+A mode name or colour word said alone is therefore never typed: to type the
+single word "typing", say it inside a sentence. Plain "write" is not a
+switch (it sounds like "right", the arrow key): say "write mode" or "typing". "Stick mode" is left to the run
+command a config may give it. `ears colour` takes the names too
+(`ears colour write`, `ears colour passive`, `ears colour stick`).
 
 ### Subtitles (VAD)
 
@@ -441,11 +449,12 @@ heard (partials, then the final), and the ears light (`haios-ears-led`, hai-os)
 draws it just above its line: small, translucent, in the mode's colour, a
 recognised command radiant. Config `subtitles = true` turns them on at start,
 and `subtitle_modes` picks the modes that are captioned (default all of
-`"standby"`, `"dictation"`, `"command"`, `"decide"`); a small "CC" at the end of
+`"standby"`, `"dictation"`, `"command"`, `"decide"`; the names `"passive"`,
+`"write"`, `"decision"` and `"reply"` are accepted too); a small "CC" at the end of
 the line shows while the current mode is captioned. Standby captions finals
 only.
 
-### Decisions (VAD, the red mode)
+### Decisions (VAD, decision mode: red)
 
 An agent can ask a question with a few discrete options out loud:
 

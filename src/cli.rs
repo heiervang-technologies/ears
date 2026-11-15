@@ -250,13 +250,14 @@ pub enum Commands {
         action: String,
     },
 
-    /// Switch the VAD mode by its colour, as saying the colour does: orange
-    /// (standby), blue (dictation), yellow (talking stick), purple (command
-    /// mode), pink (vision). `toggle` goes between orange and blue: a key
-    /// for "stop typing / type again".
+    /// Switch the VAD mode by its colour or name, as saying it does: orange
+    /// or passive (standby), blue or write (dictation), yellow or stick
+    /// (talking stick), purple or command, pink or vision. `toggle` goes
+    /// between passive and write: a key for "stop typing / type again".
     Colour {
-        /// toggle | orange | blue | yellow | purple | pink
-        #[arg(value_parser = ["toggle", "orange", "blue", "yellow", "purple", "pink"])]
+        /// toggle | orange | blue | yellow | purple | pink, or a name:
+        /// passive | write | stick | command | vision ("... mode" too)
+        #[arg(value_parser = colour_arg)]
         colour: String,
     },
 
@@ -418,6 +419,21 @@ pub enum DeviceAction {
     Current,
 }
 
+/// `ears colour` takes a colour or a mode name; it is sent on as the colour
+/// (`colour-blue`), which every running ears understands.
+fn colour_arg(arg: &str) -> Result<String, String> {
+    if arg == "toggle" {
+        return Ok(arg.into());
+    }
+    ears::colour_mode::Colour::from_cli(arg)
+        .map(|c| c.name().to_string())
+        .ok_or_else(|| {
+            "expected toggle, orange|passive, blue|write, yellow|stick, \
+             purple|command or pink|vision"
+                .to_string()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +462,27 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(Cli::try_parse_from(["ears", "cs"]).is_err());
+    }
+
+    #[test]
+    fn test_cli_colour_names() {
+        let colour = |arg: &str| match Cli::try_parse_from(["ears", "colour", arg]) {
+            Ok(Cli {
+                command: Some(Commands::Colour { colour }),
+                ..
+            }) => Some(colour),
+            _ => None,
+        };
+        assert_eq!(colour("blue").as_deref(), Some("blue"));
+        assert_eq!(colour("write").as_deref(), Some("blue"));
+        assert_eq!(colour("write mode").as_deref(), Some("blue"));
+        assert_eq!(colour("passive").as_deref(), Some("orange"));
+        assert_eq!(colour("stick").as_deref(), Some("yellow"));
+        assert_eq!(colour("command").as_deref(), Some("purple"));
+        assert_eq!(colour("vision").as_deref(), Some("pink"));
+        assert_eq!(colour("toggle").as_deref(), Some("toggle"));
+        assert_eq!(colour("green"), None);
+        assert_eq!(colour("call"), None);
     }
 
     #[test]

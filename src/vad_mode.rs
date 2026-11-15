@@ -1,11 +1,14 @@
 //! The VAD mode: what an utterance is for, in one value.
 //!
-//! | mode      | LED    | an utterance is                                  |
-//! |-----------|--------|--------------------------------------------------|
-//! | dictation | blue   | typed (yellow when typing is off, see below)     |
-//! | standby   | orange | ignored, except wake phrases and run commands    |
-//! | command   | violet | routed to an action ([`crate::command_mode`])    |
-//! | vision    | pink   | looked for on screen (`ears look`)               |
+//! | mode      | said as      | LED    | an utterance is                                  |
+//! |-----------|--------------|--------|--------------------------------------------------|
+//! | dictation | write mode   | blue   | typed (yellow when typing is off, see below)     |
+//! | standby   | passive mode | orange | ignored, except wake phrases and run commands    |
+//! | command   | command mode | violet | routed to an action ([`crate::command_mode`])    |
+//! | vision    | vision mode  | pink   | looked for on screen (`ears look`)               |
+//!
+//! The first column is what files and logs carry; [`ModeKind::label`] is the
+//! name people say and see ([`crate::colour_mode`]).
 //!
 //! The modes exclude each other: [`Mode`] holds exactly one, so ears can no
 //! longer stand by while still in command or vision mode. Two things stay
@@ -148,6 +151,17 @@ impl ModeKind {
             ModeKind::Standby => "standby",
             ModeKind::Command => "command",
             ModeKind::Vision => "vision",
+        }
+    }
+
+    /// The mode's name for people ("write mode"); [`Self::name`] stays the
+    /// word in `mode.json` and the logs.
+    pub fn label(self) -> &'static str {
+        match self {
+            ModeKind::Dictation => "write mode",
+            ModeKind::Standby => "passive mode",
+            ModeKind::Command => "command mode",
+            ModeKind::Vision => "vision mode",
         }
     }
 

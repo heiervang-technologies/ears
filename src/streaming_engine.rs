@@ -1820,6 +1820,7 @@ impl StreamingEngine {
         if old == new {
             return;
         }
+        info!("Mode: {} -> {}", old.label(), new.label());
         match old {
             ModeKind::Command => {
                 info!("Command mode off: dictating again");
@@ -2364,7 +2365,12 @@ impl StreamingEngine {
     /// Switch to the mode the LED shows in `colour` ([`crate::colour_mode`]).
     async fn switch_to_colour(&mut self, colour: crate::colour_mode::Colour, heard: &str) {
         use crate::colour_mode::Colour;
-        info!("Colour word {:?}: switching to {}", heard, colour.name());
+        info!(
+            "Colour word {:?}: switching to {} ({})",
+            heard,
+            colour.label(),
+            colour.name()
+        );
         if colour == Colour::Pink {
             if self.mode.is_standby() {
                 self.apply_wake(crate::wake::Wake::On, heard);

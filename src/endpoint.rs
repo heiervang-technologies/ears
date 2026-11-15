@@ -155,8 +155,9 @@ impl Phrases {
 
 /// What dictation hears as a whole command: the key commands, wake and
 /// sleep phrases, "command" and the run commands (a `prefix` one is open,
-/// and so are the "back" and "literal" words). Not the colour words: "look"
-/// and "orange" start too many sentences to end one at a short pause.
+/// and so are the "back" and "literal" words). Not the colour words or mode
+/// names: "look", "orange", "write", "typing" and "passive" start too many
+/// sentences to end one at a short pause.
 /// `command_mode`: whether "command" enters command mode here.
 pub fn dictation_phrases(commands: &VoiceCommands, command_mode: bool) -> Phrases {
     let mut complete: Vec<String> = Vec::new();
@@ -258,6 +259,10 @@ mod tests {
         assert!(!p.is_complete("command"));
         assert!(p.is_complete("Command mode."));
         assert!(!p.is_complete("look"));
+        // Mode names start sentences ("write to him", "typing is slow").
+        for name in ["write", "typing", "passive", "write mode"] {
+            assert!(!p.is_complete(name), "{name}");
+        }
         assert!(p.is_complete("bye friend"));
         // "over and out" is a sign-off: "over" may be its start.
         assert!(!p.is_complete("over"));
