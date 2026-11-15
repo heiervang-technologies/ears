@@ -1467,6 +1467,7 @@ async fn handle_ws_listen(
             .with_api_key(config.api_key.clone())
             .with_model(model)
             .with_silence_filter(config.filter_silence_artifacts)
+            .with_speech_check_overlap_ms(config.speech_check_overlap_ms)
             .with_prompt(config.prompt.clone()),
     );
 

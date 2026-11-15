@@ -75,6 +75,10 @@ struct ChatMessage {
 /// (see `WhisperClient::hears_speech`).
 pub(crate) const NO_SPEECH_CHECK_MAX_WORDS: usize = 3;
 
+/// Bytes per millisecond of the audio ears sends: mono PCM16 at
+/// [`crate::pcm::SAMPLE_RATE`]. Only used to estimate a segment's length.
+const PCM16_BYTES_PER_MS: u64 = crate::pcm::SAMPLE_RATE as u64 * 2 / 1000;
+
 /// Client for interacting with whisper.cpp server
 #[derive(Clone)]
 pub struct WhisperClient {
@@ -100,6 +104,9 @@ pub struct WhisperClient {
     initial_backoff_ms: u64,
     /// Maximum backoff delay in milliseconds
     max_backoff_ms: u64,
+    /// Audio up to this long (ms) gets its no-speech check sent alongside
+    /// the transcription instead of after it; 0 keeps the check serial.
+    speech_check_overlap_ms: u64,
 }
 
 impl WhisperClient {
@@ -131,6 +138,7 @@ impl WhisperClient {
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
+            speech_check_overlap_ms: 0,
         }
     }
 
@@ -138,6 +146,17 @@ impl WhisperClient {
     /// Disable to retain legitimate utterances such as "Thank you".
     pub fn with_silence_filter(mut self, enabled: bool) -> Self {
         self.filter_silence_artifacts = enabled;
+        self
+    }
+
+    /// Send the no-speech check (see [`Self::hears_speech`]) together with
+    /// the transcription when the audio is at most `ms` long, rather than
+    /// after the transcript comes back short. A short result then costs one
+    /// round trip instead of two; a longer one discards the check. Unsure
+    /// segments (`verify`) always need the check and overlap whenever this
+    /// is non-zero. 0 (the default) keeps the check serial.
+    pub fn with_speech_check_overlap_ms(mut self, ms: u64) -> Self {
+        self.speech_check_overlap_ms = ms;
         self
     }
 
@@ -207,6 +226,7 @@ impl WhisperClient {
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
+            speech_check_overlap_ms: 0,
         }
     }
 
@@ -377,7 +397,8 @@ impl WhisperClient {
         prompt: Option<&str>,
     ) -> Result<String, WhisperError> {
         // Validate audio file exists and has content
-        self.validate_audio_file(path).await?;
+        let bytes = self.validate_audio_file(path).await?;
+        let audio_ms = bytes.saturating_sub(crate::WAV_HEADER_SIZE) / PCM16_BYTES_PER_MS;
 
         debug!(
             "Transcribing audio file: {} (grammar: {})",
@@ -385,7 +406,64 @@ impl WhisperClient {
             grammar.is_some()
         );
 
-        let text = (|| async {
+        // A result the check could drop: unsure audio, or audio short enough
+        // to come back as a few words. Sending the check now saves a round
+        // trip after the transcript.
+        let overlap = self.speech_check_overlap_ms > 0
+            && grammar.is_none()
+            && (verify
+                || (self.filter_silence_artifacts && audio_ms <= self.speech_check_overlap_ms));
+
+        let transcription = self.transcribe_retrying(path, grammar, prompt);
+        let (text, early) = if overlap {
+            let (text, heard) = tokio::join!(transcription, self.hears_speech(path, true));
+            (text?, Some(heard))
+        } else {
+            (transcription.await?, None)
+        };
+
+        // Filter silence artifacts
+        let filtered = self.filter_silence_artifacts(&text);
+
+        if filtered.is_empty() {
+            return Err(WhisperError::EmptyTranscription);
+        }
+
+        let needs_check = grammar.is_none()
+            && (verify
+                || (self.filter_silence_artifacts
+                    && filtered.split_whitespace().count() <= NO_SPEECH_CHECK_MAX_WORDS));
+        let heard = match (needs_check, early) {
+            (false, Some(_)) => {
+                debug!("Overlapped no-speech check not needed: {:?}", filtered);
+                None
+            }
+            (false, None) => None,
+            (true, Some(heard)) => heard,
+            (true, None) => self.hears_speech(path, false).await,
+        };
+
+        if verify {
+            if grammar.is_some() || heard != Some(true) {
+                info!("Dropping {:?}: not confirmed as speech", filtered);
+                return Err(WhisperError::EmptyTranscription);
+            }
+        } else if needs_check && heard == Some(false) {
+            info!("Dropping {:?}: the model hears no speech", filtered);
+            return Err(WhisperError::EmptyTranscription);
+        }
+
+        Ok(filtered)
+    }
+
+    /// One transcription, retried with backoff.
+    async fn transcribe_retrying(
+        &self,
+        path: &Path,
+        grammar: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<String, WhisperError> {
+        (|| async {
             match grammar {
                 Some(g) => self.transcribe_chat_internal(path, g).await,
                 None => self.transcribe_internal(path, prompt).await,
@@ -396,30 +474,7 @@ impl WhisperClient {
             warn!("Transcription attempt failed: {}", error);
             !matches!(error, WhisperError::ConfigurationError(_))
         })
-        .await?;
-
-        // Filter silence artifacts
-        let filtered = self.filter_silence_artifacts(&text);
-
-        if filtered.is_empty() {
-            return Err(WhisperError::EmptyTranscription);
-        }
-
-        if verify {
-            if grammar.is_some() || self.hears_speech(path).await != Some(true) {
-                info!("Dropping {:?}: not confirmed as speech", filtered);
-                return Err(WhisperError::EmptyTranscription);
-            }
-        } else if grammar.is_none()
-            && self.filter_silence_artifacts
-            && filtered.split_whitespace().count() <= NO_SPEECH_CHECK_MAX_WORDS
-            && self.hears_speech(path).await == Some(false)
-        {
-            info!("Dropping {:?}: the model hears no speech", filtered);
-            return Err(WhisperError::EmptyTranscription);
-        }
-
-        Ok(filtered)
+        .await
     }
 
     /// Ask the model, without a forced language, whether the audio holds
@@ -432,7 +487,26 @@ impl WhisperClient {
     /// short results are checked, since those are the only ones such noise
     /// produces. `None`: the server cannot answer (no chat endpoint, no
     /// model list, error), so the transcript stands.
-    async fn hears_speech(&self, path: &Path) -> Option<bool> {
+    ///
+    /// `overlapped`: sent alongside the transcription rather than after it;
+    /// only reported in the timing log line.
+    async fn hears_speech(&self, path: &Path, overlapped: bool) -> Option<bool> {
+        let start = std::time::Instant::now();
+        let heard = self.hears_speech_inner(path).await;
+        info!(
+            "No-speech check took {:?} ({}): {}",
+            start.elapsed(),
+            if overlapped { "overlapped" } else { "serial" },
+            match heard {
+                Some(true) => "speech",
+                Some(false) => "no speech",
+                None => "unavailable",
+            }
+        );
+        heard
+    }
+
+    async fn hears_speech_inner(&self, path: &Path) -> Option<bool> {
         let model = self
             .check_model
             .get_or_init(|| async {
@@ -518,8 +592,9 @@ impl WhisperClient {
         Ok(filtered)
     }
 
-    /// Validates that an audio file exists and contains audio data
-    async fn validate_audio_file(&self, path: &Path) -> Result<(), WhisperError> {
+    /// Validates that an audio file exists and contains audio data; returns
+    /// its size in bytes.
+    async fn validate_audio_file(&self, path: &Path) -> Result<u64, WhisperError> {
         if !path.exists() {
             return Err(WhisperError::InvalidAudioFile(format!(
                 "File does not exist: {}",
@@ -542,7 +617,7 @@ impl WhisperClient {
             path.display(),
             metadata.len()
         );
-        Ok(())
+        Ok(metadata.len())
     }
 
     /// Internal transcription logic without retry
@@ -1147,6 +1222,108 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(text, "Hyprland.");
+    }
+
+    /// Like [`no_speech_server`], with every reply held for `delay`.
+    async fn slow_server(transcript: &str, check: &str, delay: Duration) -> wiremock::MockServer {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": transcript}))
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "choices": [{"message": {"content": check}}]
+                    }))
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn requests_to(requests: &[wiremock::Request], to: &str) -> usize {
+        requests.iter().filter(|r| r.url.path() == to).count()
+    }
+
+    #[tokio::test]
+    async fn overlapped_check_costs_one_round_trip() {
+        let delay = Duration::from_millis(300);
+        let wav = wav_file();
+        for (overlap, expect_fast) in [(3000, true), (0, false)] {
+            let server = slow_server("Okay.", "language None<asr_text>", delay).await;
+            let client = WhisperClient::new(server.uri())
+                .with_model(Some("m".into()))
+                .with_speech_check_overlap_ms(overlap);
+            let start = std::time::Instant::now();
+            assert!(matches!(
+                client.transcribe(wav.path()).await,
+                Err(WhisperError::EmptyTranscription)
+            ));
+            let took = start.elapsed();
+            assert!(took >= delay);
+            assert_eq!(took < delay * 2, expect_fast, "overlap {overlap}: {took:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapped_check_keeps_verdicts() {
+        let wav = wav_file();
+        let quick = Duration::ZERO;
+        let server = slow_server("Stop.", "language English<asr_text>Stop.", quick).await;
+        let client = WhisperClient::new(server.uri())
+            .with_model(Some("m".into()))
+            .with_speech_check_overlap_ms(3000);
+        assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Stop.");
+
+        // A long result discards the check it sent.
+        let server = slow_server(
+            "This is a longer sentence.",
+            "language None<asr_text>",
+            quick,
+        )
+        .await;
+        let client = WhisperClient::new(server.uri())
+            .with_model(Some("m".into()))
+            .with_speech_check_overlap_ms(3000);
+        assert_eq!(
+            client.transcribe(wav.path()).await.unwrap(),
+            "This is a longer sentence."
+        );
+
+        // Unsure audio needs a confirmed "speech".
+        let server = slow_server("Yes.", "language None<asr_text>", quick).await;
+        let client = WhisperClient::new(server.uri())
+            .with_model(Some("m".into()))
+            .with_speech_check_overlap_ms(3000);
+        assert!(matches!(
+            client.transcribe_checked(wav.path(), None, true).await,
+            Err(WhisperError::EmptyTranscription)
+        ));
+    }
+
+    #[tokio::test]
+    async fn long_audio_sends_no_early_check() {
+        let wav = wav_file(); // ~123 ms of audio
+        let server = slow_server(
+            "This is a longer sentence.",
+            "language None<asr_text>",
+            Duration::ZERO,
+        )
+        .await;
+        let client = WhisperClient::new(server.uri())
+            .with_model(Some("m".into()))
+            .with_speech_check_overlap_ms(100);
+        client.transcribe(wav.path()).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests_to(&requests, "/v1/chat/completions"), 0);
     }
 
     #[tokio::test]
