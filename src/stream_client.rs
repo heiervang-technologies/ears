@@ -410,6 +410,14 @@ impl StreamSession {
         let connect = tokio_tungstenite::connect_async_with_config(request, None, true);
         let mut socket = match tokio::time::timeout(READY_TIMEOUT, connect).await {
             Err(_) => return Err(ContinuousError::Failed(format!("{url}: upgrade timed out"))),
+            // 5xx: a proxy in front of a server that is restarting, or a
+            // server not ready yet; worth retrying soon.
+            Ok(Err(tungstenite::Error::Http(response))) if response.status().is_server_error() => {
+                return Err(ContinuousError::Failed(format!(
+                    "{url}: upgrade failed ({})",
+                    response.status()
+                )))
+            }
             // 404: the plugin is not installed; any other answer but 101 is
             // a server that will not stream either.
             Ok(Err(tungstenite::Error::Http(response))) => {
@@ -690,6 +698,9 @@ pub(crate) mod fake {
         /// `end U`, `cancel U`.
         pub log: Arc<Mutex<Vec<String>>>,
         say: tokio::sync::broadcast::Sender<String>,
+        /// While set, connections are dropped before the upgrade, as by a
+        /// server that is restarting.
+        down: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl FakeServer {
@@ -704,14 +715,32 @@ pub(crate) mod fake {
             let url = format!("http://{}", listener.local_addr().unwrap());
             let log = Arc::new(Mutex::new(Vec::new()));
             let (say, _) = tokio::sync::broadcast::channel(64);
-            let (log2, say2) = (log.clone(), say.clone());
+            let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (log2, say2, down2) = (log.clone(), say.clone(), down.clone());
             tokio::spawn(async move {
                 while let Ok((tcp, _)) = listener.accept().await {
+                    if down2.load(std::sync::atomic::Ordering::SeqCst) {
+                        drop(tcp);
+                        continue;
+                    }
                     let (log, rx) = (log2.clone(), say2.subscribe());
                     tokio::spawn(serve(tcp, mode, http, log, rx));
                 }
             });
-            Self { url, log, say }
+            Self {
+                url,
+                log,
+                say,
+                down,
+            }
+        }
+
+        /// Go down (drop open connections, refuse new ones) or come back.
+        pub fn set_down(&self, down: bool) {
+            self.down.store(down, std::sync::atomic::Ordering::SeqCst);
+            if down {
+                self.drop_connections();
+            }
         }
 
         /// Send a text frame to every connected client.
@@ -1016,6 +1045,35 @@ mod tests {
             .err()
             .unwrap();
         assert!(matches!(err, ContinuousError::Unsupported(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_server_error_on_upgrade_is_worth_retrying() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        // A proxy in front of a restarting server answers 502/503.
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/ears/stream"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let err = StreamSession::connect(&server.uri(), None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, ContinuousError::Failed(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_restarting_server_fails_to_connect_then_comes_back() {
+        let server = FakeServer::start(Mode::Normal).await;
+        server.set_down(true);
+        let err = StreamSession::connect(&server.url, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, ContinuousError::Failed(_)), "{err}");
+        server.set_down(false);
+        assert!(StreamSession::connect(&server.url, None).await.is_ok());
     }
 
     #[tokio::test]

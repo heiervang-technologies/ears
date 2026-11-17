@@ -164,16 +164,26 @@ decoder, then repeated previews:
    `final` arrives within 1.5 s, the segment is transcribed in full.
 4. Connection lost mid-utterance: fall back to per-tick HTTP for that
    utterance; never replay audio into a second final (no duplicate commits).
+   The VAD ghost reconnects in the background in every mode (standby and
+   command mode included) and streams again from the next utterance; an
+   utterance that starts while a reconnect is pending is decoded per tick.
+   A push-to-talk preview is one recording per process, so it stays per
+   tick for the rest of that recording and the next recording connects
+   afresh.
 5. The server may be on another machine. The socket runs without Nagle, and
    ears pings every 5 s: no frame at all from the server (pongs included)
-   for 10 s closes the connection as `keepalive timeout`, then it is retried
-   every 5 s. A `final` that does not arrive within 1.5 s after a wait in
-   which the server sent nothing else also drops the connection and
-   reconnects at once, instead of trusting a socket that may be half open.
-6. "No stream endpoint" (404, refused upgrade, no `ready`, `unsupported`)
-   is not permanent: the stream is tried again after 5 minutes, so a server
-   that restarted without the plugin and then got it back heals without
-   restarting ears.
+   for 10 s closes the connection as `keepalive timeout`. A lost connection
+   or failed connect (refused, reset, timeout, 5xx on the upgrade) is
+   retried after 1 s, doubling per failure up to 30 s, reset once it is up
+   (`Ears stream lost ...; reconnecting in ...`, `Ears stream not connected
+   (attempt N) ...`, `Ears stream reconnected after X s down ...`). A
+   `final` that does not arrive within 1.5 s after a wait in which the
+   server sent nothing else also drops the connection and reconnects at
+   once, instead of trusting a socket that may be half open.
+6. "No stream endpoint" (404 or another non-5xx refused upgrade, no
+   `ready`, `unsupported`) is not permanent: the stream is tried again after
+   5 minutes, so a server that restarted without the plugin and then got it
+   back heals without restarting ears.
 
 ## Token freeze extension
 

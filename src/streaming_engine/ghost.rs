@@ -23,8 +23,19 @@ const GHOST_MAX_PARTIAL_SAMPLES: usize = 16_000 * 30;
 /// server's context.
 const GHOST_MAX_CONTINUOUS_SAMPLES: usize = 16_000 * 90;
 
-/// A lost stream connection is tried again after this, at the earliest.
-const STREAM_RETRY: Duration = Duration::from_secs(5);
+/// A lost stream connection is tried again after this first, then after
+/// twice as long each time it fails again, up to [`STREAM_RETRY_MAX`].
+const STREAM_RETRY_MIN: Duration = Duration::from_secs(1);
+
+/// The longest wait between reconnect attempts while the server is down.
+const STREAM_RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// Wait before the next connect attempt after `failures` (1 or more)
+/// failures in a row: 1 s, 2 s, 4 s, ... up to 30 s.
+pub(super) fn stream_backoff(failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(16);
+    (STREAM_RETRY_MIN * 2u32.pow(doublings)).min(STREAM_RETRY_MAX)
+}
 
 /// A server without the stream endpoint is asked again after this: the
 /// endpoint may come back with the next server restart.
@@ -181,6 +192,12 @@ pub(super) struct GhostState {
     /// Settled state of the latest stream partial, for the per-tick decoder
     /// to carry on from if the stream is lost.
     pub(super) stream_state: Option<crate::continuous::DecoderState>,
+    /// Connect attempts and losses since the stream was last up, for the
+    /// reconnect backoff ([`stream_backoff`]).
+    pub(super) stream_failures: u32,
+    /// When the stream went down (or first failed to come up), until it is
+    /// up again: the outage the reconnect log line reports.
+    pub(super) stream_down_since: Option<Instant>,
     /// Something is currently drawn as a ghost.
     pub(super) showing: bool,
     /// At least one utterance was committed this session (for spacing).
@@ -207,6 +224,8 @@ impl GhostState {
             stream_id: 0,
             per_tick: None,
             stream_state: None,
+            stream_failures: 0,
+            stream_down_since: None,
             showing: false,
             committed_any: false,
             warned_unavailable: false,
@@ -242,6 +261,49 @@ impl GhostState {
         self.last_partial_at = None;
         self.decoder = None;
         self.stream_state = None;
+    }
+
+    /// The stream is not up (lost, or a connect attempt failed): try again
+    /// after the next backoff step. Returns that wait.
+    fn stream_retry_later(&mut self) -> Duration {
+        self.stream_failures += 1;
+        self.stream_down_since.get_or_insert_with(Instant::now);
+        let delay = stream_backoff(self.stream_failures);
+        self.stream = StreamLink::Down {
+            retry_at: Some(Instant::now() + delay),
+        };
+        delay
+    }
+
+    /// The connection is gone. The utterance it carried finishes per tick
+    /// from what the stream settled (its audio is never sent again); the
+    /// next utterance after a reconnect streams again.
+    pub(super) fn stream_lost(&mut self, reason: &str) {
+        if let Some(streamed) = self.streamed.take() {
+            self.per_tick = Some(streamed.utterance);
+        }
+        let delay = self.stream_retry_later();
+        warn!(
+            "Ears stream lost ({}); decoding per tick, reconnecting in {:?}",
+            reason, delay
+        );
+    }
+
+    /// The stream is up: reset the backoff, and log how long it was down.
+    fn stream_up(&mut self, session: crate::stream_client::StreamSession) {
+        let model = session.ready().model.as_deref().unwrap_or("unknown model");
+        match self.stream_down_since.take() {
+            Some(since) => info!(
+                "Ears stream reconnected after {:.1} s down ({} failed attempts); \
+                 ghost partials over the ears stream ({})",
+                since.elapsed().as_secs_f64(),
+                self.stream_failures,
+                model
+            ),
+            None => info!("Ghost partials over the ears stream ({})", model),
+        }
+        self.stream_failures = 0;
+        self.stream = StreamLink::Up(session);
     }
 
     pub(super) fn session(&self) -> Option<&crate::stream_client::StreamSession> {
@@ -339,6 +401,8 @@ impl StreamingEngine {
             ghost.decoder = None;
             ghost.stream_cancel();
             ghost.stream = StreamLink::Down { retry_at: None };
+            ghost.stream_failures = 0;
+            ghost.stream_down_since = None;
         }
         // Connect now so the first utterance need not wait for it.
         self.ghost_stream_link();
@@ -359,17 +423,20 @@ impl StreamingEngine {
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
+        // A connection that ended while nobody read its events (standby,
+        // command mode) is noticed here, so it is reconnected in any mode.
+        if matches!(&ghost.stream, StreamLink::Up(session) if !session.is_open()) {
+            ghost.stream_lost("connection closed");
+            return;
+        }
         let next = match &mut ghost.stream {
             StreamLink::Connecting(rx) => match rx.try_recv() {
                 Ok(Ok(session)) => {
-                    info!(
-                        "Ghost partials over the ears stream ({})",
-                        session.ready().model.as_deref().unwrap_or("unknown model")
-                    );
                     if let Some(health) = &self.health {
                         health.asr_ok(crate::health::AsrPath::Stream);
                     }
-                    StreamLink::Up(session)
+                    ghost.stream_up(session);
+                    return;
                 }
                 Ok(Err(ContinuousError::Unsupported(e))) => {
                     info!(
@@ -379,18 +446,22 @@ impl StreamingEngine {
                     StreamLink::unsupported()
                 }
                 Ok(Err(e)) => {
-                    debug!("Ears stream not connected: {}", e);
                     if let Some(health) = &self.health {
                         health.asr_failed(&format!("stream: {e}"));
                     }
-                    StreamLink::Down {
-                        retry_at: Some(Instant::now() + STREAM_RETRY),
-                    }
+                    let delay = ghost.stream_retry_later();
+                    info!(
+                        "Ears stream not connected (attempt {}): {}; retrying in {:?}",
+                        ghost.stream_failures, e, delay
+                    );
+                    return;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return,
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => StreamLink::Down {
-                    retry_at: Some(Instant::now() + STREAM_RETRY),
-                },
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    let delay = ghost.stream_retry_later();
+                    info!("Ears stream connect task ended; retrying in {:?}", delay);
+                    return;
+                }
             },
             StreamLink::Down {
                 retry_at: Some(retry_at),
@@ -466,7 +537,7 @@ impl StreamingEngine {
                 StreamEvent::Final { .. } => {}
                 StreamEvent::Error { code, message, .. } if code == "unsupported" => {
                     info!("Ears stream unsupported, decoding per tick: {}", message);
-                    lost = Some(StreamLink::unsupported());
+                    lost = Some(None);
                     break;
                 }
                 StreamEvent::Error {
@@ -475,20 +546,22 @@ impl StreamingEngine {
                     message,
                 } => debug!("Ears stream error {} ({:?}): {}", code, utterance, message),
                 StreamEvent::Closed(reason) => {
-                    warn!("Ears stream lost ({}); decoding per tick", reason);
-                    lost = Some(StreamLink::Down {
-                        retry_at: Some(Instant::now() + STREAM_RETRY),
-                    });
+                    lost = Some(Some(reason));
+                    break;
                 }
             }
         }
-        if let Some(link) = lost {
-            // Finish the utterance per tick from what the stream settled;
-            // its audio is never sent again.
-            if let Some(streamed) = ghost.streamed.take() {
-                ghost.per_tick = Some(streamed.utterance);
+        match lost {
+            Some(Some(reason)) => ghost.stream_lost(&reason),
+            Some(None) => {
+                // Finish the utterance per tick from what the stream
+                // settled; its audio is never sent again.
+                if let Some(streamed) = ghost.streamed.take() {
+                    ghost.per_tick = Some(streamed.utterance);
+                }
+                ghost.stream = StreamLink::unsupported();
             }
-            ghost.stream = link;
+            None => {}
         }
     }
 
@@ -535,8 +608,13 @@ impl StreamingEngine {
                 return false;
             }
             StreamLink::Up(session) => session,
-            StreamLink::Connecting(_) => return true, // settled within 2 s
-            StreamLink::Down { .. } | StreamLink::Unsupported { .. } => {
+            // The first connect settles within 2 s: wait for it. A reconnect
+            // may well fail again; decode this utterance per tick meanwhile
+            // so it is not left without partials, and stream the next one.
+            StreamLink::Connecting(_) if ghost.stream_down_since.is_none() => return true,
+            StreamLink::Connecting(_)
+            | StreamLink::Down { .. }
+            | StreamLink::Unsupported { .. } => {
                 ghost.per_tick = Some(ghost.utterance);
                 return false;
             }
@@ -601,16 +679,11 @@ impl StreamingEngine {
                     return None
                 }
                 Ok(Some(StreamEvent::Closed(reason))) => {
-                    warn!("Ears stream lost ({}); decoding per tick", reason);
-                    ghost.stream = StreamLink::Down {
-                        retry_at: Some(Instant::now() + STREAM_RETRY),
-                    };
+                    ghost.stream_lost(&reason);
                     return None;
                 }
                 Ok(None) => {
-                    ghost.stream = StreamLink::Down {
-                        retry_at: Some(Instant::now() + STREAM_RETRY),
-                    };
+                    ghost.stream_lost("connection gone");
                     return None;
                 }
                 Ok(Some(_)) => continue, // stale partials or other utterances
@@ -626,6 +699,7 @@ impl StreamingEngine {
                             session.silent_for()
                         );
                         ghost.stream = StreamLink::Down { retry_at: None };
+                        ghost.stream_down_since.get_or_insert_with(Instant::now);
                     } else {
                         session.probe();
                     }

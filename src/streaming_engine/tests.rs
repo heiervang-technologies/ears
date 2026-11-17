@@ -1778,6 +1778,182 @@ async fn test_server_without_stream_endpoint_is_asked_again_later() {
 }
 
 #[test]
+fn test_stream_reconnect_backoff_doubles_to_thirty_seconds() {
+    use super::ghost::stream_backoff;
+    let secs: Vec<u64> = (1..=8).map(|n| stream_backoff(n).as_secs()).collect();
+    assert_eq!(secs, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+    assert_eq!(stream_backoff(u32::MAX), Duration::from_secs(30));
+}
+
+/// Let the next connect attempt go now instead of after its backoff.
+fn retry_stream_now(engine: &mut StreamingEngine) {
+    let ghost = engine.ghost.as_mut().unwrap();
+    if let StreamLink::Down { retry_at } = &mut ghost.stream {
+        *retry_at = Some(Instant::now());
+    }
+}
+
+/// What `process_audio` does for the stream in every mode, then a moment
+/// for the socket tasks to run.
+async fn link_tick(engine: &mut StreamingEngine) {
+    engine.ghost_stream_link();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+}
+
+async fn link_until(engine: &mut StreamingEngine, done: impl Fn(&StreamingEngine) -> bool) {
+    for _ in 0..400 {
+        if done(engine) {
+            return;
+        }
+        link_tick(engine).await;
+    }
+    panic!("condition never held");
+}
+
+fn stream_down(engine: &StreamingEngine) -> bool {
+    matches!(
+        engine.ghost.as_ref().unwrap().stream,
+        StreamLink::Down { retry_at: Some(_) }
+    )
+}
+
+#[tokio::test]
+async fn test_lost_stream_reconnects_with_backoff_even_in_standby() {
+    use crate::stream_client::fake::{FakeServer, Mode};
+    let server = FakeServer::start(Mode::Normal).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _lines) = ghost_engine(dir.path());
+    let monitor = crate::health::HealthMonitor::start(dir.path()).unwrap();
+    let health = monitor.health();
+    engine.set_health(health.clone());
+    engine.set_continuous(Some(spec_at(&server.url)));
+    link_until(&mut engine, stream_up).await;
+    // Standing by, nothing is fed to the stream and nothing reads its
+    // events: only the per-frame link upkeep can notice the loss.
+    engine.mode = crate::vad_mode::Mode::Standby;
+
+    // The server restarts: the connection closes, new ones fail.
+    server.set_down(true);
+    link_until(&mut engine, stream_down).await;
+    let ghost = engine.ghost.as_ref().unwrap();
+    assert_eq!(ghost.stream_failures, 1);
+    assert!(ghost.stream_down_since.is_some());
+    let StreamLink::Down {
+        retry_at: Some(retry_at),
+    } = ghost.stream
+    else {
+        unreachable!()
+    };
+    let wait = retry_at.saturating_duration_since(Instant::now());
+    assert!(wait > Duration::from_millis(500) && wait <= Duration::from_secs(1));
+    assert_eq!(
+        health.asr_stream_status(),
+        crate::health::StreamStatus::Down
+    );
+
+    // Each failed attempt doubles the wait.
+    retry_stream_now(&mut engine);
+    link_tick(&mut engine).await;
+    assert!(matches!(
+        engine.ghost.as_ref().unwrap().stream,
+        StreamLink::Connecting(_)
+    ));
+    link_until(&mut engine, |e| {
+        e.ghost.as_ref().unwrap().stream_failures == 2
+    })
+    .await;
+    let StreamLink::Down {
+        retry_at: Some(retry_at),
+    } = engine.ghost.as_ref().unwrap().stream
+    else {
+        panic!("a failed reconnect leaves the stream down");
+    };
+    let wait = retry_at.saturating_duration_since(Instant::now());
+    assert!(wait > Duration::from_millis(1500) && wait <= Duration::from_secs(2));
+
+    // Not before its time...
+    link_tick(&mut engine).await;
+    assert!(stream_down(&engine));
+    // ...and once the server is back, the next attempt gets it.
+    server.set_down(false);
+    retry_stream_now(&mut engine);
+    link_until(&mut engine, stream_up).await;
+    let ghost = engine.ghost.as_ref().unwrap();
+    assert_eq!(ghost.stream_failures, 0, "backoff reset on success");
+    assert!(ghost.stream_down_since.is_none());
+    assert_eq!(health.asr_stream_status(), crate::health::StreamStatus::Up);
+}
+
+#[tokio::test]
+async fn test_utterance_in_flight_finishes_per_tick_and_the_next_streams_again() {
+    use crate::stream_client::fake::{FakeServer, Mode};
+    use wiremock::{matchers::path, Mock, MockServer};
+    let http = MockServer::start().await;
+    Mock::given(path("/v1/chat/completions"))
+        .respond_with(chat_reply(" then http"))
+        .mount(&http)
+        .await;
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("streamed words then http."))
+        .mount(&http)
+        .await;
+    let server = FakeServer::start_with_http(Mode::Normal, Some(*http.address())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine_at(dir.path(), &server.url);
+    engine.set_continuous(Some(spec_at(&server.url)));
+    tick_until(&mut engine, stream_up).await;
+
+    feed(&mut engine, &[0.9; 24]);
+    ghost_tick(&mut engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let first = server.starts()[0];
+    server.say(stream_partial(first, "streamed words so far", 14));
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "F 14 streamed words so far"
+    );
+
+    // Lost mid-utterance; the server is back at once, and the reconnect
+    // comes up while the utterance is still going.
+    server.drop_connections();
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "F 14 streamed words then http"
+    );
+    retry_stream_now(&mut engine);
+    tick_until(&mut engine, stream_up).await;
+    feed(&mut engine, &[0.9; 4]);
+    for _ in 0..10 {
+        ghost_tick(&mut engine).await;
+    }
+    // The utterance in flight is not moved onto the new connection.
+    assert_eq!(server.starts(), vec![first]);
+
+    let segs = feed(&mut engine, &[0.0, 0.0, 0.0]);
+    engine
+        .process_segment(segs.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    let commits: Vec<String> = lines.try_iter().filter(|l| l.starts_with("C ")).collect();
+    assert_eq!(commits, vec!["C streamed words then http."]);
+
+    // The next utterance streams again, on the new connection.
+    feed(&mut engine, &[0.9, 0.9, 0.9]);
+    ghost_tick(&mut engine).await;
+    server
+        .wait_for(|l| l.starts_with("start ") && !l.contains(&format!(":{first},")))
+        .await;
+    let second = server.starts()[1];
+    assert!(second > first);
+    server.say(stream_partial(second, "back on the stream", 0));
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "P  back on the stream",
+        "spaced after the committed utterance"
+    );
+}
+
+#[test]
 fn test_shell_prompt_picks_bash_per_utterance() {
     let (mut engine, _rx) = seq_engine();
     engine.typing_mode = TypingMode::Wtype;

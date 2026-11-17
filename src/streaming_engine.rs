@@ -492,6 +492,10 @@ impl StreamingEngine {
         } else if self.ghost.is_some() && self.deciding() {
             self.decide_listen(segment.is_some());
         }
+        // Keep the stream connection current in every mode (standby and
+        // command mode feed it nothing): a lost one is reconnected before
+        // dictation needs it again.
+        self.ghost_stream_link();
         self.aim_early_end();
 
         if let Some(segment) = segment {

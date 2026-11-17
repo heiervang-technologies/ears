@@ -376,7 +376,12 @@ async fn stream_ghost_preview(
                     tracing::debug!("Stream error {}: {}", code, message);
                 }
                 Some(StreamEvent::Closed(reason)) => {
-                    tracing::warn!("Stream lost ({}), decoding per tick", reason);
+                    // One recording is one utterance: it finishes per tick,
+                    // and the next recording (a new preview) connects again.
+                    tracing::warn!(
+                        "Stream lost ({}), decoding per tick for the rest of this recording",
+                        reason
+                    );
                     return Ok(StreamPreview::Fallback(state));
                 }
                 None => return Ok(StreamPreview::Fallback(state)),
