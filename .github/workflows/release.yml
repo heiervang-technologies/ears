@@ -3,16 +3,23 @@ name: Release
 on:
   push:
     branches: [main]
+  # Changes to the packaging build both binaries without releasing.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - install.sh
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-release:
-    name: Build and Release
+  version:
+    name: Decide
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      skip: ${{ steps.version.outputs.SKIP }}
+      version: ${{ steps.version.outputs.VERSION }}
+      version_num: ${{ steps.version.outputs.VERSION_NUM }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,11 +27,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev
 
       - name: Read version from Cargo.toml
         id: version
@@ -40,6 +42,8 @@ jobs:
           fi
           NEW_VERSION="v${VERSION_NUM}"
           ./scripts/check-version.sh "$NEW_VERSION"
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_NUM=$VERSION_NUM" >> $GITHUB_OUTPUT
 
           # Skip if a release tag for this version already exists
           if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
@@ -48,51 +52,99 @@ jobs:
             exit 0
           fi
 
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_NUM=$VERSION_NUM" >> $GITHUB_OUTPUT
           echo "SKIP=false" >> $GITHUB_OUTPUT
           echo "Releasing $NEW_VERSION"
 
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: version
+    if: needs.version.outputs.skip != 'true' || github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 22.04 runners: the binaries need glibc 2.35 or newer, so
+          # they run on Debian 12, Ubuntu 22.04 and anything newer, not only
+          # on the newest distributions. install.sh checks for the same.
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+
       - name: Build release
-        if: steps.version.outputs.SKIP != 'true'
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --verbose
 
       - name: Verify binary version
-        if: steps.version.outputs.SKIP != 'true'
         run: |
-          expected="ears ${{ steps.version.outputs.VERSION_NUM }}"
+          expected="ears ${{ needs.version.outputs.version_num }}"
           actual=$(target/release/ears --version)
           if [[ "$actual" != "$expected" ]]; then
             echo "Binary version mismatch: expected '$expected', got '$actual'" >&2
             exit 1
           fi
 
-      - name: Create tarball
-        if: steps.version.outputs.SKIP != 'true'
+      - name: Package
         run: |
-          mkdir -p release
-          cp target/release/ears release/
-          cp README.md release/ 2>/dev/null || true
-          cp LICENSE release/ 2>/dev/null || true
-          cd release && tar -czvf ../ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz *
+          set -euo pipefail
+          V=${{ needs.version.outputs.version }}
+          A=${{ matrix.arch }}
+          mkdir -p release dist
+          cp target/release/ears README.md LICENSE release/
+          # Two names for the same archive: the versioned one, and a fixed one
+          # so releases/latest/download/ears-linux-$A.tar.gz always resolves.
+          tar -C release -czf dist/ears-$V-linux-$A.tar.gz ears README.md LICENSE
+          cp dist/ears-$V-linux-$A.tar.gz dist/ears-linux-$A.tar.gz
+          cd dist
+          for f in *.tar.gz; do sha256sum "$f" > "$f.sha256"; done
+          if [[ $A == x86_64 ]]; then cp ../target/release/ears ears; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    name: Release
+    needs: [version, build]
+    if: github.event_name == 'push' && needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
 
       - name: Create git tag
-        if: steps.version.outputs.SKIP != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.version.outputs.VERSION }}
-          git push origin ${{ steps.version.outputs.VERSION }}
+          git tag ${{ needs.version.outputs.version }}
+          git push origin ${{ needs.version.outputs.version }}
 
       - name: Create GitHub release
-        if: steps.version.outputs.SKIP != 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.version.outputs.VERSION }}
-          name: ${{ steps.version.outputs.VERSION }}
-          files: |
-            ears-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz
-            target/release/ears
+          tag_name: ${{ needs.version.outputs.version }}
+          name: ${{ needs.version.outputs.version }}
+          # `ears` is the x86_64 binary on its own, as older releases had it.
+          files: dist/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

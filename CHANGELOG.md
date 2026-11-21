@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-23
+
+### Added
+
+- One-line install: `curl -fsSL .../install.sh | sh`. `install.sh` now checks
+  the runtime dependencies and offers to install the missing ones (pacman,
+  apt, dnf, zypper, apk), downloads the release binary for the CPU with its
+  checksum, and builds with cargo where there is none (musl, other CPUs,
+  Termux with `ort-dynamic`, glibc older than 2.35). `--service` installs the
+  ears-vad user unit. In a checkout it still builds that checkout.
+- Releases build x86_64 and aarch64 on Ubuntu 22.04 (glibc 2.35, instead of
+  the newest runner's 2.39), and publish `ears-linux-<arch>.tar.gz` under a
+  fixed name with a `.sha256` next to each archive.
+- `ort-dynamic` also finds Termux's ONNX Runtime.
+
 ### Changed
 
 - `grammars/bash.gbnf`: the body is optional (silence no longer forces a

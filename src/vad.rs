@@ -22,6 +22,8 @@ const SYSTEM_ORT: &[&str] = &[
     "/usr/lib/libonnxruntime.so.1",
     "/usr/local/lib/libonnxruntime.so",
     "/usr/lib/arm-linux-gnueabihf/libonnxruntime.so",
+    // Termux (`pkg install onnxruntime`)
+    "/data/data/com.termux/files/usr/lib/libonnxruntime.so",
 ];
 
 /// Point ort at the system ONNX Runtime unless ORT_DYLIB_PATH already does.
