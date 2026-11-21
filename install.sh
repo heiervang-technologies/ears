@@ -1,7 +1,9 @@
 #!/bin/sh
 # ears installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/heiervang-technologies/ears/main/install.sh | sh
+#   curl -fsSL https://ears.hei.tools/install | sh
+#
+# (ears.hei.tools/install redirects to this file on main.)
 #
 # Checks for the programs ears runs (PipeWire's recorder, a typing tool,
 # notifications, sound cues) and offers to install the missing ones with your
