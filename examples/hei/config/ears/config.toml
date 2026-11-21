@@ -1,0 +1,259 @@
+server = "http://localhost:30189/"
+device = "bluez_input.XX:XX:XX:XX:XX:XX"
+device_fallbacks = ["alsa_input.usb-YOUR_USB_MIC-00.mono-fallback"]
+filter_silence_artifacts = true
+typing_mode = "auto"
+auto_enter = false
+progressive_typing = false
+save_to_clipboard = false
+auto_correction = true
+bash_mode = false
+bash_terminal = false
+subtitles = true
+subtitle_modes = [
+    "standby",
+    "dictation",
+    "command",
+    "decide",
+]
+decide_timeouts = true
+cue_volume = 30
+live_decoding = "continuous"
+final_correction = false
+final_from_partial = "covered"
+
+[text_filters]
+lowercase = true
+remove_punctuation = true
+strict_alphabet = true
+alphabet_threshold = 0.5
+
+[language_servers]
+
+[vad]
+speech_threshold = 0.4000000059604645
+min_speech_duration_ms = 160
+max_silence_duration_ms = 1500
+pre_speech_buffer_ms = 500
+duck_enabled = false
+duck_percent = 50
+ghost = true
+auto_gain = true
+min_mean_probability = 0.4000000059604645
+command_silence_ms = 400
+finished_silence_ms = 700
+early_finish_ms = 350
+
+[ghost]
+color = "#ffcc33"
+underline = false
+frozen_color = "#cddc39"
+
+[commands]
+enabled = true
+enter = [
+    "enter",
+    "over",
+]
+sign_off = [
+    "over and out",
+    "peace",
+    "peace out",
+    "piece out",
+    "ears out",
+    "years out",
+]
+new_line = ["new line"]
+undo = ["scratch that"]
+back = ["back"]
+backtrack = [
+    "backtrack",
+    "back track",
+]
+standby = [
+    "ears vad",
+    "ears v a d",
+]
+wake = [
+    "ears on",
+    "listen clanker",
+    "hey clanker",
+    "hay clanker",
+    "h e y clanker",
+    "hey klanker",
+    "clanker",
+    "klanker",
+    "hey glinker",
+    "hey clinker",
+    "hey clunker",
+    "hey klinker",
+    "adsense",
+    "ad sense",
+    "ads on",
+]
+sleep = [
+    "ears off",
+    "years off",
+    "fuck off",
+    "f off",
+    "fuck of",
+    "yourself",
+    "fuck off clanker",
+    "fuck off klanker",
+    "fuck off clunker",
+    "f off clanker",
+    "fuck off kleiner",
+    "fuck off klecker",
+    "fuck off klinker",
+]
+literal = ["literal"]
+tail = true
+accept_ms = 200
+steer = [
+    "voice-cmd",
+    "handle",
+]
+steer_timeout_ms = 800
+text_fields_only = true
+type_anyway = [
+    "discord",
+    "vesktop",
+    "code",
+    "code-oss",
+    "slack",
+    "obsidian",
+    "signal",
+]
+sleep_on_language = ["sv"]
+
+[commands.keys]
+background = "ctrl+b"
+clear = "ctrl+u"
+"clear all" = "ctrl+u*40"
+"copy" = "super+c"
+"copy that" = "super+c"
+"copy to clipboard" = "super+c"
+"paste" = "super+v"
+"paste it" = "super+v"
+"clipboard paste" = "super+v"
+"paste from clipboard" = "super+v"
+erase = "ctrl+u"
+
+[commands.run]
+enabled = true
+
+[commands.run.centurion]
+phrases = [
+    "centurion",
+    "centurian",
+    "centurions",
+    "senturion",
+    "century on",
+]
+command = [
+    "haios-voice-route",
+    "stick",
+    "centurion",
+]
+resume = true
+
+[commands.run.cursor]
+phrases = [
+    "cursor mode",
+    "cursor",
+    "back to cursor",
+    "type here",
+]
+command = [
+    "haios-voice-route",
+    "cursor",
+]
+
+[commands.run.close-window]
+phrases = ["close window", "close the window", "close this window", "kill window"]
+command = ["hyprctl", "dispatch", "killactive"]
+
+[commands.run.ears-help]
+phrases = [
+    "ears help",
+    "help ears",
+    "years help",
+]
+command = ["ears-help"]
+
+[commands.run.friend-dismiss]
+command = [
+    "friend",
+    "dismiss",
+]
+
+[commands.run.friend-name]
+command = [
+    "friend",
+    "wake",
+    "--take",
+]
+
+[commands.run.friend-wake]
+command = [
+    "friend",
+    "wake",
+]
+
+[commands.run.regular]
+phrases = [
+    "ears on",
+    "regular mode",
+    "normal mode",
+    "regular ears",
+]
+command = [
+    "haios-voice-route",
+    "cursor",
+]
+resume = true
+
+[commands.run.show-commands]
+phrases = [
+    "show commands",
+    "show me the commands",
+    "hide commands",
+]
+command = [
+    "ears-commands",
+    "toggle",
+]
+
+[commands.run.talk-to-centurion]
+phrases = [
+    "talk to centurion",
+    "talk to centurian",
+    "stick to centurion",
+]
+command = [
+    "haios-voice-route",
+    "stick",
+    "centurion",
+]
+
+[commands.run.talking-stick]
+phrases = [
+    "talking stick",
+    "stick mode",
+    "to the stick",
+]
+command = [
+    "haios-voice-route",
+    "stick",
+]
+
+[vision]
+enabled = true
+server = "http://gpu-box.lan:30190"
+confirm_s = 8
+
+[say_echo]
+enabled = true
+log = "/tmp/live-subs-say.jsonl"
+window_s = 120.0
+talking_dir = ""

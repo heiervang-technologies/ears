@@ -1,0 +1,27 @@
+# voice-cmd plugin: one-word desktop commands. Phrases match the whole
+# utterance, so "detach" or "hover" said on their own only.
+
+[[command]]
+name = "tmux.detach"
+phrases = ["detach"]
+run = ["tmux-detach-focused"]
+
+[[command]]
+name = "hover.focus-or-launch"
+phrases = ["hover"]
+run = ["hover-focus-or-launch"]
+
+# "go to centurion": the focused terminal switches to that tmux session (a
+# bare shell attaches); elsewhere, like "focus". Names nothing open: typed.
+[[command]]
+name = "nav.goto"
+phrases = ["(?:go|switch|jump) to (?!workspace\\b)(.+)"]
+run = ["voice-nav", "goto", "{1}"]
+sync = true
+
+# "focus ears dev", "focus the browser", "focus youtube".
+[[command]]
+name = "nav.focus"
+phrases = ["focus (?!(?:left|right|up|down)$)(?:on )?(.+)"]
+run = ["voice-nav", "focus", "{1}"]
+sync = true

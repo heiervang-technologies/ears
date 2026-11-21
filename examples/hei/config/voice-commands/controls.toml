@@ -1,0 +1,14 @@
+# voice-cmd plugin: the cockpit handoff by voice (hai-os#438).
+# Said on its own, "my controls" takes the controls (agents' computer use is
+# blocked until released); "your controls" hands them back. Run from ears, so
+# the caller is the user, exactly as from a plain shell.
+
+[[command]]
+name = "controls.mine"
+phrases = ["my controls?"]
+run = ["my-controls"]
+
+[[command]]
+name = "controls.yours"
+phrases = ["your controls?", "you're controls?", "you have controls?"]
+run = ["your-controls"]

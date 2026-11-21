@@ -1,0 +1,16 @@
+# Markus's own Compensating Scaffolding entries (docs/rfc/0002).
+
+[meta]
+model = "qwen3-asr-1.7b"
+domain = "commands"
+generated = "2026-11-15"
+generator = "hand"
+
+# "clear" ([commands.keys], ctrl+u) heard as "Claire". Whole utterance only.
+[[entry]]
+meant = "clear"
+target = "keys"
+heard = "claire"
+mode = "homophone"
+source = "hand"
+status = "active"

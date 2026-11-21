@@ -123,6 +123,18 @@ cargo install --path .
 `./install.sh` in a checkout does the same dependency check, then builds and
 installs that checkout.
 
+### Extensions and a full example
+
+- [`extensions/overlay`](extensions/overlay/README.md) is a light along the
+  bottom edge of every screen that shows ears' mode and moves with your
+  voice, with live subtitles above it. It needs Quickshell on a layer-shell
+  Wayland compositor. `install.sh` offers it on Wayland, and `--overlay`
+  installs it.
+- [`examples/hei`](examples/hei/README.md) is the full voice-driven desktop
+  setup ears is developed against. It includes the config, about 350
+  command-mode actions, the steer router and its plugins, profiles, hooks
+  and a cs.d file, with a map of how they connect.
+
 ## Configuration
 
 Configuration is stored in `~/.config/ears/config.toml`:
