@@ -182,16 +182,29 @@ To be measured on centurion and a weak laptop before the targets are fixed:
 
 ### Technology
 
-**Tauri 2** (Rust core, web UI, WebView2 on Windows, WebKitGTK on Linux).
-Reasons: the app can link the ears crate directly for config parsing,
-validation and scaffolding logic instead of re-implementing them; it gives
-tray icon, global hotkeys, autostart, an installer bundler (MSI/NSIS, deb,
-AppImage) and a signed updater on both platforms; and the same window
-machinery can draw the light on Windows.
+**Keep the app a thin shell.** Every piece of logic (config parsing and
+validation, scaffolding, modes, model install steps) lives in ears and its
+CLI verbs, so the UI only renders `ears feed` and calls ears. Then the
+toolkit is a replaceable choice, not a foundation, and a toolkit that turns
+out badly on one desktop costs a rewrite of views only.
 
-Alternatives considered: egui (no native installer/updater story, weaker
-for dense editing views), Qt/QML (would share the Quickshell scene on Linux,
-but heavy to ship and license-sensitive on Windows).
+**Toolkit: undecided, settled by a spike.** Candidates:
+
+| toolkit | for | against |
+|---|---|---|
+| Tauri 2 | tray, hotkeys, autostart, MSI/deb/AppImage bundler and signed updater on both platforms; WebView2 is solid on Windows; dense editing views are easy in HTML | on Linux it runs on WebKitGTK, which in our experience behaves badly on Hyprland (blank or flickering windows, the DMA-BUF renderer, fractional scaling) |
+| egui / eframe | pure Rust on wgpu, no webview, so no WebKitGTK; one binary; behaves the same on Hyprland and Windows | no bundler or updater (we would build them); editing-heavy views take more work |
+| iced | as egui, retained-mode, closer to a conventional app | same gaps as egui |
+| Qt/QML | shares the Quickshell scene's language on Linux | heavy to ship on Windows, licence-sensitive |
+
+The spike: build the home view (four mode buttons, status from `ears feed`)
+in Tauri and in egui, and run both on Hyprland on centurion (floating and
+tiled, fractional scaling, after a suspend and resume) and on Windows 11.
+Pick the one that passes on both; if neither does, a native shell per
+platform (egui or Quickshell on Linux, Tauri on Windows) over the same ears
+verbs is the fallback, which the thin-shell rule keeps affordable.
+
+Whatever wins, the app stays small: a handful of views, no logic of its own.
 
 ### How it talks to ears
 
@@ -358,10 +371,10 @@ measured good enough.
 
 - Linux: AppImage and a deb, plus the existing `curl | sh` installer gaining
   `--desktop`. An AUR package only if published from our own account.
-- Windows: MSI via the Tauri bundler, Authenticode-signed so SmartScreen
+- Windows: MSI (the Tauri bundler, or WiX if the toolkit is not Tauri), Authenticode-signed so SmartScreen
   does not block it. Needs an EV or OV code-signing certificate: a
   procurement step with a lead time.
-- Updates: the Tauri updater with signed release manifests covers the app
+- Updates: a signed updater (Tauri's, or a small one of our own over the same signed release manifests) covers the app
   and the bundled ears binary. This closes #84 for desktop installs. Model
   runtimes update through the model manager's manifest, separately and only
   on request.
@@ -373,9 +386,9 @@ measured good enough.
 
 Each phase ends with something usable.
 
-0. **Decisions** (this RFC): names, Tauri, `ears feed`, the Windows Qwen path,
+0. **Decisions** (this RFC): names, the thin-shell rule, `ears feed`, the Windows Qwen path,
    character mode's colour and entry phrases.
-1. **`ears feed` and the app on Linux**: home, modes, config with history,
+1. **`ears feed`, the toolkit spike, and the app on Linux**: home, modes, config with history,
    scaffolding view. The light keeps Quickshell. No Windows yet.
 2. **Character mode on Linux**: vocabulary table, `characters.gbnf`,
    Moonshine trie mask, glyph feedback, the practice pane and its
@@ -417,6 +430,8 @@ Each phase ends with something usable.
 5. Whether the app ships the TUI too, or retires it for desktop installs.
 6. Code-signing certificate: who procures it, and under which entity.
 7. Rename of RFC 0003's `ears-desk` to `ears-wm`: agree before 0003 merges.
+8. App toolkit: Tauri or egui, decided by the spike. Tauri on Hyprland is
+   the known risk.
 
 ## Task list
 
@@ -445,7 +460,7 @@ The complete list of work, for issues once the RFC is accepted.
 - [ ] Health and known-clip self-test endpoint use for install verification
 
 **Desktop app**
-- [ ] Tauri skeleton: tray, autostart, single instance, global hotkeys
+- [ ] Toolkit spike on Hyprland and Windows 11 (Tauri vs egui), then skeleton: tray, autostart, single instance, global hotkeys
 - [ ] Home view and mode switching
 - [ ] Scaffolding view with approve/reject
 - [ ] Config form, raw editor, history and diff
