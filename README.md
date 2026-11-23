@@ -74,12 +74,38 @@ bash ./models/download-ggml-model.sh base.en
 
 ## Installation
 
+### One line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/heiervang-technologies/ears/main/install.sh | sh
+```
+
+It checks for what ears runs (`pw-record`, `wtype` on Wayland or `ydotool`,
+`notify-send`, `paplay`, `pkill`), asks before installing the missing ones
+with your package manager (pacman, apt, dnf, zypper, apk), then puts the
+latest release's binary for your CPU (x86_64 or aarch64, glibc 2.35 or newer)
+in `~/.local/bin`. Where there is no prebuilt binary (musl, other CPUs,
+Termux, an older glibc) it builds with cargo instead. Options go after
+`sh -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/heiervang-technologies/ears/main/install.sh \
+  | sh -s -- --yes --service      # no questions; also enable the ears-vad user unit
+```
+
+`--no-deps`, `--from-source`, `--version vX.Y.Z` and `--prefix DIR` do what
+they say; `--help` lists them. Without a terminal (CI, `ssh` without `-t`) it
+only prints the package command, unless `--yes` is given.
+
 ### From GitHub Releases
+
+Each release has `ears-linux-x86_64.tar.gz` and `ears-linux-aarch64.tar.gz`
+(plus `.sha256`), so the latest one is always at the same URL:
 
 ```bash
 mkdir -p ~/.local/bin
-gh release download latest --repo heiervang-technologies/ears --pattern 'ears' --dir ~/.local/bin --clobber
-chmod +x ~/.local/bin/ears
+curl -fsSL https://github.com/heiervang-technologies/ears/releases/latest/download/ears-linux-$(uname -m).tar.gz \
+  | tar -xz -C ~/.local/bin ears
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -94,13 +120,8 @@ cargo build --release
 cargo install --path .
 ```
 
-### Using install.sh
-
-```bash
-git clone https://github.com/heiervang-technologies/ears
-cd ears
-./install.sh
-```
+`./install.sh` in a checkout does the same dependency check, then builds and
+installs that checkout.
 
 ## Configuration
 
