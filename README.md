@@ -77,7 +77,7 @@ bash ./models/download-ggml-model.sh base.en
 ### One line
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/heiervang-technologies/ears/main/install.sh | sh
+curl -fsSL https://ears.hei.tools/install | sh
 ```
 
 It checks for what ears runs (`pw-record`, `wtype` on Wayland or `ydotool`,
@@ -89,7 +89,7 @@ Termux, an older glibc) it builds with cargo instead. Options go after
 `sh -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/heiervang-technologies/ears/main/install.sh \
+curl -fsSL https://ears.hei.tools/install \
   | sh -s -- --yes --service      # no questions; also enable the ears-vad user unit
 ```
 
