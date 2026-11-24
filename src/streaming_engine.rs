@@ -354,6 +354,12 @@ pub struct StreamingEngine {
     cs: crate::config::CsConfig,
     /// The opt-in utterance journal for `ears cs mine` ([`crate::cs::mine`]).
     cs_journal: Option<crate::cs::mine::Journal>,
+    /// `focus_target` / `restore_focus`; None (tests, ws-listen): focus is
+    /// never touched.
+    focus: Option<crate::focus_target::FocusSettings>,
+    /// Focus lent to the window under the pointer for the utterance in
+    /// progress; dropping it gives focus back.
+    focus_borrow: Option<crate::focus_target::FocusBorrow>,
 }
 
 impl StreamingEngine {
@@ -435,6 +441,8 @@ impl StreamingEngine {
                 ..Default::default()
             },
             cs_journal: None,
+            focus: None,
+            focus_borrow: None,
         })
     }
 
@@ -499,10 +507,51 @@ impl StreamingEngine {
         self.aim_early_end();
 
         if let Some(segment) = segment {
-            self.process_segment(segment).await?;
+            let processed = self.process_segment(segment).await;
+            // A segment cut at the maximum length while speech goes on
+            // keeps the borrow for the rest of the utterance.
+            if !self.vad_detector.is_speaking() {
+                self.focus_restore();
+            }
+            processed?;
         }
 
         Ok(())
+    }
+
+    /// `focus_target` / `restore_focus` for the utterances to come.
+    pub fn set_focus_target(&mut self, settings: crate::focus_target::FocusSettings) {
+        self.focus = Some(settings);
+    }
+
+    /// At the start of an utterance that will be dictated into a window:
+    /// with `focus_target = "mouse"`, focus the window under the pointer.
+    fn focus_borrow(&mut self) {
+        let Some(settings) = self.focus else {
+            return;
+        };
+        if self.focus_borrow.is_some()
+            || self.typing_mode == TypingMode::None
+            || self.claimed
+            || self.typing_suspended
+            || !matches!(self.mode, crate::vad_mode::Mode::Dictation)
+            || self.deciding()
+        {
+            return;
+        }
+        self.focus_borrow = run_blocking(|| crate::focus_target::FocusBorrow::begin(settings));
+        if self.focus_borrow.is_some() {
+            // The shell-prompt probe ran at speech onset, on the window
+            // that had focus then.
+            self.aim_grammar();
+        }
+    }
+
+    /// After the utterance's final delivery: give focus back.
+    fn focus_restore(&mut self) {
+        if let Some(borrow) = self.focus_borrow.take() {
+            run_blocking(|| borrow.restore());
+        }
     }
 
     /// Let VAD end the utterance in progress early when its live transcript
@@ -808,6 +857,7 @@ impl StreamingEngine {
             // Complete speech segment detected. A short word kept from a
             // rejected candidate was never announced as started.
             if !self.was_speaking {
+                self.focus_borrow();
                 self.send_event(StreamingEvent::SpeechStarted);
             }
             self.was_speaking = false;
@@ -831,6 +881,8 @@ impl StreamingEngine {
 
         // Fire SpeechStarted only on the false→true transition (confirmed)
         if is_speaking && !self.was_speaking {
+            // Before any ghost partial: the preedit must land in the target.
+            self.focus_borrow();
             self.send_event(StreamingEvent::SpeechStarted);
         }
 
@@ -2150,6 +2202,7 @@ impl StreamingEngine {
 
     /// Reset the engine (start fresh)
     pub fn reset(&mut self) {
+        self.focus_restore();
         self.audio_buffer.clear();
         self.vad_detector.reset();
         self.local_agreement.reset();

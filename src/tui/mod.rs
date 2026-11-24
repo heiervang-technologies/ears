@@ -219,6 +219,7 @@ pub async fn start_vad_pipeline(
     engine.set_say_echo(config.say_echo.clone());
     engine.set_cs(config.cs.clone());
     engine.set_cs_journal(crate::cs::mine::Journal::from_config(&config.cs));
+    engine.set_focus_target(crate::focus_target::FocusSettings::from_config(config));
 
     // Shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -407,6 +408,13 @@ pub async fn run(profile: Option<&str>) -> Result<()> {
                             typing = next;
                         }
                         let _ = respond.send(crate::typing_switch::describe(typing));
+                    }
+                    crate::ipc::EarsCommand::FocusTarget { request, respond } => {
+                        let reply = crate::focus_target::respond(request, config.focus_target);
+                        if request.changes_state() {
+                            app.add_log(&format!("Focus target: {} (remote switch)", reply));
+                        }
+                        let _ = respond.send(reply);
                     }
                 }
             }

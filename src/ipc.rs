@@ -136,6 +136,13 @@ pub enum EarsCommand {
         request: crate::typing_switch::TypingRequest,
         respond: tokio::sync::oneshot::Sender<String>,
     },
+    /// Dictate into the keyboard-focused window or the one under the mouse
+    /// (`focus-target-keyboard|mouse|toggle|status`); persisted, read at
+    /// the next utterance.
+    FocusTarget {
+        request: crate::focus_target::FocusTargetRequest,
+        respond: tokio::sync::oneshot::Sender<String>,
+    },
     /// Switch standby (`standby-on|off|toggle`): `on` stands by, `off`
     /// resumes, as the wake phrases do.
     Standby { wake: crate::wake::Wake },
@@ -207,6 +214,21 @@ pub fn start_cmd_server_at(
                                                 .expect("checked above");
                                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                                         let _ = tx.send(EarsCommand::Typing {
+                                            request,
+                                            respond: resp_tx,
+                                        });
+                                        resp_rx
+                                            .await
+                                            .unwrap_or_else(|_| "error:internal".to_string())
+                                    }
+                                    v if crate::focus_target::FocusTargetRequest::from_command(v)
+                                        .is_some() =>
+                                    {
+                                        let request =
+                                            crate::focus_target::FocusTargetRequest::from_command(v)
+                                                .expect("checked above");
+                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                        let _ = tx.send(EarsCommand::FocusTarget {
                                             request,
                                             respond: resp_tx,
                                         });
