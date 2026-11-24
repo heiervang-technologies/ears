@@ -1,0 +1,26 @@
+server = "http://localhost:30189/"
+device = "alsa_input.usb-YOUR_USB_MIC-00.mono-fallback"
+model = "Qwen/Qwen3-ASR-1.7B"
+typing_mode = "wtype"
+# Command lands at the prompt un-executed — review it, press Enter yourself.
+auto_enter = false
+progressive_typing = false
+save_to_clipboard = false
+bash_mode = true
+cue_volume = 0
+
+[text_filters]
+lowercase = false
+remove_punctuation = false
+strict_alphabet = true
+alphabet_threshold = 0.5
+
+[language_servers]
+
+[vad]
+speech_threshold = 0.5
+min_speech_duration_ms = 300
+max_silence_duration_ms = 700
+pre_speech_buffer_ms = 500
+duck_enabled = false
+duck_percent = 50

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# ears post-transcribe hook.
+#
+# When $XDG_RUNTIME_DIR/ears/route-to-stick exists (set by
+# ears-walker-dictate --stick), deliver the transcript to whichever agent
+# holds the talking stick, via director. Otherwise no-op.
+#
+# ears copies the recording to a hook-*.wav and passes it as $1 — this hook
+# is responsible for deleting it, in every path.
+AUDIO="${1:-}"
+TEXT="${2:-}"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/ears"
+FLAG="$STATE_DIR/route-to-stick"
+
+cleanup() { [[ -n "$AUDIO" ]] && rm -f "$AUDIO"; }
+trap cleanup EXIT
+
+[[ -f "$FLAG" ]] || exit 0
+rm -f "$FLAG"
+
+[[ -z "$TEXT" ]] && exit 0
+
+holder=$(cat /tmp/talking-stick-holder 2>/dev/null)
+if [[ -z "$holder" ]]; then
+    notify-send -u critical "ears" "No one holds the talking stick — transcript not delivered: $TEXT"
+    exit 0
+fi
+
+name=$(director resolve "$holder" 2>/dev/null)
+[[ -z "$name" ]] && name="$holder"
+
+director send "$name" "$TEXT" >/dev/null 2>&1
+notify-send "ears" "Routed to $name: $TEXT"

@@ -1,0 +1,6 @@
+# centurion's desktop head: wake it by voice (centurion-voice-link animates it;
+# this never starts a Claude session)
+[[command]]
+name = "centurion.wake"
+phrases = ["(hey )?centurion,? wake( up)?", "wake up,? centurion"]
+run = ["centurion-eye", "wake"]

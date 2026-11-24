@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `extensions/overlay`: the ears light and subtitles (a Quickshell scene fed
+  by `ears-overlay`, moved here from HAIos), with a user unit. `install.sh
+  --overlay` installs it, and Quickshell where pacman has it. On Wayland it
+  is offered by default.
+- `examples/hei`: a complete voice-driven desktop configuration with a map
+  of how its pieces connect.
+
 ## [1.3.0] - 2026-11-23
 
 ### Added

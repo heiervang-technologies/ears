@@ -1,0 +1,1391 @@
+#!/usr/bin/python3
+# ears-overlay: the ears light and subtitles (a Quickshell scene). Part of
+# the ears repo, extensions/overlay; see its README.md.
+"""The ears overlay: the bottom edge of every screen shows whether ears VAD has
+the microphone open, and moves like liquid with your voice.
+
+  off        a dim grey line: nothing is recorded
+  listening  cyan: what you say is typed where the cursor is
+             yellow: it goes to the talking stick (agent-tools `talking-stick listen`)
+             green, the call: you answered an agent's call (it asked for
+             the talking stick); what you say goes to that agent alone
+             pale blue: typing is off and nothing takes it
+             green: a push-to-talk voice command (ears-embed) is recording
+             violet: command mode ("command" said alone): speech is routed
+             to actions by embedding, nothing is typed
+  standby    orange: the mic is open, but only the wake phrase is acted on
+  fault      red, breathing slowly: the mic is open but ears is not hearing
+             (no audio arriving, capture stopped), its health report has
+             gone stale, or the ASR server is down; words will not arrive
+  warning    the normal colour with a reddish rim: the ASR server is slow or
+             ears fell back to a worse path, or the mic delivers silence
+
+Decisions (red): while `ears decide` has a question open, the line turns
+red and the question and its options float above the subtitles; read one
+out (or its number). The one taken swells and the rest fall back; what
+matched nothing shakes the row and shows as "? what was heard". A decision
+with room for your own answer (--other) shows it in place of that line.
+With a timeout (a quick time event) a bar under them drains from left
+to right over exactly that time.
+
+Every feed line carries "tone", the colour the line is drawn in. Mode
+changes (no level) also go to $XDG_RUNTIME_DIR/ears/led.json for other
+consumers, e.g. a desktop shader following the ears colour.
+
+Subtitles: while `ears subtitles on`, what ears hears is drawn centred just
+above the line, small and translucent in the line's colour, fuller while you
+speak, the words still forming fainter, a recognised command radiant,
+while a small "CC" at the right end of the line says the current mode is
+captioned (config subtitle_modes: standby, dictation, command), and fades a few seconds after
+the utterance is committed (ears writes $XDG_RUNTIME_DIR/ears/subtitle.json).
+
+While you speak the edge swells into layered waves; when you stop it settles
+flat, and at rest nothing is redrawn. It is click-through and never takes
+focus. One Quickshell scene (embedded below) draws it on every screen; this
+tool's `feed` gives it the state and the mic level as JSON lines.
+
+Start it with `ears-overlay start` (or the ears-overlay.service user unit,
+which runs the scene in the foreground). Opt out with
+~/.config/ears/no-overlay. Yellow (talking stick), green (a call) and the
+ears-embed push-to-talk colour come from HAIos tools; without them those
+states simply never show.
+
+The state is never taken from a file alone: VAD counts as running only while
+the pid in $XDG_RUNTIME_DIR/ears/vad.pid is alive. The level is read from the
+device ears records from, and only while VAD runs, so this never opens a
+microphone that ears has closed. Faults come from ears' own health report
+($XDG_RUNTIME_DIR/ears/vad-health.json), and only while it belongs to that
+live VAD process in this boot. The feed never blocks on the microphone: a
+recorder that goes quiet is restarted, and the state is re-read twice a second
+whether or not audio arrives.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import re
+import select
+import time
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
+
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+EARS_RUN = os.environ.get("EARS_OVERLAY_RUN", os.path.join(RUNTIME, "ears"))
+PROC = os.environ.get("EARS_OVERLAY_PROC", "/proc")
+EARS_CONFIG = os.environ.get("EARS_OVERLAY_CONFIG", os.path.expanduser("~/.config/ears/config.toml"))
+BOOT_ID = os.environ.get("EARS_OVERLAY_BOOT_ID", "/proc/sys/kernel/random/boot_id")
+OPT_OUT = os.path.expanduser("~/.config/ears/no-overlay")
+SCENE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "ears", "overlay")
+RATE = 16000
+CHUNK = RATE // 20  # 50 ms
+FLOOR_DB = -70.0
+SPAN_DB = 30.0  # from the room's noise floor to a full wave
+
+
+def embed_recording() -> bool:
+    """ears-embed (push-to-talk voice commands by embedding) has the mic open."""
+    try:
+        with open(os.path.join(RUNTIME, "ears-embed.pid")) as f:
+            os.kill(int(f.read().split()[0]), 0)
+        return True
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def state() -> str:
+    if embed_recording():
+        return "listening"
+    try:
+        with open(os.path.join(EARS_RUN, "vad.pid")) as f:
+            pid = int(f.read().split()[0])
+        os.kill(pid, 0)
+    except (OSError, ValueError, IndexError):
+        return "off"
+    return "standby" if os.path.exists(os.path.join(EARS_RUN, "vad.standby")) else "listening"
+
+
+def typing_on() -> bool:
+    path = os.environ.get("EARS_TYPING_STATE") or os.path.join(
+        os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "ears", "typing")
+    try:
+        with open(path) as f:
+            return f.read().strip() != "off"
+    except OSError:
+        return True  # ears: a missing file means typing is on
+
+
+def stick_listening() -> bool:
+    for pid in os.listdir(PROC):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(os.path.join(PROC, pid, "cmdline"), "rb") as f:
+                argv = f.read().split(b"\0")
+        except OSError:
+            continue
+        names = [os.path.basename(a) for a in argv[:3]]
+        if b"talking-stick" in names and b"listen" in argv[:4]:
+            return True
+    return False
+
+
+CALL_FILE = os.environ.get("HAIOS_CALL_FILE") or os.path.join(RUNTIME, "haios-call.json")
+
+
+def on_call() -> bool:
+    """A call is live: haios-holocall call keeps its pid in haios-call.json."""
+    try:
+        with open(CALL_FILE) as f:
+            os.kill(int(json.load(f)["pid"]), 0)
+        return True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def command_mode() -> bool:
+    """ears VAD is in command mode (marker written by ears, ears#230)."""
+    return os.path.exists(os.path.join(EARS_RUN, "vad.command"))
+
+
+def decision() -> dict | None:
+    """The decision `ears decide` has open, while its asker lives."""
+    try:
+        with open(os.path.join(EARS_RUN, "decision.json")) as f:
+            d = json.load(f)
+        os.kill(int(d["pid"]), 0)
+        return d if d.get("options") else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def vision() -> dict | None:
+    """What `ears look` is showing (vision mode, pink), while it runs."""
+    try:
+        with open(os.path.join(EARS_RUN, "vision.json")) as f:
+            v = json.load(f)
+        os.kill(int(v["id"]), 0)
+        return v
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def route() -> str:
+    """Where VAD sends words: the cursor, the talking stick, a call, or nowhere
+    (typing off and nobody listening: they are only published), a
+    push-to-talk voice command (ears-embed), actions (command mode), or the
+    answer to an open decision (red; it takes every utterance). Vision
+    mode (pink) outranks its own confirming decision."""
+    if vision() is not None or os.path.exists(os.path.join(EARS_RUN, "vad.vision")):
+        return "vision"
+    if decision() is not None:
+        return "decide"
+    if embed_recording():
+        return "command"
+    if command_mode():
+        return "embed"
+    if on_call():
+        return "call"
+    if typing_on():
+        return "cursor"
+    return "stick" if stick_listening() else "none"
+
+
+def ears_config() -> dict:
+    try:
+        with open(EARS_CONFIG, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return {}
+    if tomllib:
+        try:
+            return tomllib.loads(raw.decode())
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+            return {}
+    # Without tomllib: just the two keys used here.
+    text = raw.decode(errors="replace")
+    config: dict = {}
+    device = re.search(r'^device\s*=\s*"([^"]*)"', text.split("\n[", 1)[0], re.M)
+    if device:
+        config["device"] = device.group(1)
+    commands = re.search(r"^\[commands\]\s*$(.*?)(?=^\[|\Z)", text, re.M | re.S)
+    if commands and re.search(r"^enabled\s*=\s*true\b", commands.group(1), re.M):
+        config["commands"] = {"enabled": True}
+    return config
+
+
+def wanted() -> tuple[bool, str]:
+    if os.path.exists(OPT_OUT):
+        return False, f"opted out ({OPT_OUT})"
+    beside = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "ears")
+    if not shutil.which("ears") and not os.access(beside, os.X_OK):
+        return False, "ears is not installed"
+    if not shutil.which("qs"):
+        return False, "quickshell (qs) is not installed"
+    return True, "ears and quickshell are installed"
+
+
+HEALTH_STALE_MS = 5000   # ears rewrites its health report every second
+NO_AUDIO_MS = 3000       # same bound as ears' own "no audio arriving"
+RECORDER_QUIET_S = 2.0   # our own recorder: restart it after this long without data
+RECORDER_BACKOFF_MAX_S = 10.0
+CHECK_EVERY_S = 0.5
+
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _vad_pid() -> int | None:
+    try:
+        pid = int((_read(os.path.join(EARS_RUN, "vad.pid")) or "").split()[0])
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _start_ticks(pid: int) -> str | None:
+    stat = _read(os.path.join(PROC, str(pid), "stat"))
+    if not stat:
+        return None
+    fields = stat.rsplit(")", 1)[-1].split()
+    return fields[19] if len(fields) > 19 else None
+
+
+def health() -> dict | None:
+    """ears' health report, only while it belongs to the live VAD process of
+    this boot; a leftover file from a dead or other process is ignored."""
+    pid = _vad_pid()
+    if pid is None:
+        return None
+    try:
+        h = json.loads(_read(os.path.join(EARS_RUN, "vad-health.json")) or "")
+    except ValueError:
+        return None
+    if not isinstance(h, dict) or h.get("pid") != pid:
+        return None
+    boot = (_read(BOOT_ID) or "").strip()
+    if boot and h.get("boot_id") and h["boot_id"] != boot:
+        return None
+    ticks = _start_ticks(pid)
+    if ticks and h.get("process_start_ticks") and str(h["process_start_ticks"]) != ticks:
+        return None
+    return h
+
+
+def diagnose(h: dict | None, now_ms: int | None = None) -> tuple[str | None, str | None]:
+    """(fault, warning) from a health report: fault means words will not
+    arrive, warning means they arrive worse or slower."""
+    if h is None:
+        return None, None
+    now = int(time.monotonic() * 1000) if now_ms is None else now_ms
+    try:
+        if now - int(h.get("updated_monotonic_ms", 0)) > HEALTH_STALE_MS:
+            return "stale", None
+        if h.get("capture_error"):
+            return "mic", None
+        last = h.get("capture_last_ms")
+        since = int(last) if last is not None else int(h.get("stage_since_ms", now))
+        if now - since > NO_AUDIO_MS:
+            return "mic", None
+    except (TypeError, ValueError):
+        return "stale", None
+    asr = h.get("asr")
+    asr_state = asr.get("state") if isinstance(asr, dict) else None
+    if asr_state == "down":
+        return "asr", None
+    if asr_state == "degraded":
+        return None, "asr-degraded"
+    if h.get("mic_warning") == "mic silent":
+        return None, "mic-silent"
+    return None, None
+
+
+def captioned(s: str, where: str) -> bool:
+    """Subtitles show in the current mode: the marker ears keeps while they
+    are on lists the modes they show in (`subtitle_modes`)."""
+    if s == "off":
+        return False
+    try:
+        with open(os.path.join(EARS_RUN, "subtitles.on")) as f:
+            modes = f.read().split() or ["standby", "dictation", "command"]
+    except OSError:
+        return False
+    mode = ("decide" if where == "decide" else "standby" if s == "standby"
+            else "command" if where == "embed" else "dictation")
+    return mode in modes
+
+
+FAULT_TONE = "#f05a5a"
+# Steady where a fault breathes, and deeper.
+DECIDE_TONE = "#ff3344"
+# Vision mode (`ears look`): pink, since cyan is dictation's.
+VISION_TONE = "#ff4fd8"
+
+
+def tone(s: str, where: str, fault: str | None) -> str:
+    """The colour the line is drawn in: the one palette for every consumer."""
+    if s != "off" and fault:
+        return FAULT_TONE
+    if s != "off" and where == "decide":
+        return DECIDE_TONE
+    if where == "vision":
+        return VISION_TONE
+    if s == "standby":
+        return "#ff9e1f"
+    if s != "listening":
+        return "#6b7280"
+    return {"stick": "#facc15", "call": "#22c55e", "command": "#1fe88a", "embed": "#a78bfa",
+            "none": "#8fb8c4"}.get(where, "#22d3ee")
+
+
+# Mode changes only (no level), for other consumers: a file is cheaper
+# than a second feed, which would open a second recorder.
+STATE_FILE = os.path.join(EARS_RUN, "led.json")
+_last_state: dict | None = None
+
+
+def publish(line: dict) -> None:
+    global _last_state
+    state = {k: line[k] for k in ("state", "route", "fault", "warn", "cc", "tone")}
+    if state == _last_state:
+        return
+    _last_state = state
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
+
+
+def emit(s: str, level: float = 0.0, where: str = "cursor",
+         fault: str | None = None, warn: str | None = None) -> None:
+    line = {"state": s, "route": where, "level": round(level, 3),
+            "fault": fault, "warn": warn, "cc": captioned(s, where),
+            "tone": tone(s, where, fault)}
+    print(json.dumps(line), flush=True)
+    publish(line)
+
+
+class Subtitle:
+    """Pass ears' subtitle line to the scene when it changes."""
+
+    def __init__(self) -> None:
+        self.path = os.path.join(EARS_RUN, "subtitle.json")
+        self.seen: int | None = None
+
+    def poll(self) -> None:
+        try:
+            stamp = os.stat(self.path).st_mtime_ns
+        except OSError:
+            stamp = None
+        if stamp == self.seen:
+            return
+        self.seen = stamp
+        line = {"text": "", "settled": 0, "final": True}
+        if stamp is not None:
+            try:
+                with open(self.path) as f:
+                    line = json.load(f)
+            except (OSError, ValueError):
+                return
+        print(json.dumps({"subtitle": line}), flush=True)
+
+
+class Vision:
+    """Pass what `ears look` shows (or its end) to the scene when it changes."""
+
+    def __init__(self) -> None:
+        self.path = os.path.join(EARS_RUN, "vision.json")
+        self.seen: tuple | None = None
+
+    def poll(self) -> None:
+        try:
+            stamp = os.stat(self.path).st_mtime_ns
+        except OSError:
+            stamp = None
+        v = vision() if stamp is not None else None
+        key = (stamp, v is not None)
+        if key == self.seen:
+            return
+        self.seen = key
+        if v is not None:
+            v["stamp"] = stamp
+        print(json.dumps({"vision": v}), flush=True)
+
+
+class Chant:
+    """Pass chant mode's meters (chant.json) to the scene while chanting
+    (the vad.chant marker), and its end."""
+
+    def __init__(self) -> None:
+        self.marker = os.path.join(EARS_RUN, "vad.chant")
+        self.path = os.path.join(EARS_RUN, "chant.json")
+        self.seen: tuple | None = None
+
+    def poll(self) -> None:
+        on = os.path.exists(self.marker)
+        try:
+            stamp = os.stat(self.path).st_mtime_ns if on else None
+        except OSError:
+            stamp = None
+        key = (on, stamp)
+        if key == self.seen:
+            return
+        self.seen = key
+        line = None
+        if on:
+            line = {"meters": [], "heard": "", "live": False}
+            if stamp is not None:
+                try:
+                    with open(self.path) as f:
+                        line = json.load(f)
+                except (OSError, ValueError):
+                    return
+        print(json.dumps({"chant": line}), flush=True)
+
+
+class Decision:
+    """Pass the open decision (or its end) to the scene when it changes,
+    and what ears made of each answer (decision-last.json) for feedback."""
+
+    def __init__(self) -> None:
+        self.seen: str | None = None
+        self.last = os.path.join(EARS_RUN, "decision-last.json")
+        self.heard: int | None = None
+
+    def poll(self) -> None:
+        # Feedback first: an answer closes the decision in the same breath.
+        try:
+            stamp = os.stat(self.last).st_mtime_ns
+        except OSError:
+            stamp = None
+        if stamp is not None and stamp != self.heard:
+            self.heard = stamp
+            try:
+                with open(self.last) as f:
+                    print(json.dumps({"decided": json.load(f)}), flush=True)
+            except (OSError, ValueError):
+                pass
+        d = decision()
+        key = d.get("id") if d else None
+        if key == self.seen:
+            return
+        self.seen = key
+        print(json.dumps({"decision": d}), flush=True)
+
+
+_HAS_RAW: bool | None = None
+
+
+def pw_record_has_raw() -> bool:
+    global _HAS_RAW
+    if _HAS_RAW is None:
+        try:
+            out = subprocess.run(["pw-record", "--help"], capture_output=True, text=True,
+                                 timeout=5)
+            _HAS_RAW = "--raw" in out.stdout + out.stderr
+        except (OSError, subprocess.SubprocessError):
+            _HAS_RAW = False
+    return _HAS_RAW
+
+
+def capture_device() -> str | None:
+    """The microphone ears really records from: the device it opened (its
+    health report, e.g. a fallback when the configured mic is missing), else
+    the configured one. Recording the configured mic while ears fell back to
+    another gives a flat edge (2026-11-16: headset gone, desk mic in use)."""
+    opened = (health() or {}).get("device_opened")
+    if isinstance(opened, str) and opened:
+        return opened
+    return ears_config().get("device")
+
+
+def record() -> subprocess.Popen:
+    override = os.environ.get("EARS_OVERLAY_RECORDER")
+    if override:  # tests: a stand-in recorder
+        return subprocess.Popen(["/bin/sh", "-c", override], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    cmd = ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16",
+           "--properties", "node.dont-reconnect=true", "-"]
+    # Raw samples on stdout: PipeWire 1.6.10 otherwise writes a big-endian
+    # Sun/AU container there, read as full-scale noise (ears#226).
+    if pw_record_has_raw():
+        cmd.insert(-1, "--raw")
+    device = capture_device()
+    if device:
+        cmd[1:1] = ["--target", device]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def stop_recorder(rec: subprocess.Popen | None) -> None:
+    if rec is None:
+        return
+    try:
+        rec.kill()
+    except OSError:
+        pass
+    try:
+        rec.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def cmd_feed(once: bool) -> int:
+    def look() -> tuple[str, str, str | None, str | None]:
+        s = state()
+        where = route()
+        fault, warn = diagnose(health()) if s != "off" and where != "command" else (None, None)
+        if where == "embed":
+            # Command mode does not transcribe: the ASR server is not in the path.
+            fault = None if fault == "asr" else fault
+            warn = None if warn == "asr-degraded" else warn
+        return s, where, fault, warn
+
+    if once:
+        s, where, fault, warn = look()
+        emit(s, 0.0, where, fault, warn)
+        return 0
+
+    # Ended by the scene (SIGTERM/SIGHUP): unwind, so the recorder is reaped.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(0))
+    rec: subprocess.Popen | None = None
+    rec_device: str | None = None
+    buf = b""
+    noise = None
+    level = 0.0
+    backoff = 0.5
+    start_at = 0.0
+    last_data = 0.0
+    checked = 0.0
+    s, where, fault, warn = "off", "cursor", None, None
+    shown = None
+    subtitle = Subtitle()
+    asked = Decision()
+    looked = Vision()
+    chanted = Chant()
+    try:
+        while True:
+            now = time.monotonic()
+            subtitle.poll()
+            asked.poll()
+            looked.poll()
+            chanted.poll()
+            if now - checked >= CHECK_EVERY_S:
+                checked = now
+                s, where, fault, warn = look()
+                if s == "off":
+                    stop_recorder(rec)
+                    rec, buf, noise, level = None, b"", None, 0.0
+                elif rec is not None and capture_device() != rec_device:
+                    # ears switched mics (fallback, or back): follow it.
+                    stop_recorder(rec)
+                    rec, buf, noise, level, start_at = None, b"", None, 0.0, now
+                current = (s, where, fault, warn)
+                if s != "off" or current != shown:
+                    # While the mic is open, emit at least twice a second so
+                    # the scene sees state changes even without audio.
+                    emit(s, level if rec else 0.0, where, fault, warn)
+                    shown = current
+            if s == "off":
+                time.sleep(CHECK_EVERY_S)
+                continue
+            if rec is None and now >= start_at:
+                rec_device = capture_device()
+                rec = record()
+                os.set_blocking(rec.stdout.fileno(), False)
+                last_data, buf = now, b""
+            if rec is None:
+                time.sleep(0.1)
+                continue
+            ready, _, _ = select.select([rec.stdout], [], [], 0.1)
+            data = b""
+            if ready:
+                try:
+                    data = os.read(rec.stdout.fileno(), 65536)
+                except BlockingIOError:
+                    data = b""
+                if not data and rec.poll() is not None:  # recorder ended
+                    stop_recorder(rec)
+                    rec, level, start_at = None, 0.0, now + backoff
+                    backoff = min(backoff * 2, RECORDER_BACKOFF_MAX_S)
+                    continue
+            if data:
+                last_data = now
+                backoff = 0.5
+                buf += data
+                while len(buf) >= CHUNK * 2:
+                    chunk, buf = buf[:CHUNK * 2], buf[CHUNK * 2:]
+                    samples = struct.unpack(f"<{CHUNK}h", chunk)
+                    rms = math.sqrt(sum(x * x for x in samples) / CHUNK) / 32768
+                    db = 20 * math.log10(rms) if rms > 0 else FLOOR_DB
+                    # The room's noise floor follows quiet quickly and loud slowly,
+                    # so the wave is speech above it and not the fan.
+                    if noise is None or db < noise:
+                        noise = db if noise is None else noise + (db - noise) * 0.3
+                    else:
+                        noise += 0.03
+                    level = min(1.0, max(0.0, (db - noise - 4) / SPAN_DB))
+                    emit(s, level, where, fault, warn)
+            elif now - last_data > RECORDER_QUIET_S:
+                # A recorder that delivers nothing (its node vanished) is
+                # restarted; meanwhile the edge stays flat, never frozen.
+                stop_recorder(rec)
+                rec, level, start_at = None, 0.0, now + backoff
+                backoff = min(backoff * 2, RECORDER_BACKOFF_MAX_S)
+    finally:
+        stop_recorder(rec)
+
+
+def scene_path() -> str:
+    os.makedirs(SCENE_DIR, exist_ok=True)
+    path = os.path.join(SCENE_DIR, "shell.qml")
+    text = SCENE.replace("@TOOL@", os.path.realpath(sys.argv[0]))
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return path
+    except OSError:
+        pass
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+def running() -> list[int]:
+    out = subprocess.run(["pgrep", "-f", f"^qs -p {SCENE_DIR}/shell.qml$"],
+                         capture_output=True, text=True).stdout
+    return [int(p) for p in out.split()]
+
+
+def cmd_start() -> int:
+    ok, why = wanted()
+    if not ok:
+        print(f"ears-overlay: not started: {why}")
+        return 0
+    if running():
+        return 0
+    path = scene_path()
+    subprocess.Popen(["qs", "-p", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return 0
+
+
+def cmd_run() -> int:
+    """The scene in the foreground (for a systemd user unit)."""
+    ok, why = wanted()
+    if not ok:
+        print(f"ears-overlay: not started: {why}", file=sys.stderr)
+        return 0
+    os.execvp("qs", ["qs", "-p", scene_path()])
+
+
+def cmd_stop() -> int:
+    for pid in running():
+        os.kill(pid, signal.SIGTERM)
+    return 0
+
+
+def cmd_check() -> int:
+    ok, why = wanted()
+    print(f"{'wanted' if ok else 'not wanted'}: {why}; vad: {state()}; "
+          f"scene: {'running' if running() else 'not running'}")
+    return 0 if ok else 1
+
+
+def main(argv: list[str]) -> int:
+    cmd = argv[0] if argv else "start"
+    if cmd == "feed":
+        try:
+            return cmd_feed("--once" in argv)
+        except (BrokenPipeError, KeyboardInterrupt):
+            return 0
+    if cmd in ("start", "stop", "check", "run"):
+        return {"start": cmd_start, "stop": cmd_stop, "check": cmd_check, "run": cmd_run}[cmd]()
+    print(__doc__.split("\n\n")[0])
+    print("usage: ears-overlay start|stop|check|run|feed [--once]", file=sys.stderr)
+    return 2
+
+
+SCENE = r"""import QtQuick
+import QtQuick.Shapes
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+
+ShellRoot {
+    id: root
+    property string state: "off"
+    property string route: "cursor"
+    property real level: 0
+    // Health from ears: fault = words will not arrive, warn = they arrive worse.
+    property string fault: ""
+    property string warn: ""
+    readonly property color faultTone: "#f05a5a"
+    // Live subtitle from ears: settled characters bright, the rest forming.
+    property string subText: ""
+    property int subSettled: 0
+    property bool subFinal: false
+    property bool subShown: false
+    // Heard as a command (a key, a mode, an action): drawn radiant.
+    property bool subCommand: false
+    property int subSeq: -1
+    // Command mode: the action the words fired, when they were not its name
+    // ("send it" -> enter); or words that fired nothing (a miss) and the
+    // action they came closest to.
+    property string subAction: ""
+    property bool subMiss: false
+    property string subNearest: ""
+    // Chant mode: {meters: [[action, 0..1]], heard, live, fired, miss}, or
+    // null when not chanting.
+    property var chant: null
+    // The decision ears has open (ears decide), or null.
+    property var decision: null
+    // What `ears look` shows: masks image, numbered candidates, state.
+    property var vision: null
+    // What ears made of an answer: {id, outcome, index, heard, via}.
+    signal decided(var heard)
+    // A quick time event: the share of its time left, 1 to 0.
+    property real qteLeft: 1
+    Timer {
+        interval: 33
+        repeat: true
+        running: root.decision !== null && !!root.decision.timeout_ms
+        triggeredOnStart: true
+        onTriggered: {
+            const d = root.decision;
+            const left = 1 - (Date.now() - d.opened_ms) / d.timeout_ms;
+            root.qteLeft = Math.max(0, Math.min(1, left));
+        }
+        onRunningChanged: if (!running) root.qteLeft = 1
+    }
+    // Subtitles show in this mode: a small CC rides above the line.
+    property bool cc: false
+    signal commandHeard()
+
+    // From the feed (tone() there is the one palette); a fault the scene
+    // finds itself (a stale feed) still turns it red.
+    property color feedTone: "#6b7280"
+    readonly property color tone: open && fault !== "" ? faultTone : feedTone
+    readonly property bool open: state !== "off"
+    // The rim: reddish while ears warns, the plain tone otherwise.
+    readonly property color rim: open && fault === "" && warn !== ""
+                                 ? Qt.tint(tone, Qt.alpha(faultTone, 0.6)) : tone
+
+    Process {
+        id: feed
+        command: ["@TOOL@", "feed"]
+        running: true
+        stdout: SplitParser {
+            onRead: line => {
+                try {
+                    const d = JSON.parse(line);
+                    if (d.decision !== undefined) {
+                        root.decision = d.decision;
+                        return;
+                    }
+                    if (d.chant !== undefined) {
+                        root.chant = d.chant;
+                        return;
+                    }
+                    if (d.vision !== undefined) {
+                        root.vision = d.vision;
+                        return;
+                    }
+                    if (d.decided !== undefined) {
+                        root.decided(d.decided);
+                        return;
+                    }
+                    if (d.subtitle !== undefined) {
+                        root.subText = d.subtitle.text || "";
+                        root.subSettled = d.subtitle.settled || 0;
+                        root.subFinal = !!d.subtitle.final;
+                        root.subCommand = !!d.subtitle.command;
+                        root.subAction = d.subtitle.action || "";
+                        root.subMiss = !!d.subtitle.miss;
+                        root.subNearest = d.subtitle.nearest || "";
+                        // Once per command line, not per partial reading as one.
+                        if (root.subCommand && root.subFinal && d.subtitle.seq !== root.subSeq)
+                            root.commandHeard();
+                        root.subSeq = d.subtitle.seq === undefined ? -1 : d.subtitle.seq;
+                        root.subShown = root.subText !== "";
+                        if (root.subShown && root.subFinal) linger.restart(); else linger.stop();
+                        return;
+                    }
+                    root.state = d.state;
+                    root.route = d.route || "cursor";
+                    root.level = d.level;
+                    root.fault = d.fault || "";
+                    root.warn = d.warn || "";
+                    root.cc = !!d.cc;
+                    if (d.tone) root.feedTone = d.tone;
+                    if (root.open) quiet.restart(); else quiet.stop();
+                } catch (e) {}
+            }
+        }
+        // The feed only ends if it crashes: start it again.
+        onRunningChanged: if (!running) restart.start()
+    }
+    Timer { id: restart; interval: 2000; onTriggered: feed.running = true }
+    // A committed line stays a moment for reading, then fades.
+    Timer { id: linger; interval: 4500; onTriggered: root.subShown = false }
+    // With the mic open the feed speaks at least twice a second. Silence means
+    // it is stuck: say so, and start it afresh rather than show a frozen state.
+    // (Armed by each line while open, not bound to it: restart() would break a binding.)
+    Timer {
+        id: quiet
+        interval: 3000
+        onTriggered: { root.fault = "stale"; root.level = 0; feed.running = false; }
+    }
+
+    // A fault breathes slowly; the timer runs only while the fault lasts.
+    property real breath: 0
+    property real breathClock: 0
+    Timer {
+        interval: 50
+        repeat: true
+        running: root.open && root.fault !== ""
+        onTriggered: {
+            root.breathClock += 0.05;
+            root.breath = 0.5 + 0.5 * Math.sin(root.breathClock * 2 * Math.PI / 3.2);
+        }
+        onRunningChanged: if (!running) { root.breath = 0; root.breathClock = 0; }
+    }
+
+    // Smoothed level: rises fast with speech, settles like liquid.
+    property real swell: 0
+    property real clock: 0
+    // Below this the room is only murmuring (keys, a fan, a cough far off):
+    // the edge stays flat, so an open mic in a quiet room costs nothing.
+    readonly property real stir: 0.08
+    // Runs only while there is a wave to move; at rest nothing is redrawn.
+    // 30 frames a second is enough for a slow liquid on three screens.
+    Timer {
+        interval: 33
+        repeat: true
+        running: root.open && (root.level > root.stir || root.swell > 0)
+        onTriggered: {
+            const target = root.level > root.stir ? root.level : 0;
+            root.swell += (target - root.swell) * (target > root.swell ? 0.5 : 0.15);
+            if (root.swell < 0.02 && target === 0)
+                root.swell = 0;
+            root.clock += 0.033 * (1 + 2 * root.swell);
+        }
+    }
+
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            id: edge
+            required property var modelData
+            screen: modelData
+            anchors.bottom: true
+            anchors.left: true
+            anchors.right: true
+            implicitHeight: 64
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.namespace: "ears-led"
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            mask: Region {}
+
+            // One wave: the top of a liquid surface along the bottom edge.
+            // Sums of slow sines at different speeds, so it never repeats,
+            // swelling in places that drift along the edge.
+            function surface(layer) {
+                const w = edge.width, h = edge.height, t = root.clock;
+                const amp = root.swell * (h - 8) * [1.0, 0.75, 0.5][layer];
+                const base = root.open ? 3 : 2;
+                const pts = [Qt.point(0, h)];
+                const n = 48;
+                for (let i = 0; i <= n; i++) {
+                    const x = w * i / n, u = i / n;
+                    const swellAt = 0.55 + 0.45 * Math.sin(u * 5.1 + t * (0.7 + 0.2 * layer) + layer * 2.1);
+                    const wave = 0.5 + 0.5 * (0.6 * Math.sin(u * (17 + 6 * layer) - t * (2.3 + layer))
+                                             + 0.4 * Math.sin(u * (31 - 5 * layer) + t * (1.7 + 0.6 * layer)));
+                    pts.push(Qt.point(x, h - base - amp * swellAt * wave));
+                }
+                pts.push(Qt.point(w, h));
+                return pts;
+            }
+
+            Shape {
+                anchors.fill: parent
+                // Polylines need no curve renderer; the geometry one is cheaper.
+                preferredRendererType: Shape.GeometryRenderer
+                ShapePath {
+                    strokeWidth: 0
+                    strokeColor: "transparent"
+                    fillGradient: LinearGradient {
+                        x1: 0; y1: 0; x2: 0; y2: edge.height
+                        GradientStop { position: 0.0; color: Qt.alpha(root.tone, 0.10) }
+                        GradientStop { position: 1.0; color: Qt.alpha(root.tone, 0.35) }
+                    }
+                    PathPolyline { path: { root.clock; root.open; edge.width; return edge.surface(2); } }
+                }
+                ShapePath {
+                    strokeWidth: 0
+                    strokeColor: "transparent"
+                    fillGradient: LinearGradient {
+                        x1: 0; y1: 0; x2: 0; y2: edge.height
+                        GradientStop { position: 0.0; color: Qt.alpha(root.tone, 0.15) }
+                        GradientStop { position: 1.0; color: Qt.alpha(root.tone, 0.45) }
+                    }
+                    PathPolyline { path: { root.clock; root.open; edge.width; return edge.surface(1); } }
+                }
+                ShapePath {
+                    strokeWidth: !root.open ? 1.5 : root.fault !== "" || root.warn !== "" ? 3 : 2
+                    strokeColor: Qt.alpha(root.rim, !root.open ? 0.5
+                                          : root.fault !== "" ? 0.45 + 0.5 * root.breath : 0.95)
+                    fillGradient: LinearGradient {
+                        x1: 0; y1: 0; x2: 0; y2: edge.height
+                        GradientStop { position: 0.0; color: Qt.alpha(root.tone, 0.25) }
+                        GradientStop { position: 1.0; color: Qt.alpha(root.tone, 0.6) }
+                    }
+                    PathPolyline { path: { root.clock; root.open; edge.width; return edge.surface(0); } }
+                }
+            }
+        }
+    }
+
+    // Subtitles: centred just above the line, click-through, no panel behind.
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            required property var modelData
+            screen: modelData
+            anchors.bottom: true
+            anchors.left: true
+            anchors.right: true
+            margins.bottom: 72
+            implicitHeight: 160
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.namespace: "ears-subtitles"
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            mask: Region {}
+            visible: root.open || caption.opacity > 0
+
+            // The persistent clue: this mode is captioned.
+            Text {
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: 28
+                text: "CC"
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                font.letterSpacing: 1.5
+                color: root.tone
+                opacity: root.cc ? 0.6 : 0
+                Behavior on opacity { NumberAnimation { duration: 400 } }
+            }
+
+            Text {
+                id: caption
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                // Rises a few pixels as it appears, sinks back as it fades.
+                anchors.bottomMargin: 6 * opacity
+                width: Math.min(implicitWidth, parent.width * 0.6)
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                textFormat: Text.StyledText
+                font.pixelSize: 24
+                // The mode's colour, like the line: violet in command mode, and so on.
+                // A command is radiant: brighter, bolder, opaque, glowing in its tone.
+                color: root.subCommand ? Qt.lighter(root.tone, 1.35) : root.tone
+                font.weight: root.subCommand ? Font.Bold : Font.Normal
+                style: root.subCommand ? Text.Outline : Text.Raised
+                styleColor: root.subCommand ? Qt.alpha(root.tone, 0.45) : Qt.rgba(0, 0, 0, 0.35)
+                // Translucent, a little fuller while you speak.
+                opacity: !root.subShown ? 0
+                         : root.subCommand || root.subMiss ? 1 : 0.5 + 0.3 * Math.min(1, root.swell * 2)
+                // A command swells once as it is recognised.
+                scale: 1
+                transformOrigin: Item.Bottom
+                SequentialAnimation on scale {
+                    id: pulse
+                    running: false
+                    NumberAnimation { to: 1.12; duration: 140; easing.type: Easing.OutCubic }
+                    NumberAnimation { to: 1.0; duration: 420; easing.type: Easing.InOutQuad }
+                }
+                Connections {
+                    target: root
+                    function onCommandHeard() { pulse.restart(); }
+                }
+                Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                function esc(t) {
+                    return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                }
+                // Keep the last words when the line runs long.
+                readonly property string tail: root.subText.length > 140
+                                              ? root.subText.slice(root.subText.length - 140) : root.subText
+                readonly property int cut: Math.max(0, root.subSettled - (root.subText.length - tail.length))
+                // Words still forming are fainter than settled ones.
+                // What came of command-mode words, after them, small: the
+                // action they fired, or that no command matched (and the nearest).
+                readonly property string outcome:
+                    root.subAction !== "" ? "  <font color='" + Qt.alpha(color, 0.75) + "'><small>&#9656; "
+                                            + esc(root.subAction.toUpperCase()) + "</small></font>"
+                    : root.subMiss ? "  <font color='" + Qt.alpha(root.faultTone, 0.85) + "'><small>&#10005; NO COMMAND"
+                                     + (root.subNearest !== "" ? "</small></font><font color='" + Qt.alpha(color, 0.6)
+                                        + "'><small> &#183; closest " + esc(root.subNearest.toUpperCase()) : "")
+                                     + "</small></font>"
+                    : ""
+                text: root.subShown || opacity > 0
+                      ? esc(tail.slice(0, cut))
+                        + (cut < tail.length ? "<font color='" + Qt.alpha(color, 0.55) + "'>"
+                                               + esc(tail.slice(cut)) + "</font>" : "")
+                        + outcome
+                      : ""
+            }
+        }
+    }
+
+    // Vision mode: SAM's masks over the screen they were found on, the
+    // picked one filled, every candidate numbered so it can be named.
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            id: seen
+            required property var modelData
+            screen: modelData
+            anchors { top: true; bottom: true; left: true; right: true }
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.namespace: "ears-vision"
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            mask: Region {}
+            readonly property var v: root.vision
+            visible: v !== null && v.output === modelData.name
+            Image {
+                anchors.fill: parent
+                visible: !!seen.v && !!seen.v.image
+                source: seen.v && seen.v.image ? "file://" + seen.v.image + "?" + seen.v.stamp : ""
+                cache: false
+                asynchronous: false
+                smooth: true
+            }
+            Repeater {
+                model: seen.v ? seen.v.candidates : []
+                Rectangle {
+                    required property var modelData
+                    readonly property bool picked: seen.v && modelData.n === seen.v.picked + 1
+                    x: Math.max(0, Math.min(seen.width - width, modelData.x - width / 2))
+                    y: Math.max(0, modelData.y - height - 4 < 0 ? modelData.y + modelData.h + 4 : modelData.y - height - 4)
+                    width: picked ? 30 : 24
+                    height: width
+                    radius: width / 2
+                    color: picked ? "#ff4fd8" : Qt.rgba(0.05, 0.02, 0.06, 0.75)
+                    border.color: "#ff4fd8"
+                    border.width: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData.n
+                        color: parent.picked ? "#1a0716" : "#ffd0f3"
+                        font.pixelSize: parent.picked ? 16 : 13
+                        font.bold: true
+                    }
+                }
+            }
+            // While SAM looks, or when it found nothing.
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 240
+                visible: !!seen.v && (seen.v.state === "looking" || seen.v.state === "none")
+                text: seen.v ? seen.v.hint : ""
+                color: "#ffd0f3"
+                font.pixelSize: 24
+                style: Text.Outline
+                styleColor: Qt.rgba(0, 0, 0, 0.6)
+            }
+        }
+    }
+
+    // Chant mode: a meter per leading action fills as the chant is heard
+    // again and again; full, the action fires (its name flares). A breath
+    // that fired nothing says so, and that "agent" hands it over.
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            required property var modelData
+            screen: modelData
+            anchors.bottom: true
+            anchors.left: true
+            anchors.right: true
+            // Clear of the subtitles; a decision and a chant never overlap.
+            margins.bottom: 215
+            implicitHeight: 150
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.namespace: "ears-chant"
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            mask: Region {}
+            visible: chanted.opacity > 0
+
+            Column {
+                id: chanted
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                spacing: 8
+                opacity: root.chant !== null && root.open ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                readonly property var c: root.chant || {meters: [], heard: ""}
+                readonly property string fired: c.fired || ""
+                // A firing stays a moment so you see what was taken.
+                property string flare: ""
+                onFiredChanged: if (fired !== "") { flare = fired; flareHold.restart(); }
+                Timer { id: flareHold; interval: 1400; onTriggered: chanted.flare = "" }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: chanted.flare !== "" ? "\u25B8 " + chanted.flare.toUpperCase()
+                          : chanted.c.miss ? "\u2715 NO COMMAND \u00B7 SAY AGENT TO HAND IT OVER"
+                          : chanted.c.heard ? "\u201C" + chanted.c.heard + "\u201D"
+                          : "CHANT IT UNTIL IT LANDS"
+                    font.pixelSize: chanted.flare !== "" ? 26 : 15
+                    font.weight: chanted.flare !== "" ? Font.Bold : Font.DemiBold
+                    font.letterSpacing: chanted.c.heard && chanted.flare === "" && !chanted.c.miss ? 0 : 1.5
+                    color: chanted.c.miss && chanted.flare === "" ? Qt.alpha(root.faultTone, 0.85)
+                           : chanted.flare !== "" ? Qt.lighter(root.tone, 1.35) : Qt.alpha(root.tone, 0.75)
+                    style: Text.Outline
+                    styleColor: chanted.flare !== "" ? Qt.alpha(root.tone, 0.45) : Qt.rgba(0, 0, 0, 0.5)
+                }
+
+                Repeater {
+                    model: chanted.flare !== "" ? [] : chanted.c.meters
+                    Row {
+                        required property var modelData
+                        required property int index
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: 12
+                        opacity: index === 0 ? 1 : 0.55
+                        Text {
+                            width: 200
+                            horizontalAlignment: Text.AlignRight
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData[0].toUpperCase()
+                            elide: Text.ElideLeft
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 1.2
+                            color: root.tone
+                            style: Text.Outline
+                            styleColor: Qt.rgba(0, 0, 0, 0.5)
+                        }
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 260
+                            height: index === 0 ? 8 : 5
+                            radius: height / 2
+                            color: Qt.alpha(root.tone, 0.18)
+                            Rectangle {
+                                height: parent.height
+                                radius: parent.radius
+                                width: parent.width * Math.max(0.02, Math.min(1, modelData[1]))
+                                color: root.tone
+                                Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // A decision: the question and its options above the subtitles, in red.
+    // Read one out (or its number). With a timeout, a bar drains from left
+    // to right over exactly that time.
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            required property var modelData
+            screen: modelData
+            anchors.bottom: true
+            anchors.left: true
+            anchors.right: true
+            // Clear of the subtitles and of haios-holocall's spoken lines.
+            margins.bottom: 215
+            implicitHeight: 180
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.namespace: "ears-decide"
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            mask: Region {}
+            visible: asked.opacity > 0
+            // An answer stays a moment so you see what was taken.
+            Timer { id: hold; interval: 1400 }
+
+            Column {
+                id: asked
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                spacing: 14
+                opacity: root.decision !== null || hold.running ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                // Keeps the last decision drawn while it fades out.
+                property var shown: null
+                // The option taken (-1 none), an answer of your own, and a
+                // "didn't catch that" for what matched nothing.
+                property int taken: -1
+                property string own: ""
+                property string missed: ""
+                Connections {
+                    target: root
+                    function onDecisionChanged() {
+                        if (root.decision !== null && (asked.shown === null || asked.shown.id !== root.decision.id)) {
+                            asked.shown = root.decision;
+                            asked.taken = -1;
+                            asked.own = "";
+                            asked.missed = "";
+                        }
+                    }
+                    function onDecided(heard) {
+                        if (asked.shown === null || heard.id !== asked.shown.id) return;
+                        if (heard.outcome === "unclear") {
+                            asked.missed = heard.heard || "?";
+                            shake.restart();
+                            return;
+                        }
+                        asked.missed = "";
+                        asked.taken = heard.outcome === "chose" ? heard.index : -1;
+                        asked.own = heard.outcome === "custom" ? heard.heard : "";
+                        hold.restart();
+                    }
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: asked.shown ? asked.shown.question : ""
+                    font.pixelSize: 22
+                    color: "#ffd5d8"
+                    opacity: 0.9
+                    style: Text.Outline
+                    styleColor: Qt.rgba(0, 0, 0, 0.55)
+                }
+                Row {
+                    id: choices
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 36
+                    // Heard but matched nothing: a short shake.
+                    transform: Translate { id: nudge }
+                    SequentialAnimation {
+                        id: shake
+                        NumberAnimation { target: nudge; property: "x"; to: -10; duration: 50 }
+                        NumberAnimation { target: nudge; property: "x"; to: 10; duration: 80 }
+                        NumberAnimation { target: nudge; property: "x"; to: -6; duration: 70 }
+                        NumberAnimation { target: nudge; property: "x"; to: 0; duration: 60 }
+                    }
+                    Repeater {
+                        model: asked.shown ? asked.shown.options : []
+                        Row {
+                            id: option
+                            required property int index
+                            required property string modelData
+                            readonly property bool picked: asked.taken === index
+                            readonly property bool other: asked.taken >= 0 && !picked
+                                                          || asked.own !== ""
+                            spacing: 8
+                            // The one taken swells and glows; the rest fall back.
+                            opacity: other ? 0.3 : 1
+                            scale: picked ? 1.12 : 1
+                            transformOrigin: Item.Bottom
+                            Behavior on opacity { NumberAnimation { duration: 200 } }
+                            Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutBack } }
+                            Text {
+                                anchors.baseline: label.baseline
+                                text: (index + 1)
+                                font.pixelSize: 15
+                                font.weight: Font.DemiBold
+                                color: root.tone
+                                opacity: 0.6
+                            }
+                            Text {
+                                id: label
+                                text: modelData
+                                font.pixelSize: 28
+                                font.weight: option.picked ? Font.Bold : Font.DemiBold
+                                color: option.picked ? Qt.lighter(root.tone, 1.3) : root.tone
+                                // Legible over a busy wallpaper without a panel.
+                                style: Text.Outline
+                                styleColor: Qt.rgba(0, 0, 0, 0.6)
+                            }
+                        }
+                    }
+                }
+                // Room for an answer of your own, or the one given.
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: asked.shown !== null && !!asked.shown.other
+                    text: asked.own !== "" ? asked.own : "or say your own"
+                    font.pixelSize: asked.own !== "" ? 28 : 18
+                    font.italic: asked.own === ""
+                    font.weight: asked.own !== "" ? Font.Bold : Font.Normal
+                    color: asked.own !== "" ? Qt.lighter(root.tone, 1.3) : root.tone
+                    opacity: asked.own !== "" ? 1 : 0.55
+                    style: Text.Outline
+                    styleColor: Qt.rgba(0, 0, 0, 0.6)
+                }
+                // Heard, but none of the options.
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: asked.missed !== ""
+                    text: "? " + asked.missed
+                    font.pixelSize: 16
+                    color: "#ffd5d8"
+                    opacity: 0.7
+                    style: Text.Outline
+                    styleColor: Qt.rgba(0, 0, 0, 0.6)
+                }
+                // The quick time event: what is left of the time, its left
+                // end moving right.
+                Item {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.max(320, choices.width)
+                    height: 3
+                    visible: asked.shown !== null && !!asked.shown.timeout_ms
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 1.5
+                        color: Qt.alpha(root.tone, 0.15)
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        height: parent.height
+                        width: parent.width * root.qteLeft
+                        radius: 1.5
+                        color: root.tone
+                        opacity: 0.85
+                    }
+                }
+            }
+        }
+    }
+}"""
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

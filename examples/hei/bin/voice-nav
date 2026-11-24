@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""voice-nav: move around by voice. Exit 0 if it acted, 1 if nothing matched
+(so voice-cmd lets ears type the words instead).
+
+  voice-nav goto NAME    the focused terminal shows tmux session NAME: its
+                         tmux client switches, or a bare shell attaches. Any
+                         other window focused: same as `focus NAME`.
+  voice-nav focus DESC   focus the window DESC describes: a tmux session a
+                         terminal shows ("ears dev"), an app ("browser"), or
+                         words of a title ("youtube").
+  voice-nav match DESC   print the scored candidates, act on nothing.
+
+Names are matched loosely, as speech hears them: "ears dev" is ears-dev,
+"centurian" is centurion.
+"""
+import difflib, json, os, re, subprocess, sys
+
+THRESHOLD = 0.78
+# What people call an app, by window class (lowercase).
+APP_WORDS = {
+    "hover": ["browser", "web", "chrome", "hover"],
+    "alacritty": ["terminal", "shell", "alacritty"],
+    "firefox": ["browser", "firefox"],
+}
+SHELLS = {"bash", "zsh", "fish", "sh"}
+TERMINALS = {"alacritty", "kitty", "foot", "com.mitchellh.ghostty"}
+
+
+def run(*argv):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def hypr(*args):
+    try:
+        return json.loads(run("hyprctl", "-j", *args) or "null")
+    except json.JSONDecodeError:
+        return None
+
+
+def words(text):
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def similarity(said, name):
+    """How well `said` names `name`: whole-string closeness, or every spoken
+    word closely matching a word of the name."""
+    said, name = words(said), words(name)
+    if not said or not name:
+        return 0.0
+    whole = max(difflib.SequenceMatcher(None, said, name).ratio(),
+                difflib.SequenceMatcher(None, said.replace(" ", ""), name.replace(" ", "")).ratio())
+    parts = name.split()
+    each = [max(difflib.SequenceMatcher(None, w, p).ratio() for p in parts) for w in said.split()]
+    # Words of a longer title: all heard words present counts, a bit below exact.
+    return max(whole, 0.9 * min(each) if len(parts) > len(each) else min(each))
+
+
+def parent(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return 0
+
+
+def descends(pid, ancestor):
+    while pid > 1:
+        if pid == ancestor:
+            return True
+        pid = parent(pid)
+    return False
+
+
+def tmux_clients():
+    out = run("tmux", "list-clients", "-F", "#{client_pid} #{client_tty} #{client_session}")
+    return [(int(p), tty, s) for p, tty, s in (l.split(" ", 2) for l in out.splitlines() if l.count(" ") >= 2)]
+
+
+def sessions():
+    return run("tmux", "list-sessions", "-F", "#{session_name}").split()
+
+
+def client_in(window_pid, clients):
+    return next((c for c in clients if descends(c[0], window_pid)), None)
+
+
+def best(said, names):
+    scored = sorted(((similarity(said, n), n) for n in names), reverse=True)
+    if scored and scored[0][0] >= THRESHOLD:
+        return scored[0][1]
+    return None
+
+
+def idle_shell(window_pid):
+    """The pid of a shell in this terminal waiting at its prompt, or None."""
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or parent(int(entry)) != window_pid:
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            comm = open(f"/proc/{entry}/comm").read().strip()
+        except OSError:
+            continue
+        # tpgid == the shell's own pgrp: nothing else holds the terminal.
+        if comm in SHELLS and fields[5] == fields[2]:
+            return int(entry)
+    return None
+
+
+def goto(said):
+    active = hypr("activewindow") or {}
+    pid = active.get("pid") or 0
+    target = best(said, sessions())
+    if not pid or not target:
+        return focus(said) if pid else 1
+    clients = tmux_clients()
+    client = client_in(pid, clients)
+    if client:
+        if client[2] != target:
+            run("tmux", "switch-client", "-c", client[1], "-t", target)
+        return 0
+    if (active.get("class") or "").lower() in TERMINALS and idle_shell(pid):
+        run("wtype", f"tmux attach -t {target}\n")
+        return 0
+    return focus(said)
+
+
+def candidates(clients):
+    """(name, window address) for everything focusable."""
+    out = []
+    for c in hypr("clients") or []:
+        if not c.get("mapped", True):
+            continue
+        addr, cls = c["address"], (c.get("class") or "").lower()
+        client = client_in(c["pid"], clients)
+        if client:
+            out.append((client[2], addr))
+        out.append((c.get("title") or "", addr))
+        for word in APP_WORDS.get(cls, [cls]):
+            out.append((word, addr))
+    return out
+
+
+def focus(said, dry=False):
+    clients = tmux_clients()
+    cands = candidates(clients)
+    if dry:
+        for score, name in sorted({(round(similarity(said, n), 3), n) for n, _ in cands}, reverse=True)[:10]:
+            print(f"{score:.3f}  {name}")
+        return 0
+    name = best(said, [n for n, _ in cands])
+    if not name:
+        return 1
+    # Several windows of one app: the most recently used one.
+    order = {c["address"]: c.get("focusHistoryID", 99) for c in hypr("clients") or []}
+    addr = min((a for n, a in cands if n == name), key=lambda a: order.get(a, 99))
+    run("hyprctl", "dispatch", "focuswindow", f"address:{addr}")
+    return 0
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    verb, said = sys.argv[1], " ".join(sys.argv[2:])
+    said = re.sub(r"^(the|my|session|window)\s+", "", words(said))
+    if verb == "goto":
+        return goto(said)
+    if verb == "focus":
+        return focus(said)
+    if verb == "match":
+        return focus(said, dry=True)
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

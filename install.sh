@@ -20,15 +20,19 @@
 #   --from-source    build with cargo even when a prebuilt binary exists
 #   --version vX.Y.Z install that release instead of the latest
 #   --service        also install and enable the ears-vad systemd user unit
+#   --overlay        install the light + subtitles overlay (Quickshell), and
+#                    Quickshell itself where the package manager has it
+#   --no-overlay     do not offer it (by default it is offered on Wayland)
 #   --prefix DIR     where the binary goes (default ~/.local/bin)
 #
-# Environment: EARS_REPO (owner/name, default heiervang-technologies/ears).
+# Environment: EARS_REPO (owner/name, default heiervang-technologies/ears),
+# EARS_REF (branch or tag to take extension files from, for testing).
 
 set -eu
 
 REPO=${EARS_REPO:-heiervang-technologies/ears}
 BIN_DIR=${HOME}/.local/bin
-YES=0 DEPS=1 FROM_SOURCE=0 VERSION="" SERVICE=0
+YES=0 DEPS=1 FROM_SOURCE=0 VERSION="" SERVICE=0 OVERLAY=auto
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -37,8 +41,10 @@ while [ $# -gt 0 ]; do
         --from-source) FROM_SOURCE=1 ;;
         --version) VERSION=${2:?--version needs a tag}; shift ;;
         --service) SERVICE=1 ;;
+        --overlay) OVERLAY=yes ;;
+        --no-overlay) OVERLAY=no ;;
         --prefix) BIN_DIR=${2:?--prefix needs a directory}; shift ;;
-        -h | --help) sed -n '2,25p' "$0" 2>/dev/null || echo "see https://github.com/$REPO"; exit 0 ;;
+        -h | --help) sed -n '2,28p' "$0" 2>/dev/null || echo "see https://github.com/$REPO"; exit 0 ;;
         *) echo "ears install: unknown option $1" >&2; exit 2 ;;
     esac
     shift
@@ -129,6 +135,8 @@ needed() {
 
 install_packages() {
     case $PM in
+        # No -Sy: a sync without upgrading is a partial upgrade on Arch. If
+        # the package database is stale, `pacman -Syu` first.
         pacman) $SUDO pacman -S --needed --noconfirm "$@" ;;
         apt-get) $SUDO apt-get update -qq && $SUDO apt-get install -y -qq "$@" ;;
         dnf) $SUDO dnf install -y "$@" ;;
@@ -271,6 +279,61 @@ if [ "$SERVICE" = 1 ]; then
     sed "s#^ExecStart=.*#ExecStart=$BIN_DIR/ears vad start#" "$TMP/unit" >"$unit"
     systemctl --user daemon-reload && systemctl --user enable --now ears-vad.service \
         && say "ears-vad.service enabled" || warn "could not enable ears-vad.service"
+fi
+
+# --- optional: the overlay (extensions/overlay) -------------------------------
+
+# raw_file PATH DEST: a repo file from the checkout, the release's tag, or main.
+raw_file() {
+    if [ -n "$SRC" ]; then cp "$SRC/$1" "$2"; return; fi
+    for ref in ${EARS_REF:-} ${VERSION:-} ${tag:-} main; do
+        fetch "https://raw.githubusercontent.com/$REPO/$ref/$1" "$2" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+install_overlay() {
+    if ! have python3; then
+        py=python3; [ "$PM" = pacman ] && py=python
+        ask "The overlay runs on Python. Install $py with ${PM:-your package manager}?" && install_packages "$py" || true
+        have python3 || { warn "the overlay needs python3; skipped"; return 1; }
+    fi
+    raw_file extensions/overlay/ears-overlay "$TMP/ears-overlay" || { warn "could not fetch the overlay"; return 1; }
+    install -m755 "$TMP/ears-overlay" "$BIN_DIR/ears-overlay"
+    if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+        unit="$HOME/.config/systemd/user/ears-overlay.service"
+        mkdir -p "$(dirname "$unit")"
+        raw_file extensions/overlay/ears-overlay.service "$TMP/overlay.service" || return 1
+        sed "s#^ExecStart=.*#ExecStart=$BIN_DIR/ears-overlay run#" "$TMP/overlay.service" >"$unit"
+        if systemctl --user daemon-reload && systemctl --user enable --now ears-overlay.service; then
+            say "overlay: ears-overlay.service enabled"
+        else
+            warn "could not enable ears-overlay.service; start it with: ears-overlay start"
+        fi
+    else
+        if "$BIN_DIR/ears-overlay" check >/dev/null; then
+            "$BIN_DIR/ears-overlay" start && say "overlay started (no systemd user session: add \`ears-overlay start\` to your autostart)"
+        else
+            say "overlay installed, not started: $("$BIN_DIR/ears-overlay" check)"
+        fi
+    fi
+}
+
+if [ "$OVERLAY" != no ] && [ "$PLATFORM" = linux ]; then
+    if [ "$OVERLAY" = auto ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        :  # no Wayland session here: the overlay needs a layer-shell compositor
+    elif ! have qs; then
+        if [ "$PM" = pacman ] && { [ "$OVERLAY" = yes ] || ask "The ears overlay (light + subtitles) needs Quickshell. Install quickshell with pacman?"; }; then
+            if install_packages quickshell; then install_overlay || true
+            else warn "quickshell install failed; overlay skipped"; fi
+        elif [ "$OVERLAY" = yes ]; then
+            warn "the overlay needs Quickshell (qs), which $PM has no package for: https://quickshell.org/docs/guide/install-setup/ then rerun with --overlay"
+        else
+            say "overlay: skipped (it needs Quickshell, https://quickshell.org); rerun with --overlay once qs is installed"
+        fi
+    elif [ "$OVERLAY" = yes ] || ask "Install the ears overlay (a light along the screen edge, and live subtitles)?"; then
+        install_overlay || true
+    fi
 fi
 
 cat <<EOF
