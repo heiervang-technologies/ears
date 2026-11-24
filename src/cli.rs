@@ -232,6 +232,16 @@ pub enum Commands {
         action: String,
     },
 
+    /// Dictate into the keyboard-focused window (keyboard) or the window
+    /// under the mouse pointer (mouse, Hyprland), or toggle / status.
+    /// Persists across restarts and overrides `focus_target` in the config;
+    /// takes effect at the next utterance.
+    FocusTarget {
+        /// keyboard | mouse | toggle | status (default: status)
+        #[arg(default_value = "status", value_parser = ["keyboard", "mouse", "toggle", "status"])]
+        action: String,
+    },
+
     /// Standby: on (only the wake phrase is acted on), off (resume), toggle
     /// or status. The same switch as the spoken wake and standby phrases, for
     /// tools, e.g. a voice call that needs the words.

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is offered by default.
 - `examples/hei`: a complete voice-driven desktop configuration with a map
   of how its pieces connect.
+- `focus_target = "mouse"` (Hyprland): dictate into the window under the
+  mouse pointer instead of the keyboard-focused one, for
+  `input:follow_mouse = 3`. ears focuses it when speech starts, before any
+  ghost text, and gives focus back after delivery (`restore_focus`, on by
+  default) if focus did not move meanwhile; the pointer stays where it is.
+  `ears focus-target keyboard|mouse|toggle|status` and the
+  `focus-target-*` command socket verbs switch it at runtime, persisted in
+  `$XDG_STATE_HOME/ears/focus-target`. Covers VAD, the TUI and push-to-talk.
 
 ## [1.3.0] - 2026-11-23
 

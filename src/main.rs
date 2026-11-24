@@ -244,6 +244,9 @@ async fn main() -> Result<()> {
         Some(Commands::Typing { action }) => {
             handle_typing(&action).await?;
         }
+        Some(Commands::FocusTarget { action }) => {
+            handle_focus_target(&config, &action).await?;
+        }
         Some(Commands::Standby { action }) => {
             handle_standby(&action, &config.state_dir).await?;
         }
@@ -685,6 +688,23 @@ async fn handle_typing(action: &str) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// `ears focus-target keyboard|mouse|toggle|status`: through the running
+/// ears when there is one (its config is the fallback), else directly on
+/// the persisted switch. Either way it takes effect at the next utterance.
+async fn handle_focus_target(config: &Config, action: &str) -> Result<()> {
+    use ears::focus_target::{self, FocusTargetRequest};
+    let request = FocusTargetRequest::from_arg(action)
+        .with_context(|| format!("Unknown focus-target action: {}", action))?;
+    let reply = match ears::ipc::send_command(request.command()).await {
+        Ok(resp) if resp.starts_with("focus-target:") => resp,
+        Ok(resp) if resp.starts_with("error:focus-target") => anyhow::bail!("{}", resp),
+        // No ears running, or one too old to know the verb.
+        _ => focus_target::handle(request, config.focus_target)?,
+    };
+    println!("{}", reply);
+    Ok(())
 }
 
 /// `ears standby on|off|toggle|status`: on stands VAD by (only the wake
@@ -1300,6 +1320,9 @@ async fn handle_vad(config: &Config, ghost: bool, action: Option<VadAction>) -> 
                         }
                         let _ = respond.send(ears::typing_switch::describe(typing));
                     }
+                    ears::ipc::EarsCommand::FocusTarget { request, respond } => {
+                        let _ = respond.send(ears::focus_target::respond(request, config.focus_target));
+                    }
                 }
             }
         }
@@ -1719,6 +1742,21 @@ async fn start_recording(
 
     AudioFeedback::beep_start().ok();
 
+    // `focus_target = "mouse"`: focus the window under the pointer before
+    // the ghost preview draws into it. The stopping `ears toggle` gives
+    // focus back once the text is delivered.
+    let borrow_file = focus_borrow_file(config);
+    ears::focus_target::FocusBorrow::discard(&borrow_file);
+    if config.typing_mode != ears::desktop::TypingMode::None {
+        if let Some(borrow) = ears::focus_target::FocusBorrow::begin(
+            ears::focus_target::FocusSettings::from_config(config),
+        ) {
+            if let Err(e) = borrow.persist(&borrow_file) {
+                tracing::warn!("Focus borrow not kept for the stop: {}", e);
+            }
+        }
+    }
+
     // Typing disabled in the config: nothing may reach the focused window,
     // ghost text included.
     if ghost && config.typing_mode != ears::desktop::TypingMode::None {
@@ -1803,6 +1841,11 @@ fn ghost_style_command(
     Ok(())
 }
 
+/// Where push-to-talk keeps a focus borrow between its start and its stop.
+fn focus_borrow_file(config: &Config) -> std::path::PathBuf {
+    config.state_dir.join("focus-borrow.json")
+}
+
 /// Stop recording and transcribe
 async fn stop_and_transcribe(
     config: &Config,
@@ -1811,6 +1854,9 @@ async fn stop_and_transcribe(
 ) -> Result<()> {
     let total_start = std::time::Instant::now();
     tracing::info!("Stopping recording and transcribing");
+    // Focus lent to the window under the pointer at the start: given back
+    // when this returns, after delivery, on every path.
+    let _focus = ears::focus_target::FocusBorrow::resume(&focus_borrow_file(config));
 
     let pid = match process_mgr.read_pid()? {
         Some(pid) => pid,

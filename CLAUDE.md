@@ -37,6 +37,7 @@ src/
 ├── streaming.rs         # Streaming transcription
 ├── streaming_engine.rs  # Streaming engine
 ├── ghost.rs             # fcitx5 ghost addon client (inline preedit)
+├── focus_target.rs      # Dictate into the keyboard focus or the window under the mouse
 ├── continuous.rs        # Continuous live decoding (Qwen3-ASR on vLLM)
 ├── stream_client.rs     # Ears stream protocol client (docs/STREAM_PROTOCOL.md)
 ├── vad.rs               # Voice activity detection

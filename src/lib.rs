@@ -84,6 +84,7 @@ pub use vad::{SileroVad, SpeechSegment, VadConfig, VadError, VadResult, VadSegme
 
 // Re-exports from Iteration 9
 pub use text_filters::TextFilters;
+pub mod focus_target;
 pub mod ipc;
 pub mod typing_switch;
 

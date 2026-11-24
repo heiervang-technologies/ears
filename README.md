@@ -876,6 +876,43 @@ persisted and plays no cue. A Neovim plugin, for example, can hold the claim
 only while it has focus, so dictation into Neovim goes through the plugin
 and every other window is typed into as usual.
 
+### Focus target (dictate where the mouse points)
+
+Typed text and ghost text go to the window with keyboard focus. With
+Hyprland's `input:follow_mouse = 3` keyboard focus stays put while the mouse
+points elsewhere; to dictate into the window under the pointer instead:
+
+```toml
+focus_target = "mouse"     # keyboard (default) | mouse
+restore_focus = true       # give focus back after the utterance (default)
+```
+
+or at runtime, persisted across restarts and overriding the config:
+
+```bash
+ears focus-target mouse    # keyboard | mouse | toggle | status
+```
+
+The command socket takes the same as `focus-target-keyboard`,
+`focus-target-mouse`, `focus-target-toggle` and `focus-target-status`; the
+switch lives in `$XDG_STATE_HOME/ears/focus-target` (`EARS_FOCUS_TARGET_STATE`
+overrides the path) and takes effect at the next utterance.
+
+When speech starts (VAD, the TUI's VAD, or push-to-talk `ears toggle`),
+before any ghost text is drawn, ears focuses the topmost window under the
+pointer on a shown workspace: fullscreen over pinned over floating over
+tiled, the most recently focused on top. After the text is delivered (or
+the utterance came to nothing) it focuses the previous window again, but
+only if the borrowed window still has focus. The pointer does not move:
+when `cursor:no_warps` is off, the same `hyprctl --batch` request that
+focuses puts the cursor back where it was. Nothing happens when no window
+is under the pointer, in standby, command or vision mode, while a client
+holds the input claim, or with typing off (so `ears ws-listen`, which never
+types, never moves focus). With `input:follow_mouse = 1` focus is not given
+back, since Hyprland would return it to the window under the pointer at
+once. Hyprland only: elsewhere `mouse` logs a warning and behaves as
+`keyboard`.
+
 ### All Commands
 
 ```
@@ -889,6 +926,7 @@ ears current, c        Show current device
 ears server [URL]      Show or set whisper server URL
 ears mic-check         Measure microphone quality (see above)
 ears health            Is VAD working: process, snapshot, mic, server (exit 0-4)
+ears focus-target      Dictate into the keyboard focus or under the mouse
 ears prompt            Prompt marker while recording / VAD (see below)
 ears help              Show help
 ```

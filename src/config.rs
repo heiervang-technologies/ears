@@ -70,6 +70,10 @@ fn default_auto_enter() -> bool {
     true
 }
 
+fn default_restore_focus() -> bool {
+    true
+}
+
 fn default_progressive_typing() -> bool {
     false
 }
@@ -300,6 +304,16 @@ pub struct Config {
     /// Save transcribed text to clipboard after each segment (default: false)
     #[serde(default = "default_save_to_clipboard")]
     pub save_to_clipboard: bool,
+    /// Which window dictation goes to: the keyboard-focused one
+    /// (`keyboard`, default) or the one under the mouse pointer (`mouse`,
+    /// Hyprland: focused for the utterance). `ears focus-target` overrides
+    /// it at runtime ([`crate::focus_target`]).
+    #[serde(default)]
+    pub focus_target: crate::focus_target::FocusTarget,
+    /// With `focus_target = "mouse"`: give focus back to the window that
+    /// had it once the utterance is delivered, unless focus moved meanwhile.
+    #[serde(default = "default_restore_focus")]
+    pub restore_focus: bool,
     /// Enable auto-correction for progressive typing (None = legacy behavior)
     #[serde(default)]
     pub auto_correction: Option<bool>,
@@ -529,6 +543,8 @@ impl Config {
             auto_enter: true,
             progressive_typing: false,
             save_to_clipboard: false,
+            focus_target: Default::default(),
+            restore_focus: true,
             auto_correction: None,
             bash_mode: false,
             guided_grammar: None,
@@ -693,6 +709,8 @@ impl Config {
             auto_enter: true,
             progressive_typing: false,
             save_to_clipboard: false,
+            focus_target: Default::default(),
+            restore_focus: true,
             auto_correction: None,
             bash_mode: false,
             guided_grammar: None,
