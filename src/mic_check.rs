@@ -395,6 +395,7 @@ async fn transcribe_speech(config: &crate::Config, speech: &[f32]) -> Result<Str
         .with_api_key(config.api_key.clone())
         .with_model(model)
         .with_silence_filter(config.filter_silence_artifacts)
+        .with_short_parallel_ms(config.short_parallel_ms)
         .with_prompt(config.prompt.clone());
     let file = tempfile::Builder::new()
         .prefix("ears-mic-check-")

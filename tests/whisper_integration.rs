@@ -205,7 +205,16 @@ async fn test_transcribe_server_error() {
     drop(audio_path);
 
     assert!(matches!(result, Err(WhisperError::TranscriptionError(_))));
-    assert_eq!(mock_server.received_requests().await.unwrap().len(), 2);
+    // The first try and one retry. Short audio also asks for the model its
+    // no-speech check would use, alongside.
+    let transcriptions = mock_server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/v1/audio/transcriptions")
+        .count();
+    assert_eq!(transcriptions, 2);
 }
 
 #[tokio::test]

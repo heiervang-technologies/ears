@@ -306,6 +306,11 @@ pub struct StreamingEngine {
     /// When the last segment was called ended, and after how much silence:
     /// the zero of the stage timing ([`crate::command_mode::Timing`]).
     ended: Option<(Instant, u64)>,
+    /// When the last command acted (key pressed, program started, mode
+    /// switched), and when its accept colour went: stage timing's
+    /// `action_ms` and `shown_ms`. Taken by whoever records the timing.
+    acted: Option<Instant>,
+    shown: Option<Instant>,
     /// Route every command-mode utterance after its audio embedding, even
     /// one its words already decide: how it was before words fired first.
     /// Only the latency tests set it, to measure the difference.
@@ -388,6 +393,8 @@ impl StreamingEngine {
             ending: None,
             exact_phrases: None,
             ended: None,
+            acted: None,
+            shown: None,
             wait_for_embedding: false,
             early_end: None,
             keep_audio_dir: None,
@@ -614,6 +621,8 @@ impl StreamingEngine {
         }
 
         let start_time = Instant::now();
+        self.acted = None;
+        self.shown = None;
         if verify {
             info!(
                 "Unsure segment {}-{} ms (mean probability {:.3}{}): keeping it only if the model hears speech",
@@ -691,9 +700,22 @@ impl StreamingEngine {
         // With final_correction off, the live stream's final is the
         // committed text: no second decode, and nothing jumps at the end.
         // A bash utterance only streams when the server applies its grammar.
-        let live_final = match streamed_id {
-            Some(id) if !self.final_correction && !verify => self.ghost_stream_final(id).await,
-            _ => None,
+        let (live_final, mut early_full) = match streamed_id {
+            Some(id) if !self.final_correction && !verify => {
+                // A short utterance's final is three words or fewer, which
+                // is transcribed in full anyway: start that now, not after
+                // the final came in to say so. Not when its last partial
+                // already had more words.
+                let short = self
+                    .whisper_client
+                    .is_short(crate::WAV_HEADER_SIZE + 2 * segment.samples.len() as u64);
+                let early = (short && self.stream_final_may_be_short(id)).then(|| {
+                    let job = self.full_transcription(&segment_file, verify);
+                    tokio::spawn(job)
+                });
+                (self.ghost_stream_final(id).await, early)
+            }
+            _ => (None, None),
         };
         // A context written out is not what was said: transcribe in full,
         // which falls back to no context.
@@ -710,25 +732,28 @@ impl StreamingEngine {
         };
         let transcript = match live_final {
             Some(text) => {
+                if let Some(job) = early_full.take() {
+                    job.abort();
+                }
                 info!("Committing the live stream's final");
                 Ok(text)
             }
             None => {
-                let result = match self.asr_context() {
-                    Some(context) => {
-                        self.whisper_client
-                            .transcribe_with_context(&segment_file, verify, Some(&context))
-                            .await
-                    }
-                    None => {
-                        self.whisper_client
-                            .transcribe_checked(
-                                &segment_file,
-                                self.guided_grammar.as_deref(),
-                                verify,
-                            )
-                            .await
-                    }
+                let early = early_full.take();
+                let result = match early {
+                    Some(job) => match job.await {
+                        Ok(result) => {
+                            debug!(
+                                "Full transcription started early, in after {:?}",
+                                transcribe_start.elapsed()
+                            );
+                            result
+                        }
+                        Err(e) => Err(crate::whisper::WhisperError::TranscriptionError(
+                            e.to_string(),
+                        )),
+                    },
+                    None => self.full_transcription(&segment_file, verify).await,
                 };
                 if let Some(health) = &self.health {
                     use crate::whisper::WhisperError as E;
@@ -1112,6 +1137,34 @@ impl StreamingEngine {
         Ok(())
     }
 
+    /// Transcribe a segment in full: with the mode's ASR context, or the
+    /// guided grammar, or plain. Owns what it needs, so it can be spawned.
+    fn full_transcription(
+        &mut self,
+        wav: &std::path::Path,
+        verify: bool,
+    ) -> impl std::future::Future<Output = Result<String, crate::whisper::WhisperError>> + Send + 'static
+    {
+        let client = Arc::clone(&self.whisper_client);
+        let context = self.asr_context();
+        let grammar = self.guided_grammar.clone();
+        let wav = wav.to_path_buf();
+        async move {
+            match context {
+                Some(context) => {
+                    client
+                        .transcribe_with_context(&wav, verify, Some(&context))
+                        .await
+                }
+                None => {
+                    client
+                        .transcribe_checked(&wav, grammar.as_deref(), verify)
+                        .await
+                }
+            }
+        }
+    }
+
     /// Execute a spoken command in place of typing the utterance.
     /// Whether a run command also leaves standby (`resume = true`).
     fn run_resumes(&self, command: &crate::commands::Command) -> bool {
@@ -1146,9 +1199,12 @@ impl StreamingEngine {
             return;
         }
         // The ghost shows the command word; it must not be committed. It
-        // turns the accept colour, then goes before the key is pressed.
-        self.ghost_accept(heard).await;
+        // goes before the key is pressed, in the accept colour before or
+        // after it ([commands] accept_after).
+        self.ghost_accept_before(heard, true).await;
         self.press_command(command, heard);
+        self.acted = Some(Instant::now());
+        self.ghost_accept_after(heard, true).await;
     }
 
     /// Press a key command's keys (or delete, for the delete commands).
@@ -1201,12 +1257,18 @@ impl StreamingEngine {
         argv: &[String],
         heard: &str,
     ) {
-        if self.mode.is_standby() || self.typing_mode == TypingMode::None || self.typing_suspended {
-            self.ghost_clear();
+        let shown = !(self.mode.is_standby()
+            || self.typing_mode == TypingMode::None
+            || self.typing_suspended);
+        if shown {
+            // A program may press keys too (`hyprctl dispatch sendshortcut`).
+            self.ghost_accept_before(heard, true).await;
         } else {
-            self.ghost_accept(heard).await;
+            self.ghost_clear();
         }
-        match crate::commands::spawn_detached(argv) {
+        let spawned = crate::commands::spawn_detached(argv);
+        self.acted = Some(Instant::now());
+        match spawned {
             Ok(pid) => {
                 info!(
                     "Voice command: {} ran {:?} (pid {}, {:?})",
@@ -1228,6 +1290,9 @@ impl StreamingEngine {
             name: command.label(),
             text: heard.to_string(),
         });
+        if shown {
+            self.ghost_accept_after(heard, true).await;
+        }
     }
 
     /// Report a segment that typed nothing.
@@ -1389,6 +1454,7 @@ impl StreamingEngine {
         } else {
             Box::new(crate::wake::NoWake)
         };
+        crate::desktop::set_key_delay_ms(commands.key_delay_ms);
         self.commands = commands;
         self.exact_phrases = None;
     }
@@ -2371,12 +2437,14 @@ impl StreamingEngine {
                 self.set_mode(crate::vad_mode::Mode::Command(Box::new(
                     crate::vad_mode::CommandState::new(mode),
                 )));
-                self.ghost_accept(heard).await;
+                self.acted = Some(Instant::now());
+                self.ghost_accept_before(heard, false).await;
                 crate::desktop::AudioFeedback::beep_done().ok();
                 self.send_event(StreamingEvent::VoiceCommand {
                     name: "command-mode".into(),
                     text: heard.to_string(),
                 });
+                self.ghost_accept_after(heard, false).await;
             }
             Err(e) => {
                 warn!("Command mode unavailable: {}", e);
@@ -2454,6 +2522,16 @@ impl StreamingEngine {
                 .mode
                 .command_mut()
                 .is_some_and(|m| m.fires_by_words(&words));
+        // Words that name no action are embedded for their meaning: asked
+        // now, alongside the audio embedding, not after it.
+        let text_task = if early {
+            None
+        } else {
+            self.mode
+                .command_mut()
+                .and_then(|m| m.text_request(&words))
+                .map(|request| tokio::spawn(async move { (request.await, Instant::now()) }))
+        };
         let mut embedding = embedding;
         let audio = match (early, embedding.take()) {
             (false, Some(task)) => {
@@ -2472,10 +2550,23 @@ impl StreamingEngine {
             self.discard("neither words nor embedding");
             return;
         }
+        let text = match text_task {
+            Some(task) => match task.await {
+                Ok((text, at)) => {
+                    timing.text_ms = Some(clock.ms(at));
+                    Some(text)
+                }
+                Err(e) => {
+                    warn!("Command mode: the text embedding stopped: {}", e);
+                    None
+                }
+            },
+            None => None,
+        };
         let Some(mode) = self.mode.command_mut() else {
             return;
         };
-        let (outcome, mut hearing) = mode.hear_with(audio, &words).await;
+        let (outcome, mut hearing) = mode.hear_with_text(audio, &words, text).await;
         timing.decision_ms = Some(clock.ms(Instant::now()));
         let top = |d: &Option<crate::command_mode::Decision>| {
             d.as_ref().map_or("-".to_string(), |d| {
@@ -2534,7 +2625,9 @@ impl StreamingEngine {
             }
         };
         if acted {
-            timing.action_ms = Some(clock.ms(Instant::now()));
+            let now = Instant::now();
+            timing.action_ms = Some(clock.ms(self.acted.take().unwrap_or(now)));
+            timing.shown_ms = self.shown.take().map(|at| clock.ms(at));
         }
         if let Some(task) = embedding {
             let (u, at) = Self::embedding_in(task).await;
@@ -2607,10 +2700,12 @@ impl StreamingEngine {
         decided: Instant,
     ) {
         let clock = self.clock();
+        let now = Instant::now();
         let timing = crate::command_mode::Timing {
             asr_ms: Some(clock.ms(asr)),
             decision_ms: Some(clock.ms(decided)),
-            action_ms: Some(clock.ms(Instant::now())),
+            action_ms: Some(clock.ms(self.acted.take().unwrap_or(now))),
+            shown_ms: self.shown.take().map(|at| clock.ms(at)),
             ..clock.timing()
         };
         info!("Command timing: {} ({})", timing, label);

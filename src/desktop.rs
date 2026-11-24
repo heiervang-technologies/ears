@@ -295,6 +295,32 @@ impl Notifications {
 /// and has its own wait (`TAIL_KEY_DELAY` in the streaming engine).
 pub const PASTE_SETTLE: Duration = Duration::from_millis(50);
 
+/// Default ydotool delay after each key event of a single key command, in
+/// ms (`[commands] key_delay_ms`). ydotool's own default is 12.
+pub const DEFAULT_KEY_DELAY_MS: u64 = 4;
+
+/// ydotool delay after each key event of a sequence (`ctrl+u*40`): kept
+/// short so a long one goes in well under the key timeout.
+const SEQUENCE_KEY_DELAY_MS: u64 = 4;
+
+static KEY_DELAY_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(DEFAULT_KEY_DELAY_MS);
+
+/// Set the ydotool key delay of single key commands (Enter, Shift+Enter,
+/// one combination), from `[commands] key_delay_ms`.
+pub fn set_key_delay_ms(ms: u64) {
+    KEY_DELAY_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn key_delay_arg(sequence_len: usize) -> String {
+    let ms = if sequence_len > 1 {
+        SEQUENCE_KEY_DELAY_MS
+    } else {
+        KEY_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed)
+    };
+    format!("--key-delay={ms}")
+}
+
 /// When this process last pasted text with Ctrl+V.
 static LAST_PASTE: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -549,6 +575,14 @@ pub(crate) fn wait_bounded(
     timeout: Duration,
 ) -> Result<std::process::ExitStatus> {
     let start = Instant::now();
+    // Woken the moment it exits. The polling below only runs where pidfds
+    // are not available; its backoff noticed a 25 ms ydotool at 30 ms and
+    // a 70 ms wtype at 112 ms.
+    if wait_exit(child, timeout) == Some(true) {
+        if let Some(status) = child.try_wait().context("Failed to poll child process")? {
+            return Ok(status);
+        }
+    }
     let mut backoff = Duration::from_millis(2);
     loop {
         if let Some(status) = child.try_wait().context("Failed to poll child process")? {
@@ -683,6 +717,42 @@ fn key_args(codes: &[u16]) -> Vec<String> {
         .collect()
 }
 
+/// Block until `child` exits (`Some(true)`) or `timeout` passes
+/// (`Some(false)`), on a pidfd. None: no pidfd (kernel before 5.3, or an
+/// error), so the caller polls instead. The child is not reaped.
+fn wait_exit(child: &std::process::Child, timeout: Duration) -> Option<bool> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let pid = libc::pid_t::try_from(child.id()).ok()?;
+    // SAFETY: pidfd_open(2) takes a pid and flags and returns a new fd or -1.
+    // The child is not reaped until the caller waits, so the pid is ours.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let raw = i32::try_from(raw).ok().filter(|fd| *fd >= 0)?;
+    // SAFETY: a fresh fd that nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        // Rounded up, so a deadline is never polled as 0 ms early.
+        let ms = i32::try_from(left.as_micros().div_ceil(1000)).unwrap_or(i32::MAX);
+        let mut pfd = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd for the length given.
+        let rc = unsafe { libc::poll(&mut pfd, 1, ms) };
+        if rc > 0 {
+            return Some(true);
+        }
+        if rc == 0 {
+            return Some(false);
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return None;
+        }
+    }
+}
+
 fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
     // SAFETY: fcntl on a valid, owned fd with well-formed flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -765,7 +835,7 @@ impl TextInput {
         settle_after_paste();
 
         let mut cmd = Command::new("ydotool");
-        cmd.args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+        cmd.args(["key", &key_delay_arg(1), "28:1", "28:0"]) // KEY_ENTER press and release
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -787,7 +857,7 @@ impl TextInput {
 
         let mut cmd = Command::new("ydotool");
         // KEY_LEFTSHIFT down, KEY_ENTER press and release, KEY_LEFTSHIFT up
-        cmd.args(["key", "42:1", "28:1", "28:0", "42:0"])
+        cmd.args(["key", &key_delay_arg(1), "42:1", "28:1", "28:0", "42:0"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -836,12 +906,9 @@ impl TextInput {
 
         settle_after_paste();
 
-        let mut args = vec!["key".to_string()];
-        if sequence.len() > 1 {
-            // ydotool waits 12 ms per event by default: a long sequence
-            // (ctrl+u*40) would take seconds.
-            args.push("--key-delay=4".to_string());
-        }
+        // ydotool waits 12 ms per event by default: a long sequence
+        // (ctrl+u*40) would take seconds, and one Enter 24 ms.
+        let mut args = vec!["key".to_string(), key_delay_arg(sequence.len())];
         for codes in sequence {
             args.extend(key_args(codes));
         }
@@ -1010,6 +1077,28 @@ impl TextInput {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_child_is_seen_to_exit_at_once() {
+        // Polling with backoff saw a 70 ms child at 112 ms.
+        let mut cmd = Command::new("sleep");
+        cmd.arg("0.07");
+        let started = Instant::now();
+        assert!(run_bounded(cmd, Duration::from_secs(5)).unwrap().success());
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(100), "{took:?}");
+    }
+
+    #[test]
+    fn single_keys_take_the_configured_delay_and_sequences_stay_short() {
+        set_key_delay_ms(DEFAULT_KEY_DELAY_MS);
+        assert_eq!(key_delay_arg(1), "--key-delay=4");
+        assert_eq!(key_delay_arg(40), "--key-delay=4");
+        set_key_delay_ms(12);
+        assert_eq!(key_delay_arg(1), "--key-delay=12");
+        assert_eq!(key_delay_arg(2), "--key-delay=4");
+        set_key_delay_ms(DEFAULT_KEY_DELAY_MS);
+    }
     use super::*;
 
     #[test]

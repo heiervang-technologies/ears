@@ -35,6 +35,13 @@ const STREAM_UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
 /// is presumed gone, and the stream is reconnected.
 const STREAM_FINAL_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// After a key command, how long the keys get to reach the app before the
+/// accept colour is shown again (`[commands] accept_after`): the key goes
+/// through the compositor and fcitx5, the preedit through the addon's
+/// socket, and an app that sees the key while composing takes it as
+/// ending the composition (an Enter that does not send).
+pub(super) const ACCEPT_KEY_SETTLE: Duration = Duration::from_millis(40);
+
 /// A finished partial transcription.
 pub(super) struct Partial {
     pub(super) utterance: u64,
@@ -165,6 +172,9 @@ pub(super) struct GhostState {
     /// Settled state of the latest stream partial, for the per-tick decoder
     /// to carry on from if the stream is lost.
     pub(super) stream_state: Option<crate::continuous::DecoderState>,
+    /// Words in the latest stream partial, by stream utterance id: a
+    /// final likely as long need not be transcribed in full early.
+    pub(super) stream_words: Option<(u64, usize)>,
     /// Something is currently drawn as a ghost.
     pub(super) showing: bool,
     /// At least one utterance was committed this session (for spacing).
@@ -190,6 +200,7 @@ impl GhostState {
             stream_id: 0,
             per_tick: None,
             stream_state: None,
+            stream_words: None,
             showing: false,
             committed_any: false,
             warned_unavailable: false,
@@ -428,6 +439,7 @@ impl StreamingEngine {
                     Some(s) if s.id == partial.utterance => {
                         ghost.stream_state = Some(partial.snapshot());
                         let text = partial.text.trim().to_string();
+                        ghost.stream_words = Some((s.id, text.split_whitespace().count()));
                         let frozen_bytes = partial.stable().trim_start().len();
                         let _ = ghost.partial_tx.send(Partial::streamed(
                             s.utterance,
@@ -552,6 +564,18 @@ impl StreamingEngine {
         }
         ghost.streamed = Some(streamed);
         true
+    }
+
+    /// Whether utterance `id`'s stream final may well be short (three
+    /// words or fewer, so transcribed in full anyway): its latest partial
+    /// was, or none came.
+    pub(super) fn stream_final_may_be_short(&self, id: u64) -> bool {
+        match self.ghost.as_ref().and_then(|g| g.stream_words) {
+            Some((partial_id, words)) if partial_id == id => {
+                words <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS
+            }
+            _ => true,
+        }
     }
 
     /// The stream's `final` for utterance `id`, when it can be committed
@@ -918,18 +942,65 @@ impl StreamingEngine {
     /// `accept_ms`, then remove it. Nothing is committed.
     pub(super) async fn ghost_accept(&mut self, heard: &str) {
         let hold = Duration::from_millis(self.commands.accept_ms);
-        if let Some(ghost) = self.ghost.as_mut() {
-            if !hold.is_zero() {
-                let shown = ghost.spaced(heard.trim());
-                let r = ghost.client.preedit_frozen(&shown, shown.len());
-                ghost.note_result(&r);
-                if r.is_ok() {
-                    ghost.showing = true;
-                    tokio::time::sleep(hold).await;
-                }
-            }
+        if !hold.is_zero() && self.ghost_frozen(heard) {
+            tokio::time::sleep(hold).await;
+            self.shown = Some(Instant::now());
         }
         self.ghost_clear();
+    }
+
+    /// Before a command acts. With `accept_after` the ghost does not hold
+    /// it up: it goes now if the action presses `keys` (an app would take
+    /// a key into its preedit), else it turns the accept colour and stays
+    /// for [`Self::ghost_accept_after`]. Without, [`Self::ghost_accept`].
+    pub(super) async fn ghost_accept_before(&mut self, heard: &str, keys: bool) {
+        if !self.commands.accept_after {
+            self.ghost_accept(heard).await;
+        } else if keys || self.commands.accept_ms == 0 {
+            self.ghost_clear();
+        } else {
+            self.ghost_frozen(heard);
+        }
+    }
+
+    /// After a command acted, with `accept_after`: show it in the accept
+    /// colour for `accept_ms`, then remove it. After keys it comes back
+    /// once they have had [`ACCEPT_KEY_SETTLE`] to land, so the preedit
+    /// never meets them. Nothing is committed.
+    pub(super) async fn ghost_accept_after(&mut self, heard: &str, keys: bool) {
+        if !self.commands.accept_after || self.ghost.is_none() {
+            return;
+        }
+        let hold = Duration::from_millis(self.commands.accept_ms);
+        if hold.is_zero() {
+            self.ghost_clear();
+            return;
+        }
+        if keys {
+            tokio::time::sleep(ACCEPT_KEY_SETTLE).await;
+            if !self.ghost_frozen(heard) {
+                return;
+            }
+        } else if !self.ghost.as_ref().is_some_and(|g| g.showing) {
+            return;
+        }
+        tokio::time::sleep(hold).await;
+        self.shown = Some(Instant::now());
+        self.ghost_clear();
+    }
+
+    /// Show `heard` in the accept colour; whether it is up.
+    fn ghost_frozen(&mut self, heard: &str) -> bool {
+        let Some(ghost) = self.ghost.as_mut() else {
+            return false;
+        };
+        let shown = ghost.spaced(heard.trim());
+        let r = ghost.client.preedit_frozen(&shown, shown.len());
+        ghost.note_result(&r);
+        if r.is_ok() {
+            ghost.showing = true;
+        }
+        r.is_ok()
     }
 
     /// Remove the ghost (utterance produced nothing to commit).

@@ -222,6 +222,7 @@ async fn main() -> Result<()> {
                     .with_api_key(config.api_key.clone())
                     .with_model(model)
                     .with_silence_filter(config.filter_silence_artifacts)
+                    .with_short_parallel_ms(config.short_parallel_ms)
                     .with_prompt(config.prompt.clone()),
             );
             ears::chant::replay(&mut mode, whisper, &samples).await;
@@ -969,6 +970,7 @@ async fn test_config(config: &Config, file: Option<&str>) -> Result<()> {
         .with_api_key(config.api_key.clone())
         .with_model(model)
         .with_silence_filter(config.filter_silence_artifacts)
+        .with_short_parallel_ms(config.short_parallel_ms)
         .with_prompt(config.prompt.clone());
 
     if let Err(e) = client.health_check().await {
@@ -1467,6 +1469,7 @@ async fn handle_ws_listen(
             .with_api_key(config.api_key.clone())
             .with_model(model)
             .with_silence_filter(config.filter_silence_artifacts)
+            .with_short_parallel_ms(config.short_parallel_ms)
             .with_prompt(config.prompt.clone()),
     );
 
@@ -1689,6 +1692,7 @@ async fn start_recording(
         .with_api_key(config.api_key.clone())
         .with_model(model)
         .with_silence_filter(config.filter_silence_artifacts)
+        .with_short_parallel_ms(config.short_parallel_ms)
         .with_prompt(config.prompt.clone());
     if client.health_check().await.is_err() {
         tracing::error!("Whisper server health check failed");
@@ -1908,6 +1912,7 @@ async fn stop_and_transcribe(
         .with_api_key(config.api_key.clone())
         .with_model(model.clone())
         .with_silence_filter(config.filter_silence_artifacts)
+        .with_short_parallel_ms(config.short_parallel_ms)
         .with_prompt(config.prompt.clone());
     let grammar = config.active_grammar();
     // Only a recording that had a live preview has settled text to finish;

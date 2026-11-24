@@ -75,6 +75,31 @@ struct ChatMessage {
 /// (see `WhisperClient::hears_speech`).
 pub(crate) const NO_SPEECH_CHECK_MAX_WORDS: usize = 3;
 
+/// Default for [`WhisperClient::with_short_parallel_ms`]: audio up to 3 s
+/// holds every command phrase with its trailing silence.
+pub const DEFAULT_SHORT_PARALLEL_MS: u64 = 3000;
+
+/// Bytes of 16 kHz mono 16-bit PCM per millisecond.
+const PCM_BYTES_PER_MS: u64 = 32;
+
+/// Where Qwen3-ASR's `language <Lang>` header ends and the text begins.
+const ASR_TEXT_TAG: &str = "<asr_text>";
+
+/// Whether a no-speech check's reply says speech: `language None` is
+/// none. The reply ends at the header's tag (or just before it, from a
+/// server that leaves stop strings out); anything else is no answer.
+fn speech_in_header(raw: &str) -> Option<bool> {
+    let header = match raw.split_once(ASR_TEXT_TAG) {
+        Some((header, _)) => header.trim(),
+        None => Some(raw.trim()).filter(|h| h.starts_with("language "))?,
+    };
+    Some(header != "language None")
+}
+
+async fn file_len(path: &Path) -> u64 {
+    tokio::fs::metadata(path).await.map_or(0, |m| m.len())
+}
+
 /// Client for interacting with whisper.cpp server
 #[derive(Clone)]
 pub struct WhisperClient {
@@ -94,6 +119,9 @@ pub struct WhisperClient {
     /// Model for the no-speech check: resolved once from the config or the
     /// server's model list; `None` inside when the server cannot do it.
     check_model: Arc<tokio::sync::OnceCell<Option<String>>>,
+    /// Audio up to this long (ms) is short: its no-speech check starts
+    /// with the transcription instead of after it. 0: always after.
+    short_parallel_ms: u64,
     /// Maximum number of retry attempts
     max_retries: u32,
     /// Initial backoff delay in milliseconds
@@ -128,6 +156,7 @@ impl WhisperClient {
             prompt: None,
             filter_silence_artifacts: true,
             check_model: Arc::new(tokio::sync::OnceCell::new()),
+            short_parallel_ms: DEFAULT_SHORT_PARALLEL_MS,
             max_retries: 3,
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
@@ -139,6 +168,26 @@ impl WhisperClient {
     pub fn with_silence_filter(mut self, enabled: bool) -> Self {
         self.filter_silence_artifacts = enabled;
         self
+    }
+
+    /// Audio up to `ms` long is short (0: none is): its no-speech check
+    /// is asked alongside the transcription rather than after it, and the
+    /// streaming engine starts its full transcription while it waits for
+    /// the live stream's final. The result is the same, it only comes in
+    /// sooner, at the cost of a check nobody reads when the transcript
+    /// turns out longer than three words. Default:
+    /// [`DEFAULT_SHORT_PARALLEL_MS`].
+    pub fn with_short_parallel_ms(mut self, ms: u64) -> Self {
+        self.short_parallel_ms = ms;
+        self
+    }
+
+    /// Whether a 16 kHz mono 16-bit WAV file of `wav_bytes` is short
+    /// (see [`Self::with_short_parallel_ms`]).
+    pub fn is_short(&self, wav_bytes: u64) -> bool {
+        self.short_parallel_ms > 0
+            && wav_bytes.saturating_sub(WAV_HEADER_SIZE)
+                <= self.short_parallel_ms * PCM_BYTES_PER_MS
     }
 
     /// Sets the language for transcription
@@ -204,6 +253,7 @@ impl WhisperClient {
             prompt: None,
             filter_silence_artifacts: true,
             check_model: Arc::new(tokio::sync::OnceCell::new()),
+            short_parallel_ms: DEFAULT_SHORT_PARALLEL_MS,
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
@@ -385,18 +435,38 @@ impl WhisperClient {
             grammar.is_some()
         );
 
-        let text = (|| async {
-            match grammar {
-                Some(g) => self.transcribe_chat_internal(path, g).await,
-                None => self.transcribe_internal(path, prompt).await,
-            }
-        })
-        .retry(self.create_backoff())
-        .when(|error| {
-            warn!("Transcription attempt failed: {}", error);
-            !matches!(error, WhisperError::ConfigurationError(_))
-        })
-        .await?;
+        // Boxed as a plain Send future: kept across the join below, the
+        // retry's closures trip rustc's higher-ranked Send inference.
+        let transcription: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, WhisperError>> + Send + '_>,
+        > = Box::pin(
+            (|| async {
+                match grammar {
+                    Some(g) => self.transcribe_chat_internal(path, g).await,
+                    None => self.transcribe_internal(path, prompt).await,
+                }
+            })
+            .retry(self.create_backoff())
+            .when(|error| {
+                warn!("Transcription attempt failed: {}", error);
+                !matches!(error, WhisperError::ConfigurationError(_))
+            }),
+        );
+        // Short audio is where a check will be wanted: verify always asks,
+        // and a short transcript (three words or fewer) is what short
+        // audio gives. Asked at once, the two model calls overlap.
+        let may_check = grammar.is_none() && (verify || self.filter_silence_artifacts);
+        let (text, early) = if may_check && self.is_short(file_len(path).await) {
+            let started = std::time::Instant::now();
+            let (text, heard) = tokio::join!(transcription, self.hears_speech(path));
+            debug!(
+                "Transcription and no-speech check together in {:?}",
+                started.elapsed()
+            );
+            (text?, Some(heard))
+        } else {
+            (transcription.await?, None)
+        };
 
         // Filter silence artifacts
         let filtered = self.filter_silence_artifacts(&text);
@@ -406,20 +476,28 @@ impl WhisperClient {
         }
 
         if verify {
-            if grammar.is_some() || self.hears_speech(path).await != Some(true) {
+            if grammar.is_some() || self.heard(path, early).await != Some(true) {
                 info!("Dropping {:?}: not confirmed as speech", filtered);
                 return Err(WhisperError::EmptyTranscription);
             }
         } else if grammar.is_none()
             && self.filter_silence_artifacts
             && filtered.split_whitespace().count() <= NO_SPEECH_CHECK_MAX_WORDS
-            && self.hears_speech(path).await == Some(false)
+            && self.heard(path, early).await == Some(false)
         {
             info!("Dropping {:?}: the model hears no speech", filtered);
             return Err(WhisperError::EmptyTranscription);
         }
 
         Ok(filtered)
+    }
+
+    /// The no-speech check's answer: the one already asked for, else ask.
+    async fn heard(&self, path: &Path, early: Option<Option<bool>>) -> Option<bool> {
+        match early {
+            Some(heard) => heard,
+            None => self.hears_speech(path).await,
+        }
     }
 
     /// Ask the model, without a forced language, whether the audio holds
@@ -453,6 +531,10 @@ impl WhisperClient {
             }],
             "max_tokens": 16,
             "temperature": 0.0,
+            // Only the header is read: stop at its end instead of writing
+            // the transcript out too (about 17 ms less on Qwen3-ASR 1.7B).
+            "stop": [ASR_TEXT_TAG],
+            "include_stop_str_in_output": true,
         });
         let url = format!(
             "{}/v1/chat/completions",
@@ -470,8 +552,7 @@ impl WhisperClient {
         }
         let completion: ChatCompletionResponse = response.json().await.ok()?;
         let raw = completion.choices.into_iter().next()?.message.content?;
-        let (header, _) = raw.split_once("<asr_text>")?;
-        Some(header.trim() != "language None")
+        speech_in_header(&raw)
     }
 
     /// First model the server lists, if it has an OpenAI model list.
@@ -1101,7 +1182,11 @@ mod tests {
         assert_eq!(text, "Close window.");
         let requests = server.received_requests().await.unwrap();
         assert_eq!(prompts(&requests), [true]);
-        let body = String::from_utf8_lossy(&requests[0].body).to_string();
+        let transcription = requests
+            .iter()
+            .find(|r| r.url.path() == "/v1/audio/transcriptions")
+            .unwrap();
+        let body = String::from_utf8_lossy(&transcription.body).to_string();
         assert!(body.contains("enter, close window"));
     }
 
@@ -1171,5 +1256,111 @@ mod tests {
             .await;
         let client = WhisperClient::new(plain.uri());
         assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Okay.");
+    }
+
+    /// A server whose transcription and no-speech check each take `delay`.
+    async fn slow_server(delay: Duration) -> wiremock::MockServer {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "Over."}))
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "Qwen/Qwen3-ASR-1.7B"}]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "choices": [{"message": {"content": "language English<asr_text>"}}]
+                    }))
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn short_audio_checks_alongside_the_transcription() {
+        let delay = Duration::from_millis(300);
+        let wav = wav_file();
+
+        let server = slow_server(delay).await;
+        let client = WhisperClient::new(server.uri());
+        let started = std::time::Instant::now();
+        assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Over.");
+        let together = started.elapsed();
+
+        let server = slow_server(delay).await;
+        let client = WhisperClient::new(server.uri()).with_short_parallel_ms(0);
+        let started = std::time::Instant::now();
+        assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Over.");
+        let after = started.elapsed();
+
+        assert!(together < delay * 2, "overlapped: {together:?}");
+        assert!(after >= delay * 2, "one after the other: {after:?}");
+    }
+
+    #[tokio::test]
+    async fn long_audio_asks_no_check_for_a_long_transcript() {
+        let server =
+            no_speech_server("This is a longer sentence.", "language None<asr_text>").await;
+        let client = WhisperClient::new(server.uri()).with_short_parallel_ms(10);
+        let file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+        std::fs::write(file.path(), vec![0u8; 44 + 32 * 1000]).unwrap();
+        client.transcribe(file.path()).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests
+            .iter()
+            .all(|r| r.url.path() != "/v1/chat/completions"));
+    }
+
+    #[test]
+    fn short_is_measured_in_audio_time() {
+        let client = WhisperClient::new("http://localhost:1").with_short_parallel_ms(1000);
+        assert!(client.is_short(WAV_HEADER_SIZE + 32_000));
+        assert!(!client.is_short(WAV_HEADER_SIZE + 32_001));
+        let off = client.with_short_parallel_ms(0);
+        assert!(!off.is_short(WAV_HEADER_SIZE + 32));
+    }
+
+    #[tokio::test]
+    async fn the_check_stops_at_the_header() {
+        let server = no_speech_server("Stop.", "language English<asr_text>").await;
+        let client = WhisperClient::new(server.uri());
+        let wav = wav_file();
+        assert_eq!(client.transcribe(wav.path()).await.unwrap(), "Stop.");
+        let requests = server.received_requests().await.unwrap();
+        let check = requests
+            .iter()
+            .find(|r| r.url.path() == "/v1/chat/completions")
+            .expect("a no-speech check");
+        let body: serde_json::Value = serde_json::from_slice(&check.body).unwrap();
+        assert_eq!(body["stop"], serde_json::json!(["<asr_text>"]));
+        assert_eq!(body["include_stop_str_in_output"], true);
+    }
+
+    #[test]
+    fn speech_in_header_reads_the_language() {
+        assert_eq!(speech_in_header("language None<asr_text>"), Some(false));
+        assert_eq!(
+            speech_in_header("language English<asr_text>Stop."),
+            Some(true)
+        );
+        assert_eq!(speech_in_header("language English<asr_text>"), Some(true));
+        // A server that leaves the stop string out.
+        assert_eq!(speech_in_header("language None"), Some(false));
+        assert_eq!(speech_in_header("language English"), Some(true));
+        assert_eq!(speech_in_header("Stop."), None);
     }
 }

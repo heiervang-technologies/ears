@@ -1022,6 +1022,72 @@ async fn test_ghost_accept_flashes_then_clears_without_committing() {
     assert!(lines.try_iter().all(|l| l == "S"), "nothing committed");
 }
 
+#[tokio::test]
+async fn test_accept_after_takes_the_ghost_down_before_keys_and_shows_it_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.set_commands(over_commands(30));
+    engine.ghost.as_mut().unwrap().showing = true;
+    let started = Instant::now();
+    engine.ghost_accept_before("Over.", true).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(30),
+        "no hold before"
+    );
+    assert_eq!(next_cmd(&lines), "X", "down before the key");
+    engine.ghost_accept_after("Over.", true).await;
+    assert!(started.elapsed() >= Duration::from_millis(30) + super::ghost::ACCEPT_KEY_SETTLE);
+    assert_eq!(next_cmd(&lines), "F 5 Over.", "shown after the key");
+    assert_eq!(next_cmd(&lines), "X");
+    assert!(engine.shown.is_some());
+    assert!(lines.try_iter().all(|l| l == "S"), "nothing committed");
+}
+
+#[tokio::test]
+async fn test_accept_after_off_holds_before_the_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    let mut commands = over_commands(30);
+    commands.accept_after = false;
+    engine.set_commands(commands);
+    let started = Instant::now();
+    engine.ghost_accept_before("Over.", true).await;
+    assert!(
+        started.elapsed() >= Duration::from_millis(30),
+        "held before"
+    );
+    assert_eq!(next_cmd(&lines), "F 5 Over.");
+    assert_eq!(next_cmd(&lines), "X");
+    engine.ghost_accept_after("Over.", true).await;
+    assert!(lines.try_iter().all(|l| l == "S"), "nothing after");
+}
+
+#[tokio::test]
+async fn test_run_program_starts_before_the_accept_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines) = ghost_engine(dir.path());
+    engine.typing_mode = TypingMode::Wtype;
+    let hold = Duration::from_millis(300);
+    engine.set_commands(over_commands(hold.as_millis() as u64));
+    let argv = vec!["true".to_string()];
+    let command = crate::commands::Command::Run {
+        name: "nothing".into(),
+        argv: argv.clone(),
+    };
+    let started = Instant::now();
+    engine.run_program(&command, &argv, "Nothing.").await;
+    let acted = engine.acted.expect("acted").duration_since(started);
+    let shown = engine.shown.expect("shown").duration_since(started);
+    assert!(
+        acted < Duration::from_millis(100),
+        "started at once: {acted:?}"
+    );
+    assert!(shown >= acted + hold, "then shown: {shown:?}");
+    let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+    assert!(sent.contains(&"F 8 Nothing.".to_string()), "{sent:?}");
+    assert!(!sent.iter().any(|l| l.starts_with('C')), "{sent:?}");
+}
+
 /// Ghost engine on a fake stream whose finals are committed as is.
 async fn live_final_engine(
     dir: &std::path::Path,
@@ -1081,7 +1147,10 @@ async fn speak_and_finish(
 #[tokio::test]
 async fn test_live_final_is_committed_without_a_second_transcription() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 0).await;
+    let (mut engine, lines, server, whisper) = live_final_engine(dir.path(), 0).await;
+    // Short audio would start the full transcription early, in case the
+    // final is short too.
+    engine.whisper_client = Arc::new(WhisperClient::new(whisper.uri()).with_short_parallel_ms(0));
     speak_and_finish(&mut engine, &server, Some("Here is the live final.")).await;
     assert_eq!(
         next_cmd_ticking(&mut engine, &lines).await,
@@ -1094,6 +1163,48 @@ async fn test_short_live_final_goes_through_the_full_transcription() {
     let dir = tempfile::tempdir().unwrap();
     let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
     speak_and_finish(&mut engine, &server, Some("Okay.")).await;
+    assert_eq!(
+        next_cmd_ticking(&mut engine, &lines).await,
+        "C from the full transcription."
+    );
+}
+
+#[tokio::test]
+async fn test_short_utterance_is_transcribed_in_full_before_the_final_is_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, lines, server, whisper) = live_final_engine(dir.path(), 1).await;
+    feed(&mut engine, &[0.9, 0.9, 0.9]);
+    ghost_tick(&mut engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let id = server.starts()[0];
+    let segs = feed(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+    let finish = async {
+        server.wait_for(|l| l == format!("end {id}")).await;
+        // The final is held back until the full transcription was asked.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let asked = whisper.received_requests().await.unwrap_or_default();
+                if asked
+                    .iter()
+                    .any(|r| r.url.path() == "/v1/audio/transcriptions")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the full transcription starts before the final is in");
+        server.say(
+            serde_json::json!({"type": "final", "utterance": id, "text": "Okay.",
+            "audio_ms": 1000, "decode_ms": 40}),
+        );
+    };
+    let (result, ()) = tokio::join!(
+        engine.process_segment(segs.into_iter().next().unwrap()),
+        finish
+    );
+    result.unwrap();
     assert_eq!(
         next_cmd_ticking(&mut engine, &lines).await,
         "C from the full transcription."

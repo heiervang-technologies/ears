@@ -951,10 +951,18 @@ pub struct Timing {
     /// What to do was decided.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision_ms: Option<f64>,
+    /// The transcript's text embedding was in (command mode, when the
+    /// words name no action; asked alongside the audio embedding).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_ms: Option<f64>,
     /// The action was done: the key pressed, the program started, the mode
-    /// switched. Includes the accept colour hold (`[commands] accept_ms`).
+    /// switched. Includes the accept colour hold only when it is shown
+    /// first (`[commands] accept_after = false`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_ms: Option<f64>,
+    /// The accept colour went, after `[commands] accept_ms` on screen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shown_ms: Option<f64>,
 }
 
 /// The zero of a [`Timing`]: when VAD called the utterance ended.
@@ -985,8 +993,10 @@ impl std::fmt::Display for Timing {
         let stages = [
             ("asr", self.asr_ms),
             ("embedding", self.embedding_ms),
+            ("text", self.text_ms),
             ("decision", self.decision_ms),
             ("action", self.action_ms),
+            ("shown", self.shown_ms),
         ];
         let parts: Vec<String> = (stages.iter())
             .filter_map(|(name, ms)| ms.map(|ms| format!("{name} {ms:.0} ms")))
@@ -1316,7 +1326,38 @@ impl CommandMode {
     /// embedding worked) and its transcript (`words`, "" if the ASR did not
     /// answer in time). See [`combine`].
     pub async fn hear_with(&mut self, audio: Option<Vec<f32>>, words: &str) -> (Outcome, Hearing) {
-        let ready = self.ready();
+        self.hear_with_text(audio, words, None).await
+    }
+
+    /// Whether [`CommandMode::hear_with`] embeds the words' meaning: they
+    /// name no action and the text anchors are in.
+    fn wants_text(&mut self, words: &str) -> bool {
+        self.ready() && self.by_words(words).0.is_none() && !plain(words).is_empty()
+    }
+
+    /// The text embedding [`CommandMode::hear_with`] would ask for, as a
+    /// request to start now, alongside the audio embedding (None when it
+    /// asks for none). Hand its result to [`CommandMode::hear_with_text`].
+    pub fn text_request(
+        &mut self,
+        words: &str,
+    ) -> Option<impl std::future::Future<Output = Result<Vec<f32>>> + Send + 'static> {
+        self.wants_text(words).then(|| {
+            let embedder = self.embedder.clone();
+            let words = words.trim().to_string();
+            async move { embedder.text(&words).await }
+        })
+    }
+
+    /// [`CommandMode::hear_with`], with the text embedding already asked
+    /// for (`text`, from [`CommandMode::text_request`]); None: ask now if
+    /// it is wanted.
+    pub async fn hear_with_text(
+        &mut self,
+        audio: Option<Vec<f32>>,
+        words: &str,
+        text: Option<Result<Vec<f32>>>,
+    ) -> (Outcome, Hearing) {
         let (by_words, rest) = self.by_words(words);
         let mut hearing = Hearing {
             words: words.trim().to_string(),
@@ -1325,8 +1366,12 @@ impl CommandMode {
             ..Default::default()
         };
         // What the words mean, unless they already name an action.
-        if ready && by_words.is_none() && !plain(words).is_empty() {
-            match self.embedder.text(words.trim()).await {
+        if self.wants_text(words) {
+            let text = match text {
+                Some(text) => text,
+                None => self.embedder.text(words.trim()).await,
+            };
+            match text {
                 Ok(v) => hearing.text = Some(self.router.decide(&v)),
                 Err(e) => tracing::warn!("Command mode: cannot embed the transcript: {}", e),
             }
@@ -1805,6 +1850,26 @@ run = ["playerctl", "next"]
         drop(server);
         let mut again = CommandMode::start_loading(paths).unwrap();
         assert!(again.ready() && !loading.exists());
+    }
+
+    #[tokio::test]
+    async fn the_text_embedding_can_be_asked_for_ahead() {
+        let server = server(Some("gemma"), Duration::ZERO, usize::MAX).await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut mode = CommandMode::start(paths(dir.path(), &server.uri(), 3))
+            .await
+            .unwrap();
+        // Words that name an action need no meaning; others do.
+        assert!(mode.text_request("Enter.").is_none());
+        assert!(mode.text_request("").is_none());
+        let request = mode.text_request("something else").expect("wanted");
+        let ahead = request.await;
+        let (posts, _) = embedded(&server).await;
+        let (_, hearing) = mode
+            .hear_with_text(Some(unit(&[1.0, 0.0])), "something else", Some(ahead))
+            .await;
+        assert!(hearing.text.is_some(), "the meaning was used");
+        assert_eq!(embedded(&server).await.0, posts, "and not asked for again");
     }
 
     #[tokio::test]

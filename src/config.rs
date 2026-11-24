@@ -18,6 +18,10 @@ fn read_optional_config(path: &Path) -> Result<Option<String>> {
     }
 }
 
+fn default_short_parallel_ms() -> u64 {
+    crate::whisper::DEFAULT_SHORT_PARALLEL_MS
+}
+
 fn default_filter_silence_artifacts() -> bool {
     true
 }
@@ -247,6 +251,13 @@ pub struct Config {
     /// Suppress known whole-transcript silence hallucinations in HTTP transcription.
     #[serde(default = "default_filter_silence_artifacts")]
     pub filter_silence_artifacts: bool,
+    /// Audio up to this many ms is short: its no-speech check is asked
+    /// alongside the transcription instead of after it, and in VAD ghost
+    /// mode the full transcription starts while the live stream's final is
+    /// awaited. Same result, sooner, for a few model calls nobody reads.
+    /// 0: one after the other, as before. Default: 3000.
+    #[serde(default = "default_short_parallel_ms")]
+    pub short_parallel_ms: u64,
     /// Text filters for transcription output
     #[serde(default)]
     pub text_filters: TextFilters,
@@ -477,6 +488,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            short_parallel_ms: default_short_parallel_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,
@@ -639,6 +651,7 @@ impl Config {
             model: None,
             prompt: None,
             filter_silence_artifacts: true,
+            short_parallel_ms: default_short_parallel_ms(),
             text_filters: TextFilters::new(),
             typing_mode: TypingMode::default(),
             auto_enter: true,

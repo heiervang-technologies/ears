@@ -71,10 +71,22 @@ pub struct VoiceCommands {
     #[serde(default)]
     pub keys: BTreeMap<String, String>,
     /// How long a recognized command is shown in the accept colour (the
-    /// ghost's frozen colour) before its key is pressed, in milliseconds.
-    /// 0: press at once.
+    /// ghost's frozen colour), in milliseconds. 0: not shown.
     #[serde(default = "default_accept_ms")]
     pub accept_ms: u64,
+    /// Show the accept colour after the command acted (default: true), so
+    /// it never delays the key, the program or the mode switch. The ghost
+    /// is taken down before a key is pressed or a program started (an app
+    /// would take the key as ending the preedit) and shown again just
+    /// after. False: shown first for `accept_ms`, then the command acts.
+    #[serde(default = "default_accept_after")]
+    pub accept_after: bool,
+    /// ydotool's delay after each key event of a spoken key command
+    /// (Enter, a combination), in milliseconds. ydotool's own default is
+    /// 12, so a single Enter took 24 ms of sleeping. Default: 4, what key
+    /// sequences have always used.
+    #[serde(default = "default_key_delay_ms")]
+    pub key_delay_ms: u64,
     /// Steering: a command (argv) that is offered each utterance that is not
     /// one of the commands above, with the utterance as its last argument,
     /// e.g. `["voice-cmd", "handle"]`. Exit status 0 means it acted on it
@@ -427,6 +439,14 @@ fn default_accept_ms() -> u64 {
     200
 }
 
+fn default_accept_after() -> bool {
+    true
+}
+
+fn default_key_delay_ms() -> u64 {
+    crate::desktop::DEFAULT_KEY_DELAY_MS
+}
+
 impl Default for VoiceCommands {
     fn default() -> Self {
         Self {
@@ -444,6 +464,8 @@ impl Default for VoiceCommands {
             keys: BTreeMap::new(),
             tail: default_tail(),
             accept_ms: default_accept_ms(),
+            accept_after: default_accept_after(),
+            key_delay_ms: default_key_delay_ms(),
             steer: Vec::new(),
             steer_timeout_ms: default_steer_timeout_ms(),
             text_fields_only: false,

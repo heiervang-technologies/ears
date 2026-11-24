@@ -115,6 +115,7 @@ device = "alsa_input.usb-..."
 # model = "whisper-large-v3-turbo"  # Optional (for cloud APIs that require it)
 # prompt = "vLLM, PyTorch" # Optional (context biasing: names, acronyms, jargon)
 filter_silence_artifacts = true # Set false to retain exact phrases such as "Thank you"
+# short_parallel_ms = 3000 # Audio this short: no-speech check alongside the transcription (0: after)
 
 [text_filters]
 lowercase = false
@@ -681,6 +682,8 @@ wake = ["ears on"]                        # resume typing from standby
 sleep = ["fuck off clanker"]              # stand by (as well as the built-in "ears off")
 literal = ["literal"]     # "Literal enter." types "enter." instead
 accept_ms = 200           # how long the accepted command shows (0: off)
+accept_after = true       # show it after the command acted, not before (false: hold first)
+key_delay_ms = 4          # ydotool delay per key event of a key command (ydotool's own: 12)
 steer = ["voice-cmd", "handle"]  # offered every other utterance first (below)
 steer_timeout_ms = 800    # slower steering loses, and the words are typed
 text_fields_only = true   # type only when a text field has focus (below)
@@ -733,7 +736,8 @@ A command counts only when it is the entire utterance, said on its own
 between pauses. "It's over now" is ordinary text. Case and punctuation are
 ignored. With ghost text on, a command word turns the accept colour (the
 ghost's `frozen_color`) as soon as the live decoder hears it alone, and stays
-that colour for `accept_ms` before its key is pressed. If you keep talking it
+that colour for `accept_ms` once its key is pressed (before it, with
+`accept_after = false`; the ghost is down while the key goes). If you keep talking it
 turns back into ordinary ghost text. The ghost is cleared rather than
 committed, the "done" cue plays, and the IPC socket gets a `VoiceCommand` event instead of a
 `SegmentCompleted`, so a command is never forwarded to an agent as text.
