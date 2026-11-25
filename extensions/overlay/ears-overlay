@@ -12,13 +12,17 @@ the microphone open, and moves like liquid with your voice.
              pale blue: typing is off and nothing takes it
              green: a push-to-talk voice command (ears-embed) is recording
              violet: command mode ("command" said alone): speech is routed
-             to actions by embedding, nothing is typed
+             to actions by embedding, nothing is typed; dim violet,
+             pulsing, while its embeddings still load (only exact action
+             names fire until then)
   standby    orange: the mic is open, but only the wake phrase is acted on
   fault      red, breathing slowly: the mic is open but ears is not hearing
              (no audio arriving, capture stopped), its health report has
              gone stale, or the ASR server is down; words will not arrive
-  warning    the normal colour with a reddish rim: the ASR server is slow or
-             ears fell back to a worse path, or the mic delivers silence
+  warning    the normal colour with a reddish rim: the configured mic is
+             missing and ears captures from a fallback one (echo cancelling
+             likely bypassed), the ASR server is slow or ears fell back to a
+             worse path, or the mic delivers silence
 
 Decisions (red): while `ears decide` has a question open, the line turns
 red and the question and its options float above the subtitles; read one
@@ -155,6 +159,13 @@ def on_call() -> bool:
 def command_mode() -> bool:
     """ears VAD is in command mode (marker written by ears, ears#230)."""
     return os.path.exists(os.path.join(EARS_RUN, "vad.command"))
+
+
+def command_loading() -> bool:
+    """Command mode is on but its embeddings are still loading: only exact
+    action names fire meanwhile (ears writes vad.command.loading beside
+    vad.command)."""
+    return command_mode() and os.path.exists(os.path.join(EARS_RUN, "vad.command.loading"))
 
 
 def decision() -> dict | None:
@@ -308,6 +319,10 @@ def diagnose(h: dict | None, now_ms: int | None = None) -> tuple[str | None, str
     asr_state = asr.get("state") if isinstance(asr, dict) else None
     if asr_state == "down":
         return "asr", None
+    # A fallback mic is the warning that explains the others (no echo
+    # cancelling: worse words), and it lasts until the mic is back.
+    if h.get("mic_warning") == "configured mic missing" or h.get("device_missing") is True:
+        return None, "mic-fallback"
     if asr_state == "degraded":
         return None, "asr-degraded"
     if h.get("mic_warning") == "mic silent":
@@ -335,9 +350,13 @@ FAULT_TONE = "#f05a5a"
 DECIDE_TONE = "#ff3344"
 # Vision mode (`ears look`): pink, since cyan is dictation's.
 VISION_TONE = "#ff4fd8"
+COMMAND_TONE = "#a78bfa"
+# Command mode while its embeddings load: the same violet, dimmed (the
+# scene also pulses it); exact action names already fire.
+COMMAND_LOADING_TONE = "#6f5ca8"
 
 
-def tone(s: str, where: str, fault: str | None) -> str:
+def tone(s: str, where: str, fault: str | None, loading: bool = False) -> str:
     """The colour the line is drawn in: the one palette for every consumer."""
     if s != "off" and fault:
         return FAULT_TONE
@@ -349,7 +368,9 @@ def tone(s: str, where: str, fault: str | None) -> str:
         return "#ff9e1f"
     if s != "listening":
         return "#6b7280"
-    return {"stick": "#facc15", "call": "#22c55e", "command": "#1fe88a", "embed": "#a78bfa",
+    if where == "embed" and loading:
+        return COMMAND_LOADING_TONE
+    return {"stick": "#facc15", "call": "#22c55e", "command": "#1fe88a", "embed": COMMAND_TONE,
             "none": "#8fb8c4"}.get(where, "#22d3ee")
 
 
@@ -361,7 +382,7 @@ _last_state: dict | None = None
 
 def publish(line: dict) -> None:
     global _last_state
-    state = {k: line[k] for k in ("state", "route", "fault", "warn", "cc", "tone")}
+    state = {k: line[k] for k in ("state", "route", "fault", "warn", "loading", "cc", "tone")}
     if state == _last_state:
         return
     _last_state = state
@@ -375,10 +396,12 @@ def publish(line: dict) -> None:
 
 
 def emit(s: str, level: float = 0.0, where: str = "cursor",
-         fault: str | None = None, warn: str | None = None) -> None:
+         fault: str | None = None, warn: str | None = None,
+         loading: bool = False) -> None:
+    loading = loading and s != "off" and where == "embed"
     line = {"state": s, "route": where, "level": round(level, 3),
-            "fault": fault, "warn": warn, "cc": captioned(s, where),
-            "tone": tone(s, where, fault)}
+            "fault": fault, "warn": warn, "loading": loading,
+            "cc": captioned(s, where), "tone": tone(s, where, fault, loading)}
     print(json.dumps(line), flush=True)
     publish(line)
 
@@ -548,7 +571,7 @@ def stop_recorder(rec: subprocess.Popen | None) -> None:
 
 
 def cmd_feed(once: bool) -> int:
-    def look() -> tuple[str, str, str | None, str | None]:
+    def look() -> tuple[str, str, str | None, str | None, bool]:
         s = state()
         where = route()
         fault, warn = diagnose(health()) if s != "off" and where != "command" else (None, None)
@@ -556,11 +579,11 @@ def cmd_feed(once: bool) -> int:
             # Command mode does not transcribe: the ASR server is not in the path.
             fault = None if fault == "asr" else fault
             warn = None if warn == "asr-degraded" else warn
-        return s, where, fault, warn
+        return s, where, fault, warn, where == "embed" and command_loading()
 
     if once:
-        s, where, fault, warn = look()
-        emit(s, 0.0, where, fault, warn)
+        s, where, fault, warn, loading = look()
+        emit(s, 0.0, where, fault, warn, loading)
         return 0
 
     # Ended by the scene (SIGTERM/SIGHUP): unwind, so the recorder is reaped.
@@ -575,7 +598,7 @@ def cmd_feed(once: bool) -> int:
     start_at = 0.0
     last_data = 0.0
     checked = 0.0
-    s, where, fault, warn = "off", "cursor", None, None
+    s, where, fault, warn, loading = "off", "cursor", None, None, False
     shown = None
     subtitle = Subtitle()
     asked = Decision()
@@ -590,7 +613,7 @@ def cmd_feed(once: bool) -> int:
             chanted.poll()
             if now - checked >= CHECK_EVERY_S:
                 checked = now
-                s, where, fault, warn = look()
+                s, where, fault, warn, loading = look()
                 if s == "off":
                     stop_recorder(rec)
                     rec, buf, noise, level = None, b"", None, 0.0
@@ -598,11 +621,11 @@ def cmd_feed(once: bool) -> int:
                     # ears switched mics (fallback, or back): follow it.
                     stop_recorder(rec)
                     rec, buf, noise, level, start_at = None, b"", None, 0.0, now
-                current = (s, where, fault, warn)
+                current = (s, where, fault, warn, loading)
                 if s != "off" or current != shown:
                     # While the mic is open, emit at least twice a second so
                     # the scene sees state changes even without audio.
-                    emit(s, level if rec else 0.0, where, fault, warn)
+                    emit(s, level if rec else 0.0, where, fault, warn, loading)
                     shown = current
             if s == "off":
                 time.sleep(CHECK_EVERY_S)
@@ -643,7 +666,7 @@ def cmd_feed(once: bool) -> int:
                     else:
                         noise += 0.03
                     level = min(1.0, max(0.0, (db - noise - 4) / SPAN_DB))
-                    emit(s, level, where, fault, warn)
+                    emit(s, level, where, fault, warn, loading)
             elif now - last_data > RECORDER_QUIET_S:
                 # A recorder that delivers nothing (its node vanished) is
                 # restarted; meanwhile the edge stays flat, never frozen.
@@ -694,6 +717,9 @@ def cmd_run() -> int:
     if not ok:
         print(f"ears-overlay: not started: {why}", file=sys.stderr)
         return 0
+    # A detached scene from `start` (e.g. session autostart winning the race
+    # with the unit) would make two lights: this one takes over.
+    cmd_stop()
     os.execvp("qs", ["qs", "-p", scene_path()])
 
 
@@ -738,6 +764,8 @@ ShellRoot {
     // Health from ears: fault = words will not arrive, warn = they arrive worse.
     property string fault: ""
     property string warn: ""
+    // Command mode with its embeddings still loading: the line pulses.
+    property bool loading: false
     readonly property color faultTone: "#f05a5a"
     // Live subtitle from ears: settled characters bright, the rest forming.
     property string subText: ""
@@ -834,6 +862,7 @@ ShellRoot {
                     root.level = d.level;
                     root.fault = d.fault || "";
                     root.warn = d.warn || "";
+                    root.loading = !!d.loading;
                     root.cc = !!d.cc;
                     if (d.tone) root.feedTone = d.tone;
                     if (root.open) quiet.restart(); else quiet.stop();
@@ -855,16 +884,18 @@ ShellRoot {
         onTriggered: { root.fault = "stale"; root.level = 0; feed.running = false; }
     }
 
-    // A fault breathes slowly; the timer runs only while the fault lasts.
+    // A fault breathes slowly, command mode loading pulses a little faster;
+    // the timer runs only while either lasts.
     property real breath: 0
     property real breathClock: 0
     Timer {
         interval: 50
         repeat: true
-        running: root.open && root.fault !== ""
+        running: root.open && (root.fault !== "" || root.loading)
         onTriggered: {
             root.breathClock += 0.05;
-            root.breath = 0.5 + 0.5 * Math.sin(root.breathClock * 2 * Math.PI / 3.2);
+            const period = root.fault !== "" ? 3.2 : 1.6;
+            root.breath = 0.5 + 0.5 * Math.sin(root.breathClock * 2 * Math.PI / period);
         }
         onRunningChanged: if (!running) { root.breath = 0; root.breathClock = 0; }
     }
@@ -954,7 +985,8 @@ ShellRoot {
                 ShapePath {
                     strokeWidth: !root.open ? 1.5 : root.fault !== "" || root.warn !== "" ? 3 : 2
                     strokeColor: Qt.alpha(root.rim, !root.open ? 0.5
-                                          : root.fault !== "" ? 0.45 + 0.5 * root.breath : 0.95)
+                                          : root.fault !== "" ? 0.45 + 0.5 * root.breath
+                                          : root.loading ? 0.3 + 0.55 * root.breath : 0.95)
                     fillGradient: LinearGradient {
                         x1: 0; y1: 0; x2: 0; y2: edge.height
                         GradientStop { position: 0.0; color: Qt.alpha(root.tone, 0.25) }

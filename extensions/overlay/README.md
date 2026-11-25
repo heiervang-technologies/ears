@@ -12,10 +12,11 @@ ones still forming fainter, a recognised command radiant.
 | pale blue | listening, typing off, nothing takes the words |
 | orange | standby: only the wake phrase is acted on |
 | violet | command mode: speech goes to actions, nothing is typed |
+| dim violet, pulsing | command mode while its embeddings load: only exact action names fire yet |
 | red, steady | `ears decide` has a question open (it floats above the line) |
 | pink | vision mode (`ears look`) |
 | red, breathing | a fault: the mic delivers nothing, or the ASR server is down |
-| normal colour, reddish rim | a warning: the ASR is slow or degraded, or the mic is silent |
+| normal colour, reddish rim | a warning: the configured mic is missing and ears captures from a fallback one, the ASR is slow or degraded, or the mic is silent |
 
 Yellow (the talking stick), green (an answered agent call) and the
 push-to-talk colour come from HAIos tools. Without them those states
@@ -43,6 +44,8 @@ systemctl --user daemon-reload && systemctl --user enable --now ears-overlay.ser
 ```
 
 Without systemd: `ears-overlay start` (detached) and `ears-overlay stop`.
+`ears-overlay run` (the unit's command) takes over from a detached scene,
+so the two never draw two lights.
 `ears-overlay check` says whether it would start and why.
 `touch ~/.config/ears/no-overlay` opts out.
 
@@ -59,6 +62,7 @@ The feed reads only what ears publishes in `$XDG_RUNTIME_DIR/ears/`:
 |---|---|
 | `vad.pid` | VAD counts as running only while this pid lives |
 | `vad.standby`, `vad.command`, `vad.vision`, `vad.chant` | the mode |
+| `vad.command.loading` | command mode's embeddings are still loading |
 | `vad-health.json` | faults and warnings, used only while it belongs to the live VAD in this boot |
 | `subtitle.json`, `subtitles.on` | the subtitle line, and the modes it shows in (`subtitle_modes`) |
 | `decision.json`, `decision-last.json` | an open `ears decide` question, and what each answer matched |
