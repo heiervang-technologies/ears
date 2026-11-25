@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is offered by default.
 - `examples/hei`: a complete voice-driven desktop configuration with a map
   of how its pieces connect.
+- overlay: command mode pulses a dim violet while its embeddings load, and
+  a missing configured mic (ears on a fallback one) shows as a warning rim.
+  Ported from HAIos (hai-os#753).
+
+### Fixed
+
+- overlay: `ears-overlay run` stops a scene `start` left detached, so
+  autostart and the user unit no longer draw two lights.
 
 ## [1.3.0] - 2026-11-23
 
