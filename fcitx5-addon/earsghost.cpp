@@ -440,17 +440,21 @@ private:
         // Ghost semantics: the caret stays where the user is; the suggested
         // text trails after it instead of pushing the cursor along.
         t.setCursor(0);
-        // Remove the previous surface when changing between inline and popup.
-        ic->inputPanel().setClientPreedit(fcitx::Text());
-        ic->inputPanel().setPreedit(fcitx::Text());
-        ic->inputPanel().setCandidateList(nullptr);
+        // Remove only the inactive surfaces so updating inline preedit does
+        // not emit a blank preedit frame before the replacement text.
         if (panel) {
             finishLine();
+            ic->inputPanel().setClientPreedit(fcitx::Text());
+            ic->inputPanel().setPreedit(fcitx::Text());
             ic->inputPanel().setCandidateList(std::move(lines));
         } else if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+            ic->inputPanel().setPreedit(fcitx::Text());
+            ic->inputPanel().setCandidateList(nullptr);
             ic->inputPanel().setClientPreedit(t);
         } else {
             // App cannot draw preedit: fcitx shows it in its own panel.
+            ic->inputPanel().setClientPreedit(fcitx::Text());
+            ic->inputPanel().setCandidateList(nullptr);
             ic->inputPanel().setPreedit(t);
         }
         ic->updatePreedit();

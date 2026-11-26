@@ -1192,38 +1192,90 @@ fn test_final_from_partial_needs_coverage() {
         lag_ms,
     };
     let text = "That is the whole thing.";
-    let mut check = |mode, t: super::ghost::StreamTail, id, waited| {
+    let mut check = |mode, t: super::ghost::StreamTail, id, waited, prob, verify| {
         engine.set_final_from_partial(mode);
         engine.ghost.as_mut().unwrap().stream_tail = Some(t);
         engine
-            .final_from_partial(id, 3000, waited)
+            .final_from_partial(id, 3000, waited, prob, verify)
             .map(|(_, how)| how)
     };
-    assert_eq!(check(F::Off, tail(3100, 20, text), 7, 700), None);
     assert_eq!(
-        check(F::Covered, tail(3000, 20, text), 7, 700),
+        check(F::Off, tail(3100, 20, text), 7, 700, 0.9, false),
+        None
+    );
+    assert_eq!(
+        check(F::Covered, tail(3000, 20, text), 7, 700, 0.9, false),
         Some("decoded to the end of speech")
     );
     // Stopped changing before the end: only `settled` trusts that, and
     // only when the stream kept pace and had time to decode the end.
-    assert_eq!(check(F::Covered, tail(2800, 20, text), 7, 700), None);
     assert_eq!(
-        check(F::Settled, tail(2800, 20, text), 7, 700),
+        check(F::Covered, tail(2800, 20, text), 7, 700, 0.9, false),
+        None
+    );
+    assert_eq!(
+        check(F::Settled, tail(2800, 20, text), 7, 700, 0.9, false),
         Some("unchanged to the end of speech")
     );
-    assert_eq!(check(F::Settled, tail(2800, 500, text), 7, 700), None);
-    assert_eq!(check(F::Settled, tail(2800, 20, text), 7, 200), None);
-    // Another stream utterance, or a result short enough for the
-    // no-speech check.
-    assert_eq!(check(F::Covered, tail(3100, 20, text), 8, 700), None);
-    assert_eq!(check(F::Covered, tail(3100, 20, "Okay."), 7, 700), None);
+    assert_eq!(
+        check(F::Settled, tail(2800, 500, text), 7, 700, 0.9, false),
+        None
+    );
+    assert_eq!(
+        check(F::Settled, tail(2800, 20, text), 7, 200, 0.9, false),
+        None
+    );
+    // Another stream utterance, or a low-confidence / unverified / silence-artifact
+    // short result still goes through the no-speech check.
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, text), 8, 700, 0.9, false),
+        None
+    );
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Okay."), 7, 700, 0.55, false),
+        None
+    );
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Okay."), 7, 700, 0.9, true),
+        None
+    );
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Thank you."), 7, 700, 0.9, false),
+        None
+    );
+    // High-confidence short speech is accepted directly.
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Okay."), 7, 700, 0.9, false),
+        Some("decoded to the end of speech")
+    );
 }
 
 #[tokio::test]
 async fn test_short_live_final_goes_through_the_full_transcription() {
     let dir = tempfile::tempdir().unwrap();
     let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
-    speak_and_finish(&mut engine, &server, Some("Okay.")).await;
+    // Borderline / low-confidence short utterance (< HIGH_CONFIDENCE_SPEECH_PROB)
+    // still falls back to HTTP + no-speech check.
+    feed(&mut engine, &[0.55, 0.55, 0.55]);
+    ghost_tick(&mut engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let id = server.starts()[0];
+    let segs = feed(&mut engine, &[0.55, 0.0, 0.0, 0.0]);
+    let finish = async {
+        server.wait_for(|l| l == format!("end {id}")).await;
+        server.say(serde_json::json!({
+            "type": "final",
+            "utterance": id,
+            "text": "Okay.",
+            "audio_ms": 1000,
+            "decode_ms": 40
+        }));
+    };
+    let (result, ()) = tokio::join!(
+        engine.process_segment(segs.into_iter().next().unwrap()),
+        finish
+    );
+    result.unwrap();
     assert_eq!(
         next_cmd_ticking(&mut engine, &lines).await,
         "C from the full transcription."

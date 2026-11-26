@@ -529,6 +529,7 @@ impl StreamingEngine {
         let utterance = self.ghost.as_ref().map(|g| g.utterance);
         let chanting = self.chanting();
         let mode_wait = self.mode_wait(chanting);
+        let exact = self.exact_phrases();
         let config = self.vad_detector.config();
         let mut why = "no finished reading";
         // A reading older than the pause stopped changing before the speech
@@ -552,6 +553,24 @@ impl StreamingEngine {
                     None
                 }
             }
+            _ if silence > 0
+                && !self.mode.is_standby()
+                && !self.mode.is_vision()
+                && self.guided_grammar.is_none() =>
+            {
+                unchanged_after.and_then(|floor| {
+                    let settled_clause = self
+                        .ghost
+                        .as_ref()
+                        .and_then(|g| g.stream_tail.as_ref())
+                        .is_some_and(|tail| {
+                            Some(tail.utterance) == utterance
+                                && crate::endpoint::is_clause_settled(&tail.text)
+                                && !exact.as_ref().is_some_and(|p| p.starts_open(&tail.text))
+                        });
+                    settled_clause.then_some((Ending::Clause, 0, floor))
+                })
+            }
             _ => None,
         };
         let max = config.max_silence_duration_ms;
@@ -571,6 +590,7 @@ impl StreamingEngine {
                         (config.finished_silence_ms, false)
                     }
                 }
+                Ending::Clause => (config.finished_silence_ms, false),
             };
             if ms == 0 || ms >= max {
                 why = "early end off";
@@ -656,18 +676,36 @@ impl StreamingEngine {
         self.ghost_stream_events();
         let heard = self.vad_detector.silence_ms();
         let speaking = self.vad_detector.is_speaking();
+        let probable = self.vad_detector.is_probably_speaking();
         if let Some(ghost) = self.ghost.as_mut() {
+            let mut ready = Vec::new();
+            if speaking {
+                if let Some(pending) = ghost.pending_partial.take() {
+                    ready.push(pending);
+                }
+            }
             while let Ok(partial) = ghost.partial_rx.try_recv() {
                 if !partial.streamed {
                     ghost.partial_in_flight = false;
                 }
-                let current = partial.streamed && partial.utterance == ghost.utterance;
+                if !partial.streamed || partial.utterance != ghost.utterance {
+                    continue;
+                }
+                if !speaking {
+                    if probable && partial.result.is_ok() {
+                        ghost.pending_partial = Some(partial);
+                    }
+                    continue;
+                }
+                ready.push(partial);
+            }
+            for partial in ready {
+                if !partial.streamed || partial.utterance != ghost.utterance || !speaking {
+                    continue;
+                }
                 let Ok(raw) = partial.result else {
                     continue;
                 };
-                if !current || !speaking {
-                    continue;
-                }
                 let ending = if decision.is_whole(&raw) {
                     Some(if decision.other {
                         Ending::Command
@@ -706,14 +744,17 @@ impl StreamingEngine {
     /// The stream's last partial for stream utterance `id`, to commit
     /// instead of waiting for its final (`final_from_partial`), with how it
     /// covers the end of speech; `speech_end_ms` from the segment's start,
-    /// after `waited` ms of silence. None: wait for the final. Short
-    /// results never: they go through the full transcription's no-speech
-    /// check, as a short final does.
+    /// after `waited` ms of silence. None: wait for the final. Short results
+    /// (`<= NO_SPEECH_CHECK_MAX_WORDS`) require both high VAD confidence AND
+    /// full coverage (`tail.audio_ms >= speech_end_ms`) so an incomplete first
+    /// word is never committed via a stale `Settled` lag estimate.
     fn final_from_partial(
         &self,
         id: u64,
         speech_end_ms: u64,
         waited: u64,
+        mean_probability: f32,
+        verify: bool,
     ) -> Option<(String, &'static str)> {
         use crate::config::FinalFromPartial as F;
         if self.final_from_partial == F::Off {
@@ -721,13 +762,21 @@ impl StreamingEngine {
         }
         let tail = self.ghost.as_ref()?.stream_tail.as_ref()?;
         if tail.id != id
-            || tail.text.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS
+            || !ghost::stream_text_acceptable(
+                &tail.text,
+                mean_probability,
+                verify,
+                self.language.as_deref(),
+            )
         {
             return None;
         }
+        let is_short =
+            tail.text.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS;
         let how = if tail.audio_ms >= speech_end_ms {
             "decoded to the end of speech"
-        } else if self.final_from_partial == F::Settled
+        } else if !is_short
+            && self.final_from_partial == F::Settled
             && tail.lag_ms <= STREAM_PACE_MS
             && waited >= self.min_step_ms() + tail.lag_ms + PACE_MARGIN_MS
         {
@@ -938,36 +987,48 @@ impl StreamingEngine {
             debug!("Segment normalized by {:.2}x", gain);
         }
 
-        // Save segment to temporary WAV file
-        let wav_start = Instant::now();
-        // A unique owned path survives the request and is removed on success,
-        // failure, or cancellation. A deterministic name races other engines.
-        let segment_file = tempfile::Builder::new()
-            .prefix("segment_")
-            .suffix(".wav")
-            .tempfile_in(&self.temp_dir)
-            .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?
-            .into_temp_path();
-        let saving = self
-            .health
-            .as_ref()
-            .map(|h| h.enter(crate::health::Stage::Saving));
-        self.save_wav(&segment_file, &segment.samples)
-            .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
-        debug!("WAV save took {:?}", wav_start.elapsed());
-        drop(saving);
+        // Helper: create and write a unique temporary WAV file in `temp_dir`.
+        // Deferred past live-stream final resolution in dictation mode so
+        // utterances satisfied by the live stream avoid disk I/O completely.
+        let save_temp_wav =
+            |engine: &Self, samples: &[f32]| -> Result<tempfile::TempPath, StreamingEngineError> {
+                let wav_start = Instant::now();
+                // A unique owned path survives the request and is removed on success,
+                // failure, or cancellation. A deterministic name races other engines.
+                let file = tempfile::Builder::new()
+                    .prefix("segment_")
+                    .suffix(".wav")
+                    .tempfile_in(&engine.temp_dir)
+                    .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?
+                    .into_temp_path();
+                let saving = engine
+                    .health
+                    .as_ref()
+                    .map(|h| h.enter(crate::health::Stage::Saving));
+                engine
+                    .save_wav(&file, samples)
+                    .map_err(|e| StreamingEngineError::AudioError(e.to_string()))?;
+                debug!("WAV save took {:?}", wav_start.elapsed());
+                drop(saving);
+                Ok(file)
+            };
 
         if self.chanting() && !self.deciding() {
             self.chant_segment(&segment.samples).await;
             return Ok(());
         }
         if self.mode.is_command() && !self.deciding() {
+            let segment_file = save_temp_wav(self, &segment.samples)?;
             self.command_segment(&segment_file).await;
             return Ok(());
         }
         // A decision also hears by embedding: keep the audio.
+        let mut segment_file: Option<tempfile::TempPath> = None;
         let decision_audio = if self.deciding() {
-            std::fs::read(&segment_file).ok()
+            let file = save_temp_wav(self, &segment.samples)?;
+            let audio = std::fs::read(&file).ok();
+            segment_file = Some(file);
+            audio
         } else {
             None
         };
@@ -988,22 +1049,32 @@ impl StreamingEngine {
         let segment_ms = segment.samples.len() as u64 * 1000 / u64::from(crate::pcm::SAMPLE_RATE);
         let speech_end_ms = segment_ms.saturating_sub(waited);
         let mut final_by = "http";
-        // An option answer to a decision is a word or two: its final would
-        // be short and transcribed in full anyway (the no-speech check), so
-        // do not wait for it.
+        // An option answer to a decision is a word or two: if its final would
+        // be rejected by the short-result confidence check and transcribed in
+        // full anyway, do not wait for it.
         let short_answer = decision_audio.is_some()
             && streamed_id.is_some_and(|id| {
                 (self.ghost.as_ref())
                     .and_then(|g| g.stream_tail.as_ref())
                     .is_some_and(|t| {
                         t.id == id
-                            && t.text.split_whitespace().count()
-                                <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS
+                            && !ghost::stream_text_acceptable(
+                                &t.text,
+                                segment.mean_probability,
+                                verify,
+                                self.language.as_deref(),
+                            )
                     })
             });
         let live_final = match streamed_id {
             Some(id) if !self.final_correction && !verify && !short_answer => {
-                match self.final_from_partial(id, speech_end_ms, waited) {
+                match self.final_from_partial(
+                    id,
+                    speech_end_ms,
+                    waited,
+                    segment.mean_probability,
+                    verify,
+                ) {
                     Some((text, how)) => {
                         info!(
                             "Committing the stream's last partial ({}); its final not awaited",
@@ -1013,7 +1084,9 @@ impl StreamingEngine {
                         Some(text)
                     }
                     None => {
-                        let text = self.ghost_stream_final(id).await;
+                        let text = self
+                            .ghost_stream_final(id, segment.mean_probability, verify)
+                            .await;
                         if text.is_some() {
                             info!(
                                 "The live stream's final came in {} ms",
@@ -1050,6 +1123,10 @@ impl StreamingEngine {
                 Ok(text)
             }
             None => {
+                let segment_file = match segment_file.take() {
+                    Some(file) => file,
+                    None => save_temp_wav(self, &segment.samples)?,
+                };
                 let result = match self.asr_context() {
                     Some(context) => {
                         self.whisper_client
@@ -1105,7 +1182,7 @@ impl StreamingEngine {
         let asr_done = (Instant::now(), self.mode.kind());
         info!("Transcription took {:?}", transcribe_start.elapsed());
 
-        // Clean up temp file
+        // Clean up temp file (if one was created)
         drop(segment_file);
 
         // An agent's own voice from the speakers, not the user's.
@@ -1481,9 +1558,9 @@ impl StreamingEngine {
             });
             return;
         }
-        // The ghost shows the command word; it must not be committed. It
-        // turns the accept colour, then goes before the key is pressed.
-        self.ghost_accept(heard).await;
+        // The ghost shows the command word; it must not be committed. Clear it
+        // immediately and press the key without blocking on a visual hold.
+        self.ghost_clear();
         self.press_command(command, heard);
     }
 
@@ -1537,11 +1614,8 @@ impl StreamingEngine {
         argv: &[String],
         heard: &str,
     ) {
-        if self.mode.is_standby() || self.typing_mode == TypingMode::None || self.typing_suspended {
-            self.ghost_clear();
-        } else {
-            self.ghost_accept(heard).await;
-        }
+        // Launch the detached program before any visual accept hold so
+        // `accept_ms` never delays process execution.
         match crate::commands::spawn_detached(argv) {
             Ok(pid) => {
                 info!(
@@ -1564,6 +1638,15 @@ impl StreamingEngine {
             name: command.label(),
             text: heard.to_string(),
         });
+        if self.mode.is_standby()
+            || self.typing_mode == TypingMode::None
+            || self.typing_suspended
+            || self.commands.accept_ms == 0
+        {
+            self.ghost_clear();
+        } else {
+            self.ghost_accept(heard).await;
+        }
     }
 
     /// Report a segment that typed nothing.
@@ -3032,3 +3115,249 @@ impl StreamingEngine {
 mod chant;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod endpoint_command_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn fake_ghost_socket(dir: &std::path::Path) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let path = dir.join("ghost_fast.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut w = stream.try_clone().unwrap();
+                for line in std::io::BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let reply: &[u8] = if line == "S" {
+                        b"OK preedit TestApp\n"
+                    } else {
+                        b"OK preedit\n"
+                    };
+                    let _ = tx.send(line);
+                    let _ = w.write_all(reply);
+                }
+            }
+        });
+        (path, rx)
+    }
+
+    fn make_engine(
+        dir: &std::path::Path,
+        vad: VadConfig,
+    ) -> (
+        StreamingEngine,
+        std::sync::mpsc::Receiver<String>,
+        mpsc::UnboundedReceiver<StreamingEvent>,
+    ) {
+        crate::desktop::AudioFeedback::set_volume(0);
+        let mut engine = StreamingEngine::new(
+            Arc::new(WhisperClient::new("http://127.0.0.1:9")),
+            StreamingConfig::default(),
+            vad,
+            ProgressiveTypingConfig::default(),
+            dir.to_path_buf(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        engine.set_event_sender(tx);
+        engine.typing_mode = TypingMode::Wtype;
+        let (path, lines) = fake_ghost_socket(dir);
+        engine.set_ghost_client(Some(crate::ghost::GhostClient::with_focus_probe(
+            path,
+            || Some("TestApp".to_string()),
+        )));
+        assert_eq!(lines.recv().unwrap(), "S");
+        (engine, lines, rx)
+    }
+
+    fn silence_with_stream_tail(
+        engine: &mut StreamingEngine,
+        text: &str,
+        lag_ms: Option<u64>,
+    ) -> (u64, Option<crate::endpoint::Ending>) {
+        for _ in 0..4 {
+            let outcome = engine.vad_detector.inject_probability(0.9);
+            engine.handle_vad_outcome(outcome);
+        }
+        let ghost = engine.ghost.as_mut().unwrap();
+        let u = ghost.utterance;
+        ghost.stream_tail = lag_ms.map(|lag_ms| ghost::StreamTail {
+            id: 1,
+            utterance: u,
+            text: text.into(),
+            audio_ms: 400,
+            lag_ms,
+        });
+        engine.ending = None;
+        let mut frames = 0;
+        let ended_as = loop {
+            frames += 1;
+            let current_ending = engine.early_end.map(|(e, _, _)| e);
+            let outcome = engine.vad_detector.inject_probability(0.0);
+            if engine.handle_vad_outcome(outcome).is_some() {
+                break current_ending;
+            }
+            engine.aim_early_end();
+            assert!(frames < 200, "never ended");
+        };
+        engine.ghost.as_mut().unwrap().next_utterance();
+        (frames * 32, ended_as)
+    }
+
+    #[test]
+    fn test_clause_settled_fallback_ends_smoothly_without_cutting_hesitations() {
+        use crate::endpoint::Ending;
+        let dir = tempfile::tempdir().unwrap();
+        let vad = VadConfig {
+            min_speech_duration_ms: 96,
+            max_silence_duration_ms: 1200,
+            pre_speech_buffer_ms: 64,
+            command_silence_ms: 400,
+            finished_silence_ms: 700,
+            exact_silence_ms: 150,
+            ..VadConfig::default()
+        };
+        let (mut engine, _lines, _rx) = make_engine(dir.path(), vad.clone());
+
+        // Settled 2+ word unpunctuated clause with stream keeping pace -> finished_silence_ms (704 ms).
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "that works for me", Some(20)),
+            (704, Some(Ending::Clause))
+        );
+        // Genuine hesitation / GOES_ON ending waits the full max_silence_duration_ms.
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "our config uh and", Some(20)),
+            (1216, None)
+        );
+        // Single unpunctuated word waits the full max_silence_duration_ms.
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "hello", Some(20)),
+            (1216, None)
+        );
+        // Lagging stream (> STREAM_PACE_MS) cannot trust unchanged partial -> full wait.
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "that works for me", Some(500)),
+            (1216, None)
+        );
+        // Floor dominates when unchanged_after exceeds finished_silence_ms
+        // (min_step 150 + lag 100 + margin 100 = 350 ms > finished 200 ms -> 352 ms).
+        engine.vad_detector = VadSegmentDetector::new(VadConfig {
+            finished_silence_ms: 200,
+            ..vad.clone()
+        })
+        .unwrap();
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "ship it now", Some(100)),
+            (352, Some(Ending::Clause))
+        );
+        // Disabled finished_silence_ms (0) disables clause fallback too.
+        engine.vad_detector = VadSegmentDetector::new(VadConfig {
+            finished_silence_ms: 0,
+            ..vad
+        })
+        .unwrap();
+        assert_eq!(
+            silence_with_stream_tail(&mut engine, "ship it now", Some(20)),
+            (1216, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_command_clears_ghost_and_fires_immediately_without_accept_sleep() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines, mut rx) = make_engine(dir.path(), VadConfig::default());
+        engine.focus_probe = || Some("0xa".into());
+        engine.set_commands(crate::commands::VoiceCommands {
+            enabled: true,
+            accept_ms: 300,
+            ..Default::default()
+        });
+        engine.ghost.as_mut().unwrap().showing = true;
+
+        let started = Instant::now();
+        engine
+            .run_command(&crate::commands::Command::Undo, "Scratch that.")
+            .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "run_command must not sleep accept_ms before firing, took {:?}",
+            elapsed
+        );
+        let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+        assert_eq!(sent, vec!["X"], "ghost cleared directly with no flash hold");
+        let mut discarded = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, StreamingEvent::SegmentDiscarded { .. }) {
+                discarded = true;
+            }
+        }
+        assert!(discarded, "press_command must have executed immediately");
+    }
+
+    #[tokio::test]
+    async fn test_run_program_spawns_before_accept_hold_and_has_zero_hold_at_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines, _rx) = make_engine(dir.path(), VadConfig::default());
+        engine.set_commands(crate::commands::VoiceCommands {
+            enabled: true,
+            accept_ms: 250,
+            ..Default::default()
+        });
+        let marker = dir.path().join("launched");
+        let argv = vec![
+            "sh".into(),
+            "-c".into(),
+            format!("printf 'ran\\n' > {}", marker.display()),
+        ];
+        let cmd = crate::commands::Command::Run {
+            name: "friend-wake".into(),
+            argv: argv.clone(),
+        };
+
+        let started = Instant::now();
+        let marker_watch = marker.clone();
+        let watcher = tokio::spawn(async move {
+            for _ in 0..200 {
+                if std::fs::read_to_string(&marker_watch).is_ok_and(|s| s == "ran\n") {
+                    return started.elapsed();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("detached program did not run");
+        });
+        engine.run_program(&cmd, &argv, "Hey friend.").await;
+        let launch_latency = watcher.await.unwrap();
+        assert!(
+            launch_latency < Duration::from_millis(120),
+            "detached program should spawn before 250ms visual hold, took {:?}",
+            launch_latency
+        );
+        let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+        assert!(
+            sent.contains(&"F 11 Hey friend.".into()) && sent.contains(&"X".into()),
+            "visual hold still flashes then clears after spawn: {sent:?}"
+        );
+
+        // With accept_ms = 0: zero hold and ghost clears directly.
+        engine.set_commands(crate::commands::VoiceCommands {
+            enabled: true,
+            accept_ms: 0,
+            ..Default::default()
+        });
+        engine.ghost.as_mut().unwrap().showing = true;
+        let started = Instant::now();
+        engine.run_program(&cmd, &argv, "Hey friend.").await;
+        assert!(
+            started.elapsed() < Duration::from_millis(80),
+            "accept_ms = 0 must have zero visual sleep"
+        );
+        let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+        assert_eq!(sent, vec!["X"]);
+    }
+}

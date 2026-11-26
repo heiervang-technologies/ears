@@ -29,8 +29,10 @@
 use crate::ghost_terminal::Overflow;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 /// Per-command I/O deadline. The addon answers from fcitx5's event loop in
@@ -119,25 +121,341 @@ pub enum Delivery {
     Unknown,
 }
 
-/// How long to wait for `hyprctl` before treating focus as unknown.
+/// How long to wait for Hyprland IPC / `hyprctl` before treating focus as unknown.
 const FOCUS_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// Hard cap on bytes read from Hyprland's direct IPC socket.
+const HYPRLAND_IPC_CAP: usize = 1024 * 1024;
+
+/// Safety TTL for cached Hyprland focus while `.socket2.sock` is connected.
+const FOCUS_CACHE_TTL: Duration = Duration::from_secs(2);
+
+/// Focused Hyprland window metadata from `j/activewindow`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyprlandWindow {
+    pub class: String,
+    pub address: String,
+    pub pid: Option<u32>,
+}
+
+/// Locate a Hyprland IPC socket (`.socket.sock` or `.socket2.sock`).
+///
+/// Checks `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/<filename>` first,
+/// falling back to `/tmp/hypr/$HYPRLAND_INSTANCE_SIGNATURE/<filename>`.
+pub(crate) fn hyprland_socket_path(filename: &str) -> Option<PathBuf> {
+    let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+    if sig.is_empty() {
+        return None;
+    }
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if !runtime.is_empty() {
+            let path = PathBuf::from(runtime)
+                .join("hypr")
+                .join(&sig)
+                .join(filename);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    let tmp = PathBuf::from("/tmp/hypr").join(&sig).join(filename);
+    tmp.exists().then_some(tmp)
+}
+
+/// Send a single request (e.g. `"j/activewindow"` or `"j/devices"`) over
+/// Hyprland's direct Unix request socket (`.socket.sock`).
+pub(crate) fn hyprland_ipc_request(request: &str, timeout: Duration) -> Option<Vec<u8>> {
+    let path = hyprland_socket_path(".socket.sock")?;
+    hyprland_ipc_request_at(&path, request, timeout)
+}
+
+pub(crate) fn hyprland_ipc_request_at(
+    path: &Path,
+    request: &str,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    use std::io::Read;
+
+    let start = Instant::now();
+    let mut stream = UnixStream::connect(path).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let remaining = timeout.checked_sub(start.elapsed())?;
+        if remaining.is_zero() {
+            return None;
+        }
+        stream.set_read_timeout(Some(remaining)).ok()?;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len() + n > HYPRLAND_IPC_CAP {
+                    return None;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
+    }
+    Some(buf)
+}
+
+/// Parse Hyprland `j/activewindow` JSON.
+///
+/// Returns `Ok(Some(window))` when a window is focused, `Ok(None)` for valid
+/// empty JSON (`{}` on an empty workspace), and `Err(())` for invalid JSON.
+fn parse_hyprland_window_json(json: &[u8]) -> Result<Option<HyprlandWindow>, ()> {
+    let v: serde_json::Value = serde_json::from_slice(json).map_err(|_| ())?;
+    let Some(obj) = v.as_object() else {
+        return Err(());
+    };
+    let class = obj.get("class").and_then(|c| c.as_str());
+    let address = obj.get("address").and_then(|a| a.as_str());
+    if class.is_none() && address.is_none() {
+        return Ok(None);
+    }
+    let pid = obj
+        .get("pid")
+        .and_then(|p| p.as_u64())
+        .and_then(|p| u32::try_from(p).ok());
+    Ok(Some(HyprlandWindow {
+        class: class.unwrap_or_default().to_string(),
+        address: address.unwrap_or_default().to_string(),
+        pid,
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct CachedWindow {
+    window: Option<HyprlandWindow>,
+    fetched_at: Instant,
+}
+
+fn invalidates_focus_cache(event_line: &str) -> bool {
+    let Some((event, _)) = event_line.split_once(">>") else {
+        return false;
+    };
+    matches!(
+        event,
+        "activewindow"
+            | "activewindowv2"
+            | "closewindow"
+            | "workspace"
+            | "workspacev2"
+            | "focusedmon"
+            | "focusedmonv2"
+            | "activespecial"
+            | "activespecialv2"
+    )
+}
+
+struct HyprlandFocusCache {
+    socket_path: PathBuf,
+    cached: Arc<RwLock<Option<CachedWindow>>>,
+    connected: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    ttl: Duration,
+}
+
+impl Drop for HyprlandFocusCache {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
+impl HyprlandFocusCache {
+    fn new(socket_path: PathBuf, socket2_path: PathBuf, ttl: Duration) -> Self {
+        let cached: Arc<RwLock<Option<CachedWindow>>> = Arc::new(RwLock::new(None));
+        let connected = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let cached_bg = Arc::clone(&cached);
+        let connected_bg = Arc::clone(&connected);
+        let generation_bg = Arc::clone(&generation);
+        let stop_bg = Arc::clone(&stop);
+
+        let _ = std::thread::Builder::new()
+            .name("hyprland-focus-cache".into())
+            .spawn(move || {
+                let mut retry_delay = Duration::from_millis(250);
+                while !stop_bg.load(Ordering::Acquire) {
+                    match UnixStream::connect(&socket2_path) {
+                        Ok(stream) => {
+                            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                            retry_delay = Duration::from_millis(250);
+                            generation_bg.fetch_add(1, Ordering::AcqRel);
+                            if let Ok(mut guard) = cached_bg.write() {
+                                *guard = None;
+                            }
+                            connected_bg.store(true, Ordering::Release);
+
+                            let mut reader = BufReader::new(stream);
+                            let mut line = String::new();
+                            while !stop_bg.load(Ordering::Acquire) {
+                                line.clear();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) => break,
+                                    Ok(_) => {
+                                        if invalidates_focus_cache(line.trim_end()) {
+                                            generation_bg.fetch_add(1, Ordering::AcqRel);
+                                            if let Ok(mut guard) = cached_bg.write() {
+                                                *guard = None;
+                                            }
+                                        }
+                                    }
+                                    Err(e)
+                                        if matches!(
+                                            e.kind(),
+                                            std::io::ErrorKind::Interrupted
+                                                | std::io::ErrorKind::WouldBlock
+                                                | std::io::ErrorKind::TimedOut
+                                        ) =>
+                                    {
+                                        continue;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+
+                            connected_bg.store(false, Ordering::Release);
+                            generation_bg.fetch_add(1, Ordering::AcqRel);
+                            if let Ok(mut guard) = cached_bg.write() {
+                                *guard = None;
+                            }
+                        }
+                        Err(_) => {
+                            connected_bg.store(false, Ordering::Release);
+                        }
+                    }
+
+                    if stop_bg.load(Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(retry_delay);
+                    retry_delay = (retry_delay * 2).min(Duration::from_secs(2));
+                }
+            });
+
+        Self {
+            socket_path,
+            cached,
+            connected,
+            generation,
+            stop,
+            ttl,
+        }
+    }
+
+    /// Return `Some(window)` when `.socket.sock` IPC succeeded (or cache hit),
+    /// or `None` if direct IPC failed (caller should fall back to `hyprctl`).
+    fn query(&self) -> Option<Option<HyprlandWindow>> {
+        if self.connected.load(Ordering::Acquire) {
+            if let Ok(guard) = self.cached.read() {
+                if let Some(entry) = guard.as_ref() {
+                    if entry.fetched_at.elapsed() < self.ttl {
+                        return Some(entry.window.clone());
+                    }
+                }
+            }
+        }
+
+        let gen_before = self.generation.load(Ordering::Acquire);
+        let bytes =
+            hyprland_ipc_request_at(&self.socket_path, "j/activewindow", FOCUS_PROBE_TIMEOUT)?;
+        let window = parse_hyprland_window_json(&bytes).ok()?;
+
+        if let Ok(mut guard) = self.cached.write() {
+            if self.connected.load(Ordering::Acquire)
+                && self.generation.load(Ordering::Acquire) == gen_before
+            {
+                *guard = Some(CachedWindow {
+                    window: window.clone(),
+                    fetched_at: Instant::now(),
+                });
+            }
+        }
+
+        Some(window)
+    }
+
+    #[cfg(test)]
+    fn wait_connected(&self, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if self.connected.load(Ordering::Acquire) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.connected.load(Ordering::Acquire)
+    }
+}
+
+static HYPRLAND_FOCUS_CACHE: Mutex<Option<(PathBuf, Arc<HyprlandFocusCache>)>> = Mutex::new(None);
+
+fn query_cached_hyprland_window(socket_path: PathBuf) -> Option<Option<HyprlandWindow>> {
+    let cache = {
+        let mut guard = HYPRLAND_FOCUS_CACHE.lock().ok()?;
+        match guard.as_ref() {
+            Some((cached_path, cache)) if cached_path == &socket_path => Arc::clone(cache),
+            _ => {
+                let socket2_path = socket_path
+                    .parent()
+                    .map(|dir| dir.join(".socket2.sock"))
+                    .unwrap_or_else(|| PathBuf::from(".socket2.sock"));
+                let cache = Arc::new(HyprlandFocusCache::new(
+                    socket_path.clone(),
+                    socket2_path,
+                    FOCUS_CACHE_TTL,
+                ));
+                *guard = Some((socket_path, Arc::clone(&cache)));
+                cache
+            }
+        }
+    };
+    cache.query()
+}
+
+/// Focused Hyprland window metadata (`class`, `address`, `pid`), if Hyprland
+/// can be asked in time.
+///
+/// Queries Hyprland's direct Unix socket (`.socket.sock`) backed by a lazily
+/// started `.socket2.sock` focus-event cache, falling back to
+/// `hyprctl activewindow -j` only if socket env/connect fails.
+pub fn hyprland_active_window() -> Option<HyprlandWindow> {
+    if let Some(socket_path) = hyprland_socket_path(".socket.sock") {
+        if let Some(window) = query_cached_hyprland_window(socket_path) {
+            return window;
+        }
+    }
+    let mut cmd = std::process::Command::new("hyprctl");
+    cmd.args(["activewindow", "-j"]);
+    active_window_from(cmd)
+}
 
 /// Class of the focused window, if the compositor can be asked in time:
 /// Hyprland's `class`, or on niri (`NIRI_SOCKET` set) the window's `app_id`.
 /// The ghost addon reports the focused program by the same name, so without
 /// this every ghost commit on niri was refused and fell back to typing.
 pub fn hyprland_active_class() -> Option<String> {
-    let mut cmd = std::process::Command::new("hyprctl");
-    cmd.args(["activewindow", "-j"]);
-    active_class_from(cmd).or_else(|| niri_focused_field("app_id"))
+    hyprland_active_window()
+        .map(|w| w.class)
+        .filter(|c| !c.is_empty())
+        .or_else(|| niri_focused_field("app_id"))
 }
 
 /// Address of the focused window, if it can be asked in time. Unlike the
 /// class it tells two terminals apart. On niri: `niri:<window id>`.
 pub fn hyprland_active_address() -> Option<String> {
-    let mut cmd = std::process::Command::new("hyprctl");
-    cmd.args(["activewindow", "-j"]);
-    active_field_from(cmd, "address")
+    hyprland_active_window()
+        .map(|w| w.address)
+        .filter(|a| !a.is_empty())
         .or_else(|| niri_focused_field("id").map(|id| format!("niri:{id}")))
 }
 
@@ -168,19 +486,21 @@ fn niri_field_from(json: &[u8], field: &str) -> Option<String> {
 }
 
 /// Run a Hyprland `activewindow -j` style command and read its `class`.
+#[cfg(test)]
 fn active_class_from(cmd: std::process::Command) -> Option<String> {
-    active_field_from(cmd, "class")
+    active_window_from(cmd)
+        .map(|w| w.class)
+        .filter(|c| !c.is_empty())
 }
 
-fn active_field_from(mut cmd: std::process::Command, field: &str) -> Option<String> {
+fn active_window_from(mut cmd: std::process::Command) -> Option<HyprlandWindow> {
     cmd.stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let out = crate::desktop::output_bounded(cmd, FOCUS_PROBE_TIMEOUT).ok()?;
     if !out.status.success() {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get(field)?.as_str().map(str::to_string)
+    parse_hyprland_window_json(&out.stdout).ok()?
 }
 
 /// Default socket path, shared with the addon: `$XDG_RUNTIME_DIR/ears/ghost.sock`.
@@ -938,5 +1258,246 @@ mod tests {
             niri_field_from(br#"{"id":3,"app_id":null}"#, "app_id"),
             None
         );
+    }
+
+    #[test]
+    fn parse_hyprland_window_handles_full_empty_and_invalid_json() {
+        let full = br#"{"address":"0x55a1","class":"Alacritty","pid":4242,"title":"bash"}"#;
+        assert_eq!(
+            parse_hyprland_window_json(full),
+            Ok(Some(HyprlandWindow {
+                class: "Alacritty".into(),
+                address: "0x55a1".into(),
+                pid: Some(4242),
+            }))
+        );
+        let neg_pid = br#"{"address":"0x1","class":"hover","pid":-1}"#;
+        assert_eq!(
+            parse_hyprland_window_json(neg_pid),
+            Ok(Some(HyprlandWindow {
+                class: "hover".into(),
+                address: "0x1".into(),
+                pid: None,
+            }))
+        );
+        assert_eq!(parse_hyprland_window_json(b"{}"), Ok(None));
+        assert!(parse_hyprland_window_json(b"not json").is_err());
+    }
+
+    #[test]
+    fn hyprland_direct_socket_ipc_roundtrip_and_timeout() {
+        use std::io::Read;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join(".socket.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            // Request 1: normal reply
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req = [0u8; 64];
+            let n = stream.read(&mut req).unwrap();
+            assert_eq!(&req[..n], b"j/activewindow");
+            stream
+                .write_all(br#"{"address":"0xabc","class":"Alacritty","pid":77}"#)
+                .unwrap();
+            drop(stream);
+
+            // Request 2: hang to verify bounded timeout
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+            drop(stream);
+        });
+
+        let bytes = hyprland_ipc_request_at(&sock, "j/activewindow", FOCUS_PROBE_TIMEOUT).unwrap();
+        assert_eq!(
+            parse_hyprland_window_json(&bytes),
+            Ok(Some(HyprlandWindow {
+                class: "Alacritty".into(),
+                address: "0xabc".into(),
+                pid: Some(77),
+            }))
+        );
+
+        let start = Instant::now();
+        assert!(
+            hyprland_ipc_request_at(&sock, "j/activewindow", Duration::from_millis(60)).is_none()
+        );
+        assert!(start.elapsed() < Duration::from_millis(220));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn hyprland_focus_cache_serves_hits_and_invalidates_on_socket2_events() {
+        use std::io::Read;
+        use std::sync::atomic::AtomicUsize;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join(".socket.sock");
+        let sock2 = dir.path().join(".socket2.sock");
+        let req_listener = UnixListener::bind(&sock).unwrap();
+        let ev_listener = UnixListener::bind(&sock2).unwrap();
+
+        let current_reply = Arc::new(Mutex::new(
+            r#"{"address":"0x1","class":"Alacritty","pid":100}"#.to_string(),
+        ));
+        let query_count = Arc::new(AtomicUsize::new(0));
+        let stop_req = Arc::new(AtomicBool::new(false));
+
+        let reply_ref = Arc::clone(&current_reply);
+        let count_ref = Arc::clone(&query_count);
+        let stop_ref = Arc::clone(&stop_req);
+        let _ = req_listener.set_nonblocking(true);
+        let req_server = std::thread::spawn(move || {
+            while !stop_ref.load(Ordering::Acquire) {
+                match req_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let mut buf = [0u8; 64];
+                        let _ = stream.read(&mut buf);
+                        count_ref.fetch_add(1, Ordering::AcqRel);
+                        let reply = reply_ref.lock().unwrap().clone();
+                        let _ = stream.write_all(reply.as_bytes());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let (ev_tx, ev_rx) = mpsc::channel::<Option<String>>();
+        let ev_server = std::thread::spawn(move || {
+            let (mut stream, _) = ev_listener.accept().unwrap();
+            while let Ok(Some(line)) = ev_rx.recv() {
+                stream.write_all(line.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+            drop(stream);
+        });
+
+        let cache = HyprlandFocusCache::new(sock.clone(), sock2.clone(), Duration::from_secs(5));
+        assert!(
+            cache.wait_connected(Duration::from_secs(2)),
+            "focus cache thread did not connect to .socket2.sock"
+        );
+
+        // First query populates cache; subsequent queries do not hit .socket.sock.
+        let first = cache.query().unwrap().unwrap();
+        assert_eq!(first.class, "Alacritty");
+        assert_eq!(first.address, "0x1");
+        assert_eq!(first.pid, Some(100));
+        assert_eq!(query_count.load(Ordering::Acquire), 1);
+
+        let second = cache.query().unwrap().unwrap();
+        assert_eq!(second, first);
+        assert_eq!(query_count.load(Ordering::Acquire), 1);
+
+        // Unrelated event must not invalidate the cache.
+        let gen_before = cache.generation.load(Ordering::Acquire);
+        ev_tx.send(Some("openlayer>>waybar\n".into())).unwrap();
+        std::thread::sleep(Duration::from_millis(15));
+        assert_eq!(cache.generation.load(Ordering::Acquire), gen_before);
+        let third = cache.query().unwrap().unwrap();
+        assert_eq!(third, first);
+        assert_eq!(query_count.load(Ordering::Acquire), 1);
+
+        // Focus change event invalidates cache -> next query fetches new window.
+        *current_reply.lock().unwrap() =
+            r#"{"address":"0x2","class":"firefox","pid":200}"#.to_string();
+        ev_tx
+            .send(Some("activewindow>>firefox,Mozilla Firefox\n".into()))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while cache.generation.load(Ordering::Acquire) == gen_before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(cache.generation.load(Ordering::Acquire) > gen_before);
+
+        let fourth = cache.query().unwrap().unwrap();
+        assert_eq!(fourth.class, "firefox");
+        assert_eq!(fourth.address, "0x2");
+        assert_eq!(fourth.pid, Some(200));
+        assert_eq!(query_count.load(Ordering::Acquire), 2);
+
+        // closewindow event -> empty workspace `{}` returns Some(None) and caches it.
+        let gen_before = cache.generation.load(Ordering::Acquire);
+        *current_reply.lock().unwrap() = "{}".to_string();
+        ev_tx.send(Some("closewindow>>0x2\n".into())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while cache.generation.load(Ordering::Acquire) == gen_before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(cache.query(), Some(None));
+        assert_eq!(cache.query(), Some(None));
+        assert_eq!(query_count.load(Ordering::Acquire), 3);
+
+        // Clean shutdown.
+        drop(cache);
+        let _ = ev_tx.send(None);
+        ev_server.join().unwrap();
+        stop_req.store(true, Ordering::Release);
+        req_server.join().unwrap();
+    }
+
+    #[test]
+    fn hyprland_focus_cache_refreshes_after_ttl() {
+        use std::io::Read;
+        use std::sync::atomic::AtomicUsize;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join(".socket.sock");
+        let sock2 = dir.path().join(".socket2.sock");
+        let req_listener = UnixListener::bind(&sock).unwrap();
+        let ev_listener = UnixListener::bind(&sock2).unwrap();
+
+        let query_count = Arc::new(AtomicUsize::new(0));
+        let stop_req = Arc::new(AtomicBool::new(false));
+        let count_ref = Arc::clone(&query_count);
+        let stop_ref = Arc::clone(&stop_req);
+        let _ = req_listener.set_nonblocking(true);
+        let req_server = std::thread::spawn(move || {
+            while !stop_ref.load(Ordering::Acquire) {
+                match req_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let mut buf = [0u8; 64];
+                        let _ = stream.read(&mut buf);
+                        let n = count_ref.fetch_add(1, Ordering::AcqRel) + 1;
+                        let reply =
+                            format!(r#"{{"address":"0x{n}","class":"Alacritty","pid":{n}}}"#);
+                        let _ = stream.write_all(reply.as_bytes());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let (ev_tx, ev_rx) = mpsc::channel::<()>();
+        let ev_server = std::thread::spawn(move || {
+            let (_stream, _) = ev_listener.accept().unwrap();
+            let _ = ev_rx.recv();
+        });
+
+        let cache = HyprlandFocusCache::new(sock, sock2, Duration::from_millis(40));
+        assert!(cache.wait_connected(Duration::from_secs(2)));
+
+        let w1 = cache.query().unwrap().unwrap();
+        assert_eq!(w1.pid, Some(1));
+        assert_eq!(query_count.load(Ordering::Acquire), 1);
+
+        std::thread::sleep(Duration::from_millis(60));
+        let w2 = cache.query().unwrap().unwrap();
+        assert_eq!(w2.pid, Some(2));
+        assert_eq!(query_count.load(Ordering::Acquire), 2);
+
+        drop(cache);
+        let _ = ev_tx.send(());
+        ev_server.join().unwrap();
+        stop_req.store(true, Ordering::Release);
+        req_server.join().unwrap();
     }
 }

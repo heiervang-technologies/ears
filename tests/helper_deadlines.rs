@@ -22,6 +22,7 @@ fn desktop_probes_kill_and_reap_hung_helpers() {
             ])
             .env("EARS_HELPER_TEST", "1")
             .env("PATH", root.path())
+            .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
             .env("HELPER_TEST_LOG", root.path().join("pids"))
             .status()
             .unwrap();

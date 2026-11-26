@@ -285,6 +285,9 @@ impl SileroVad {
         let mut rejected_peak = 0.0;
 
         let result = if !self.in_speech {
+            let min_speech_frames =
+                (self.config.min_speech_duration_ms as usize).div_ceil(ms_per_frame.max(1));
+            let max_candidate_frames = (min_speech_frames * 3).max(32);
             if self.speech_frames == 0 {
                 // A candidate opens only on the start threshold.
                 if probability >= start {
@@ -313,7 +316,8 @@ impl SileroVad {
                 if self.dip_frames > CANDIDATE_DIP_FRAMES {
                     rejected = true;
                     rejected_peak = self.candidate_peak;
-                    let rescue = self.strong_frames >= RESCUE_MIN_STRONG_FRAMES
+                    let rescue = self.speech_frames <= 16
+                        && self.strong_frames >= RESCUE_MIN_STRONG_FRAMES
                         && self.candidate_peak >= RESCUE_MIN_PEAK;
                     info!(
                         "Speech candidate {} after {} frames ({} strong, peak {:.3})",
@@ -349,6 +353,20 @@ impl SileroVad {
                     probability, self.candidate_peak, start, end, voiced_ms
                 );
                 VadResult::Speech
+            } else if self.speech_frames >= max_candidate_frames {
+                // Sustained borderline audio that never reaches confirmation:
+                // reject so candidate buffers and speculative streaming stay bounded.
+                rejected = true;
+                rejected_peak = self.candidate_peak;
+                info!(
+                    "Speech candidate rejected after {} borderline frames ({} strong, peak {:.3})",
+                    self.speech_frames, self.strong_frames, self.candidate_peak
+                );
+                self.speech_frames = 0;
+                self.strong_frames = 0;
+                self.dip_frames = 0;
+                self.candidate_peak = 0.0;
+                VadResult::Silence
             } else {
                 VadResult::Silence
             }
@@ -509,6 +527,11 @@ pub struct VadSegmentDetector {
     sample_rate: usize,
     current_segment: Option<Vec<f32>>,
     segment_start_ms: u64,
+    /// Pre-speech replay + candidate frames while `is_probably_speaking()` is
+    /// true. Promoted directly into `current_segment` on confirmation so index
+    /// 0 never shifts across the probable→speaking transition.
+    candidate_segment: Option<Vec<f32>>,
+    candidate_start_ms: u64,
     total_processed_ms: u64,
     /// Reframing buffer for non-aligned input chunks
     reframe_buffer: Vec<f32>,
@@ -532,6 +555,8 @@ impl VadSegmentDetector {
             sample_rate,
             current_segment: None,
             segment_start_ms: 0,
+            candidate_segment: None,
+            candidate_start_ms: 0,
             total_processed_ms: 0,
             reframe_buffer: Vec::with_capacity(SILERO_FRAME_SIZE * 2),
             pre_speech_buffer: VecDeque::with_capacity(pre_speech_samples),
@@ -614,6 +639,18 @@ impl VadSegmentDetector {
         self.apply_result(result, &frame)
     }
 
+    /// Drive the detector with one explicit frame and probability. Test-only.
+    #[cfg(test)]
+    pub(crate) fn inject_frame_with_probability(
+        &mut self,
+        frame: &[f32],
+        probability: f32,
+    ) -> Option<SpeechSegment> {
+        debug_assert_eq!(frame.len(), SILERO_FRAME_SIZE);
+        let result = self.vad.apply_probability(probability);
+        self.apply_result(result, frame)
+    }
+
     /// Apply one classified frame to the segment bookkeeping.
     fn apply_result(&mut self, result: VadResult, frame: &[f32]) -> Option<SpeechSegment> {
         let frame_size = SILERO_FRAME_SIZE;
@@ -623,23 +660,32 @@ impl VadSegmentDetector {
             match result {
                 VadResult::Speech => {
                     if self.current_segment.is_none() {
-                        // Speech just started — prepend replay buffer
-                        let pre_speech_samples: Vec<f32> =
-                            self.pre_speech_buffer.drain(..).collect();
-                        let pre_speech_duration_ms =
-                            (pre_speech_samples.len() as u64 * 1000) / (self.sample_rate as u64);
-                        let mut segment =
-                            Vec::with_capacity(pre_speech_samples.len() + frame_size * 100);
-                        segment.extend_from_slice(&pre_speech_samples);
+                        // Speech just confirmed — promote the contiguous
+                        // candidate buffer (already holding pre-speech +
+                        // candidate frames), or drain pre-speech directly if
+                        // confirmed on the very first frame.
+                        let segment = if let Some(candidate) = self.candidate_segment.take() {
+                            self.segment_start_ms = self.candidate_start_ms;
+                            candidate
+                        } else {
+                            let pre_speech_samples: Vec<f32> =
+                                self.pre_speech_buffer.drain(..).collect();
+                            let pre_speech_duration_ms = (pre_speech_samples.len() as u64 * 1000)
+                                / (self.sample_rate as u64);
+                            let mut segment =
+                                Vec::with_capacity(pre_speech_samples.len() + frame_size * 100);
+                            segment.extend_from_slice(&pre_speech_samples);
+                            self.segment_start_ms = self
+                                .total_processed_ms
+                                .saturating_sub(pre_speech_duration_ms);
+                            debug!(
+                                "Speech segment started with {}ms replay buffer ({} samples)",
+                                pre_speech_duration_ms,
+                                pre_speech_samples.len()
+                            );
+                            segment
+                        };
                         self.current_segment = Some(segment);
-                        self.segment_start_ms = self
-                            .total_processed_ms
-                            .saturating_sub(pre_speech_duration_ms);
-                        debug!(
-                            "Speech segment started with {}ms replay buffer ({} samples)",
-                            pre_speech_duration_ms,
-                            pre_speech_samples.len()
-                        );
                     }
                     if let Some(ref mut segment) = self.current_segment {
                         segment.extend_from_slice(frame);
@@ -655,19 +701,56 @@ impl VadSegmentDetector {
                             verify: false,
                         });
                     }
-                    // During silence, accumulate into the pre-speech ring buffer
-                    self.push_to_pre_speech_buffer(frame);
-                    if let Some(mean) = self.vad.take_rescued() {
-                        // The candidate's frames went to the replay buffer.
-                        let samples: Vec<f32> = self.pre_speech_buffer.drain(..).collect();
-                        let ms = (samples.len() as u64 * 1000) / self.sample_rate as u64;
+                    if self.vad.is_probably_speaking() {
+                        // Accumulate pre-speech + candidate frames contiguously
+                        // so speculative streaming starts at index 0 and
+                        // transitions seamlessly into `current_segment`.
+                        let candidate = self.candidate_segment.get_or_insert_with(|| {
+                            let pre_speech_samples: Vec<f32> =
+                                self.pre_speech_buffer.drain(..).collect();
+                            let pre_speech_duration_ms = (pre_speech_samples.len() as u64 * 1000)
+                                / (self.sample_rate as u64);
+                            self.candidate_start_ms = self
+                                .total_processed_ms
+                                .saturating_sub(pre_speech_duration_ms);
+                            let mut seg =
+                                Vec::with_capacity(pre_speech_samples.len() + frame_size * 100);
+                            seg.extend_from_slice(&pre_speech_samples);
+                            debug!(
+                                "Speech candidate started with {}ms replay buffer ({} samples)",
+                                pre_speech_duration_ms,
+                                pre_speech_samples.len()
+                            );
+                            seg
+                        });
+                        candidate.extend_from_slice(frame);
+                    } else if let Some(mean) = self.vad.take_rescued() {
+                        // Rescued short word: candidate already holds pre-speech + word frames.
+                        let mut samples = self.candidate_segment.take().unwrap_or_else(|| {
+                            let drained: Vec<f32> = self.pre_speech_buffer.drain(..).collect();
+                            let ms = (drained.len() as u64 * 1000) / self.sample_rate as u64;
+                            self.candidate_start_ms = self.total_processed_ms.saturating_sub(ms);
+                            drained
+                        });
+                        samples.extend_from_slice(frame);
                         segment_complete = Some(SpeechSegment {
-                            start_ms: (self.total_processed_ms + ms_per_frame).saturating_sub(ms),
+                            start_ms: self.candidate_start_ms,
                             end_ms: self.total_processed_ms + ms_per_frame,
                             samples,
                             mean_probability: mean,
                             verify: true,
                         });
+                    } else {
+                        // Candidate rejected: restore its tail into the
+                        // pre-speech ring buffer so the next onset has context.
+                        if let Some(rejected) = self.candidate_segment.take() {
+                            let keep_from = rejected
+                                .len()
+                                .saturating_sub(self.pre_speech_buffer_capacity);
+                            self.push_to_pre_speech_buffer(&rejected[keep_from..]);
+                        }
+                        // During silence, accumulate into the pre-speech ring buffer
+                        self.push_to_pre_speech_buffer(frame);
                     }
                 }
             }
@@ -725,11 +808,23 @@ impl VadSegmentDetector {
         self.current_segment.as_deref()
     }
 
+    /// Audio of the utterance currently being collected — either a probable
+    /// speech candidate or a confirmed speech segment — starting at index 0
+    /// with the pre-speech replay buffer and growing contiguously across the
+    /// probable→confirmed transition.
+    pub fn probable_or_speaking_samples(&self) -> Option<&[f32]> {
+        self.current_segment
+            .as_deref()
+            .or(self.candidate_segment.as_deref())
+    }
+
     /// Reset the detector
     pub fn reset(&mut self) {
         self.vad.reset();
         self.current_segment = None;
         self.segment_start_ms = 0;
+        self.candidate_segment = None;
+        self.candidate_start_ms = 0;
         self.total_processed_ms = 0;
         self.reframe_buffer.clear();
         self.pre_speech_buffer.clear();
@@ -1299,5 +1394,98 @@ mod tests {
         let segs = drive(&mut det, &[0.0]);
         assert_eq!(segs.len(), 1, "one utterance, not two fragments");
         assert!(!det.is_speaking());
+    }
+
+    #[test]
+    fn seq_probable_or_speaking_samples_is_contiguous_across_confirmation() {
+        let mut det = seq_detector(); // min_speech = 3 frames, max_silence = 3, pre_speech = 2
+        let tagged = |val: f32| vec![val; SILERO_FRAME_SIZE];
+
+        // Fill pre-speech ring buffer with 3 silence frames (evicts 0.1, keeps 0.2 & 0.3).
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.1), 0.0)
+            .is_none());
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.2), 0.0)
+            .is_none());
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.3), 0.0)
+            .is_none());
+        assert!(det.probable_or_speaking_samples().is_none());
+
+        // Frame 1 of probable speech: pre-speech [0.2, 0.3] + frame 0.4.
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.4), 0.9)
+            .is_none());
+        assert!(det.is_probably_speaking());
+        assert!(!det.is_speaking());
+        assert!(det.current_segment_samples().is_none());
+        let snap1 = det.probable_or_speaking_samples().unwrap().to_vec();
+        assert_eq!(snap1.len(), 3 * SILERO_FRAME_SIZE);
+        assert_eq!(snap1[0], 0.2);
+        assert_eq!(snap1[SILERO_FRAME_SIZE], 0.3);
+        assert_eq!(snap1[2 * SILERO_FRAME_SIZE], 0.4);
+
+        // Frame 2 of probable speech: prefix must stay identical at index 0.
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.5), 0.9)
+            .is_none());
+        assert!(det.is_probably_speaking());
+        let snap2 = det.probable_or_speaking_samples().unwrap().to_vec();
+        assert_eq!(snap2.len(), 4 * SILERO_FRAME_SIZE);
+        assert_eq!(&snap2[..snap1.len()], &snap1[..]);
+        assert_eq!(snap2[3 * SILERO_FRAME_SIZE], 0.5);
+
+        // Frame 3 confirms speech: candidate promotes seamlessly into current_segment.
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.6), 0.9)
+            .is_none());
+        assert!(det.is_speaking());
+        assert!(!det.is_probably_speaking());
+        let snap3 = det.probable_or_speaking_samples().unwrap().to_vec();
+        assert_eq!(det.current_segment_samples().unwrap(), &snap3[..]);
+        assert_eq!(snap3.len(), 5 * SILERO_FRAME_SIZE);
+        assert_eq!(&snap3[..snap2.len()], &snap2[..]);
+        assert_eq!(snap3[4 * SILERO_FRAME_SIZE], 0.6);
+
+        // Finish segment with 3 silence frames (2 tolerated + 1 ending).
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.7), 0.0)
+            .is_none());
+        assert!(det
+            .inject_frame_with_probability(&tagged(0.8), 0.0)
+            .is_none());
+        let seg = det
+            .inject_frame_with_probability(&tagged(0.9), 0.0)
+            .expect("segment ends on third silence frame");
+        assert!(det.probable_or_speaking_samples().is_none());
+        assert_eq!(seg.samples.len(), 7 * SILERO_FRAME_SIZE);
+        assert_eq!(&seg.samples[..snap3.len()], &snap3[..]);
+        assert_eq!(seg.samples[5 * SILERO_FRAME_SIZE], 0.7);
+        assert_eq!(seg.samples[6 * SILERO_FRAME_SIZE], 0.8);
+    }
+
+    #[test]
+    fn seq_rejected_candidate_clears_samples_and_restores_pre_speech() {
+        let mut det = seq_detector();
+        let tagged = |val: f32| vec![val; SILERO_FRAME_SIZE];
+        det.inject_frame_with_probability(&tagged(0.1), 0.9);
+        assert!(det.probable_or_speaking_samples().is_some());
+        // Outlast dip tolerance (4 silence frames) without rescuing (only 1 strong frame).
+        for v in [0.2, 0.3, 0.4, 0.5] {
+            assert!(det.inject_frame_with_probability(&tagged(v), 0.0).is_none());
+        }
+        assert!(!det.is_probably_speaking());
+        assert!(det.probable_or_speaking_samples().is_none());
+        // Pre-speech ring buffer retains the last 2 frames (0.4, 0.5).
+        assert_eq!(det.pre_speech_buffer.len(), 2 * SILERO_FRAME_SIZE);
+        assert_eq!(det.pre_speech_buffer[0], 0.4);
+        assert_eq!(det.pre_speech_buffer[SILERO_FRAME_SIZE], 0.5);
+
+        // Reset also clears probable_or_speaking_samples.
+        det.inject_frame_with_probability(&tagged(0.6), 0.9);
+        assert!(det.probable_or_speaking_samples().is_some());
+        det.reset();
+        assert!(det.probable_or_speaking_samples().is_none());
     }
 }
