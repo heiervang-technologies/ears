@@ -226,6 +226,69 @@ def parse_log(log_path: Path, since_iso: str = "2026-11-26T12:03:32Z", max_point
     return events[-max_points:]
 
 
+def probe_live_micro() -> dict:
+    """Measure live hot-path telemetry directly instead of hardcoding constants."""
+    import socket
+
+    hypr_ipc_ms: float | None = None
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if sig:
+        candidates = []
+        if os.environ.get("XDG_RUNTIME_DIR"):
+            candidates.append(Path(os.environ["XDG_RUNTIME_DIR"]) / "hypr" / sig / ".socket.sock")
+        candidates.append(Path("/tmp/hypr") / sig / ".socket.sock")
+        for sock_path in candidates:
+            if not sock_path.exists():
+                continue
+            try:
+                t0 = time.perf_counter()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    s.connect(str(sock_path))
+                    s.sendall(b"j/activewindow")
+                    while s.recv(4096):
+                        pass
+                hypr_ipc_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+                break
+            except OSError:
+                continue
+
+    steer_resident = False
+    capture_chunk_ms: float | None = None
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                raw = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue
+            if not raw:
+                continue
+            args = [a.decode("utf-8", "ignore") for a in raw.split(b"\0") if a]
+            if not args:
+                continue
+            joined = " ".join(args)
+            if "voice-cmd" in joined and "serve" in args:
+                steer_resident = True
+            if Path(args[0]).name == "pw-record":
+                for arg in args[1:]:
+                    if arg.startswith("--latency="):
+                        val = arg.split("=", 1)[1].strip()
+                        if val.endswith("ms"):
+                            try:
+                                capture_chunk_ms = float(val[:-2])
+                            except ValueError:
+                                pass
+
+    return {
+        "hypr_ipc_ms": hypr_ipc_ms,
+        "steer_resident": steer_resident,
+        "capture_chunk_ms": capture_chunk_ms,
+    }
+
+
 def summarize(events: list[dict], label: str = "Live (perf/responsive-ux)", short: str = "LIVE") -> dict:
     dicts = [e for e in events if e["kind"] == "dictation"]
     cmds = [e for e in events if e["kind"] == "command"]
@@ -272,11 +335,7 @@ def summarize(events: list[dict], label: str = "Live (perf/responsive-ux)", shor
         "asr_p95_ms": pct(all_asr, 0.95),
         "silence_p95_ms": pct(all_sil, 0.95),
         "partial_commit_pct": partial_pct,
-        "micro": {
-            "voice_cmd_ms": 0.13,
-            "hypr_ipc_ms": 0.04,
-            "capture_chunk_ms": 32.0,
-        },
+        "micro": probe_live_micro(),
         **scores,
     }
 

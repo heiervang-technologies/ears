@@ -111,10 +111,15 @@ pub fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
     wav_from_bytes(&bytes, SAMPLE_RATE)
 }
 
+/// 16 kHz float samples (-1.0..1.0, clamped) as a PCM16 WAV in memory.
+pub fn wav_bytes_f32(samples: &[f32]) -> Vec<u8> {
+    let pcm: Vec<i16> = samples.iter().map(|&s| to_i16(s)).collect();
+    wav_bytes(&pcm)
+}
+
 /// Write 16 kHz float samples (-1.0..1.0, clamped) as a PCM16 WAV file.
 pub fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
-    let pcm: Vec<i16> = samples.iter().map(|&s| to_i16(s)).collect();
-    std::fs::write(path, wav_bytes(&pcm))
+    std::fs::write(path, wav_bytes_f32(samples))
 }
 
 /// Float sample to PCM16, clamped.

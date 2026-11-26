@@ -771,11 +771,11 @@ impl TextInput {
         }
     }
 
-    /// Uncached probe: Hyprland socket (or `hyprctl version`) and `wtype` on PATH.
+    /// Uncached probe: live Hyprland socket (or `hyprctl version`) and `wtype` on PATH.
     fn probe_omarchy() -> bool {
         use std::process::Stdio;
 
-        let hyprland = crate::ghost::hyprland_socket_path(".socket.sock").is_some() || {
+        let hyprland = crate::ghost::hyprland_socket_connectable() || {
             let mut hyprctl = Command::new("hyprctl");
             hyprctl
                 .arg("version")
@@ -825,6 +825,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Enter failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -847,6 +848,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Shift+Enter failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -870,6 +872,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Backspace failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -898,6 +901,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool key combination failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -908,7 +912,7 @@ impl TextInput {
     /// - `Wtype`: force wtype (character-by-character with inter-key delay)
     /// - `Paste`: force clipboard paste (wl-copy + Ctrl+V)
     pub fn type_text(text: &str, mode: TypingMode) -> Result<()> {
-        match mode {
+        let result = match mode {
             TypingMode::Auto => {
                 let result = if Self::is_omarchy() {
                     Self::type_with_wtype(text)
@@ -923,8 +927,12 @@ impl TextInput {
             }
             TypingMode::Wtype => Self::type_with_wtype(text),
             TypingMode::Paste => Self::paste_text(text),
-            TypingMode::None => Ok(()),
+            TypingMode::None => return Ok(()),
+        };
+        if result.is_ok() {
+            crate::ghost_terminal::invalidate_tmux_pane_cache();
         }
+        result
     }
 
     /// Type text directly using wtype (Wayland native, for Hyprland/Omarchy)

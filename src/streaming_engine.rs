@@ -745,34 +745,30 @@ impl StreamingEngine {
     /// instead of waiting for its final (`final_from_partial`), with how it
     /// covers the end of speech; `speech_end_ms` from the segment's start,
     /// after `waited` ms of silence. None: wait for the final. Short results
-    /// (`<= NO_SPEECH_CHECK_MAX_WORDS`) require both high VAD confidence AND
-    /// full coverage (`tail.audio_ms >= speech_end_ms`) so an incomplete first
-    /// word is never committed via a stale `Settled` lag estimate.
+    /// (`<= NO_SPEECH_CHECK_MAX_WORDS`) require full coverage
+    /// (`tail.audio_ms >= speech_end_ms`) so an incomplete first word is never
+    /// committed via a stale `Settled` lag estimate, and are still checked by
+    /// the model's in-memory no-speech check in `process_segment`.
     fn final_from_partial(
         &self,
         id: u64,
         speech_end_ms: u64,
         waited: u64,
-        mean_probability: f32,
-        verify: bool,
     ) -> Option<(String, &'static str)> {
         use crate::config::FinalFromPartial as F;
         if self.final_from_partial == F::Off {
             return None;
         }
         let tail = self.ghost.as_ref()?.stream_tail.as_ref()?;
-        if tail.id != id
-            || !ghost::stream_text_acceptable(
-                &tail.text,
-                mean_probability,
-                verify,
-                self.language.as_deref(),
-            )
-        {
+        if tail.id != id {
+            return None;
+        }
+        let filtered = self.whisper_client.filter_silence(&tail.text);
+        if filtered.is_empty() {
             return None;
         }
         let is_short =
-            tail.text.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS;
+            filtered.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS;
         let how = if tail.audio_ms >= speech_end_ms {
             "decoded to the end of speech"
         } else if !is_short
@@ -788,7 +784,7 @@ impl StreamingEngine {
             );
             return None;
         };
-        Some((tail.text.clone(), how))
+        Some((filtered, how))
     }
 
     /// Follow a pause inside the utterance; when speech goes on after one
@@ -1049,32 +1045,10 @@ impl StreamingEngine {
         let segment_ms = segment.samples.len() as u64 * 1000 / u64::from(crate::pcm::SAMPLE_RATE);
         let speech_end_ms = segment_ms.saturating_sub(waited);
         let mut final_by = "http";
-        // An option answer to a decision is a word or two: if its final would
-        // be rejected by the short-result confidence check and transcribed in
-        // full anyway, do not wait for it.
-        let short_answer = decision_audio.is_some()
-            && streamed_id.is_some_and(|id| {
-                (self.ghost.as_ref())
-                    .and_then(|g| g.stream_tail.as_ref())
-                    .is_some_and(|t| {
-                        t.id == id
-                            && !ghost::stream_text_acceptable(
-                                &t.text,
-                                segment.mean_probability,
-                                verify,
-                                self.language.as_deref(),
-                            )
-                    })
-            });
+        let mut early_heard: Option<Option<bool>> = None;
         let live_final = match streamed_id {
-            Some(id) if !self.final_correction && !verify && !short_answer => {
-                match self.final_from_partial(
-                    id,
-                    speech_end_ms,
-                    waited,
-                    segment.mean_probability,
-                    verify,
-                ) {
+            Some(id) if !self.final_correction && !verify => {
+                match self.final_from_partial(id, speech_end_ms, waited) {
                     Some((text, how)) => {
                         info!(
                             "Committing the stream's last partial ({}); its final not awaited",
@@ -1084,9 +1058,23 @@ impl StreamingEngine {
                         Some(text)
                     }
                     None => {
-                        let text = self
-                            .ghost_stream_final(id, segment.mean_probability, verify)
-                            .await;
+                        let overlap_ms = self.whisper_client.speech_check_overlap_ms();
+                        let overlap = overlap_ms > 0
+                            && self.guided_grammar.is_none()
+                            && self.whisper_client.filters_silence_artifacts()
+                            && segment_ms <= overlap_ms;
+                        let text = if overlap {
+                            let wav = crate::pcm::wav_bytes_f32(&segment.samples);
+                            let client = self.whisper_client.clone();
+                            let (text, heard) = tokio::join!(
+                                self.ghost_stream_final(id),
+                                client.hears_speech_wav(&wav, true),
+                            );
+                            early_heard = Some(heard);
+                            text
+                        } else {
+                            self.ghost_stream_final(id).await
+                        };
                         if text.is_some() {
                             info!(
                                 "The live stream's final came in {} ms",
@@ -1117,10 +1105,30 @@ impl StreamingEngine {
         self.final_by = Some(final_by);
         let transcript = match live_final {
             Some(text) => {
-                if final_by == "final" {
-                    info!("Committing the live stream's final");
+                let needs_check = self.guided_grammar.is_none()
+                    && self.whisper_client.filters_silence_artifacts()
+                    && text.split_whitespace().count() <= crate::whisper::NO_SPEECH_CHECK_MAX_WORDS;
+                let heard = match (needs_check, early_heard) {
+                    (false, Some(_)) => {
+                        debug!("Overlapped no-speech check not needed: {:?}", text);
+                        None
+                    }
+                    (false, None) => None,
+                    (true, Some(heard)) => heard,
+                    (true, None) => {
+                        let wav = crate::pcm::wav_bytes_f32(&segment.samples);
+                        self.whisper_client.hears_speech_wav(&wav, false).await
+                    }
+                };
+                if needs_check && heard == Some(false) {
+                    info!("Dropping {:?}: the model hears no speech", text);
+                    Err(crate::whisper::WhisperError::EmptyTranscription)
+                } else {
+                    if final_by == "final" {
+                        info!("Committing the live stream's final");
+                    }
+                    Ok(text)
                 }
-                Ok(text)
             }
             None => {
                 let segment_file = match segment_file.take() {
@@ -1558,9 +1566,14 @@ impl StreamingEngine {
             });
             return;
         }
-        // The ghost shows the command word; it must not be committed. Clear it
-        // immediately and press the key without blocking on a visual hold.
-        self.ghost_clear();
+        // The ghost shows the command word; it must not be committed. When
+        // `accept_ms == 0`, clear it immediately with zero visual hold; when
+        // configured non-zero, flash the accept colour before pressing the key.
+        if self.commands.accept_ms == 0 {
+            self.ghost_clear();
+        } else {
+            self.ghost_accept(heard).await;
+        }
         self.press_command(command, heard);
     }
 
@@ -1614,8 +1627,17 @@ impl StreamingEngine {
         argv: &[String],
         heard: &str,
     ) {
-        // Launch the detached program before any visual accept hold so
-        // `accept_ms` never delays process execution.
+        // Clear (or hold the accept colour) before spawning so we never flash
+        // preedit into a window focused by the newly-launched program.
+        if self.mode.is_standby()
+            || self.typing_mode == TypingMode::None
+            || self.typing_suspended
+            || self.commands.accept_ms == 0
+        {
+            self.ghost_clear();
+        } else {
+            self.ghost_accept(heard).await;
+        }
         match crate::commands::spawn_detached(argv) {
             Ok(pid) => {
                 info!(
@@ -1638,15 +1660,6 @@ impl StreamingEngine {
             name: command.label(),
             text: heard.to_string(),
         });
-        if self.mode.is_standby()
-            || self.typing_mode == TypingMode::None
-            || self.typing_suspended
-            || self.commands.accept_ms == 0
-        {
-            self.ghost_clear();
-        } else {
-            self.ghost_accept(heard).await;
-        }
     }
 
     /// Report a segment that typed nothing.
@@ -3267,13 +3280,14 @@ mod endpoint_command_tests {
     }
 
     #[tokio::test]
-    async fn test_run_command_clears_ghost_and_fires_immediately_without_accept_sleep() {
+    async fn test_run_command_respects_accept_ms_zero_and_nonzero() {
         let dir = tempfile::tempdir().unwrap();
         let (mut engine, lines, mut rx) = make_engine(dir.path(), VadConfig::default());
         engine.focus_probe = || Some("0xa".into());
+        // With accept_ms = 0: clears immediately and fires with zero visual sleep.
         engine.set_commands(crate::commands::VoiceCommands {
             enabled: true,
-            accept_ms: 300,
+            accept_ms: 0,
             ..Default::default()
         });
         engine.ghost.as_mut().unwrap().showing = true;
@@ -3285,8 +3299,8 @@ mod endpoint_command_tests {
         let elapsed = started.elapsed();
 
         assert!(
-            elapsed < Duration::from_millis(100),
-            "run_command must not sleep accept_ms before firing, took {:?}",
+            elapsed < Duration::from_millis(80),
+            "accept_ms = 0 must not sleep before firing, took {:?}",
             elapsed
         );
         let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
@@ -3298,17 +3312,30 @@ mod endpoint_command_tests {
             }
         }
         assert!(discarded, "press_command must have executed immediately");
+
+        // With accept_ms > 0: flashes accept colour and clears before firing.
+        engine.set_commands(crate::commands::VoiceCommands {
+            enabled: true,
+            accept_ms: 60,
+            ..Default::default()
+        });
+        engine.ghost.as_mut().unwrap().showing = true;
+        let started = Instant::now();
+        engine
+            .run_command(&crate::commands::Command::Undo, "Scratch that.")
+            .await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "non-zero accept_ms should hold before firing"
+        );
+        let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
+        assert_eq!(sent, vec!["F 13 Scratch that.", "X"]);
     }
 
     #[tokio::test]
-    async fn test_run_program_spawns_before_accept_hold_and_has_zero_hold_at_zero() {
+    async fn test_run_program_respects_accept_ms_before_spawning() {
         let dir = tempfile::tempdir().unwrap();
         let (mut engine, lines, _rx) = make_engine(dir.path(), VadConfig::default());
-        engine.set_commands(crate::commands::VoiceCommands {
-            enabled: true,
-            accept_ms: 250,
-            ..Default::default()
-        });
         let marker = dir.path().join("launched");
         let argv = vec![
             "sh".into(),
@@ -3320,31 +3347,31 @@ mod endpoint_command_tests {
             argv: argv.clone(),
         };
 
-        let started = Instant::now();
-        let marker_watch = marker.clone();
-        let watcher = tokio::spawn(async move {
-            for _ in 0..200 {
-                if std::fs::read_to_string(&marker_watch).is_ok_and(|s| s == "ran\n") {
-                    return started.elapsed();
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            panic!("detached program did not run");
+        // With accept_ms > 0: flashes and clears ghost BEFORE spawning so
+        // preedit never leaks into a newly focused window.
+        engine.set_commands(crate::commands::VoiceCommands {
+            enabled: true,
+            accept_ms: 60,
+            ..Default::default()
         });
+        let started = Instant::now();
         engine.run_program(&cmd, &argv, "Hey friend.").await;
-        let launch_latency = watcher.await.unwrap();
         assert!(
-            launch_latency < Duration::from_millis(120),
-            "detached program should spawn before 250ms visual hold, took {:?}",
-            launch_latency
+            started.elapsed() >= Duration::from_millis(50),
+            "non-zero accept_ms should complete before spawning"
         );
+        for _ in 0..200 {
+            if std::fs::read_to_string(&marker).is_ok_and(|s| s == "ran\n") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "ran\n");
         let sent: Vec<String> = lines.try_iter().filter(|l| l != "S").collect();
-        assert!(
-            sent.contains(&"F 11 Hey friend.".into()) && sent.contains(&"X".into()),
-            "visual hold still flashes then clears after spawn: {sent:?}"
-        );
+        assert_eq!(sent, vec!["F 11 Hey friend.", "X"]);
 
-        // With accept_ms = 0: zero hold and ghost clears directly.
+        // With accept_ms = 0: zero hold and ghost clears directly before spawn.
+        std::fs::remove_file(&marker).unwrap();
         engine.set_commands(crate::commands::VoiceCommands {
             enabled: true,
             accept_ms: 0,

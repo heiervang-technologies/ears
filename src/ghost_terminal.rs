@@ -89,6 +89,14 @@ pub(crate) fn overflows(text: &str) -> Option<Overflow> {
     })
 }
 
+/// Forget the cached focused tmux pane so the next preedit wrap check queries
+/// live `cursor_x` and active pane (after a commit, key send, or focus change).
+pub(crate) fn invalidate_tmux_pane_cache() {
+    if let Ok(mut guard) = TMUX_PANE_CACHE.lock() {
+        *guard = None;
+    }
+}
+
 fn cached_focused_pane(
     pid: u32,
     ttl: Duration,

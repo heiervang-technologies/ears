@@ -306,10 +306,20 @@ ShellRoot {
                     }
                     StatTile {
                         width: parent.tileW
-                        eyebrow: "HOT-PATH MICRO-OPS"
+                        eyebrow: "LIVE HOT-PATH PROBE"
                         tone: LiveTheme.ember
-                        value: "0.13 ms"
-                        sub: "steer 325× · hypr 0.04ms · 32ms"
+                        value: (root.live && root.live.micro && root.live.micro.hypr_ipc_ms !== null && root.live.micro.hypr_ipc_ms !== undefined)
+                            ? (root.live.micro.hypr_ipc_ms.toFixed(2) + " ms")
+                            : "—"
+                        sub: {
+                            if (!root.live || !root.live.micro) return "probing…";
+                            const m = root.live.micro;
+                            const steer = m.steer_resident ? "steer resident" : "steer oneshot";
+                            const chunk = (m.capture_chunk_ms !== null && m.capture_chunk_ms !== undefined)
+                                ? (Math.round(m.capture_chunk_ms) + "ms cap")
+                                : "cap n/a";
+                            return "hypr ipc · " + steer + " · " + chunk;
+                        }
                     }
                 }
 

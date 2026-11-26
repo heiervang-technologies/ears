@@ -46,62 +46,6 @@ const STREAM_UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
 /// is presumed gone, and the stream is reconnected.
 const STREAM_FINAL_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Minimum Silero VAD mean speech probability at which a short (`<= 3` words)
-/// live-stream final or partial is trusted directly without falling back to an
-/// extra HTTP Whisper + no-speech verification round-trip.
-pub(super) const HIGH_CONFIDENCE_SPEECH_PROB: f32 = 0.72;
-
-/// Known hallucinated silence artifacts from whisper.cpp and Qwen3-ASR.
-fn is_silence_artifact(text: &str, language: Option<&str>) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let normalized = crate::commands::normalize(trimmed);
-    const SILENCE_PATTERNS: &[&str] = &["thank you", "thanks for watching", "啊", "嗯"];
-    if normalized.is_empty() || SILENCE_PATTERNS.contains(&normalized.as_str()) {
-        return true;
-    }
-    if let Some(lang) = language {
-        let lang_lower = lang.to_lowercase();
-        if lang_lower == "zh" || lang_lower.starts_with("zh-") || lang_lower == "chinese" {
-            return false;
-        }
-    }
-    const FILLER_CHARS: &[char] = &['啊', '嗯', '呃', '哦', '噢', '哎', '哇', '呀', '吧', '呢'];
-    let mut has_filler = false;
-    let all_allowed = trimmed.chars().all(|c| {
-        if FILLER_CHARS.contains(&c) {
-            has_filler = true;
-            true
-        } else {
-            !c.is_alphanumeric()
-        }
-    });
-    has_filler && all_allowed
-}
-
-/// Whether a live-stream transcript (`partial` or `final`) can be committed
-/// directly without falling back to HTTP transcription + no-speech check.
-pub(super) fn stream_text_acceptable(
-    text: &str,
-    mean_probability: f32,
-    verify: bool,
-    language: Option<&str>,
-) -> bool {
-    let trimmed = text.trim();
-    let words = trimmed.split_whitespace().count();
-    if words == 0 {
-        return false;
-    }
-    if words > crate::whisper::NO_SPEECH_CHECK_MAX_WORDS {
-        return true;
-    }
-    !verify
-        && mean_probability >= HIGH_CONFIDENCE_SPEECH_PROB
-        && !is_silence_artifact(trimmed, language)
-}
-
 /// A finished partial transcription.
 pub(super) struct Partial {
     pub(super) utterance: u64,
@@ -721,18 +665,15 @@ impl StreamingEngine {
         true
     }
 
-    /// The stream's `final` for utterance `id`, when it can be committed
-    /// as is. None (transcribe in full instead) on timeout, error, a lost
-    /// stream, or a low-confidence / unverified / silence-artifact short
-    /// result so noise/clicks still go through the HTTP no-speech check.
-    pub(super) async fn ghost_stream_final(
-        &mut self,
-        id: u64,
-        mean_probability: f32,
-        verify: bool,
-    ) -> Option<String> {
+    /// The stream's `final` for utterance `id`, when non-empty and not a
+    /// known silence artifact. None (transcribe in full instead) on timeout,
+    /// error, a lost stream, or an empty/silence-artifact result.
+    ///
+    /// Short results (`<= NO_SPEECH_CHECK_MAX_WORDS`) are still verified by the
+    /// model's in-memory no-speech check in `process_segment` before commit.
+    pub(super) async fn ghost_stream_final(&mut self, id: u64) -> Option<String> {
         use crate::stream_client::StreamEvent;
-        let language = self.language.clone();
+        let whisper = self.whisper_client.clone();
         let ghost = self.ghost.as_mut()?;
         let StreamLink::Up(session) = &mut ghost.stream else {
             return None;
@@ -741,14 +682,8 @@ impl StreamingEngine {
         loop {
             match tokio::time::timeout_at(deadline, session.recv()).await {
                 Ok(Some(StreamEvent::Final { utterance, text })) if utterance == id => {
-                    let text = text.trim().to_string();
-                    return stream_text_acceptable(
-                        &text,
-                        mean_probability,
-                        verify,
-                        language.as_deref(),
-                    )
-                    .then_some(text);
+                    let filtered = whisper.filter_silence(&text);
+                    return (!filtered.is_empty()).then_some(filtered);
                 }
                 Ok(Some(StreamEvent::Error { utterance, .. })) if utterance == Some(id) => {
                     return None
@@ -1262,71 +1197,6 @@ mod tests {
         panic!("no ghost command received");
     }
 
-    #[test]
-    fn test_stream_text_acceptable_rules() {
-        assert!(!stream_text_acceptable("", 0.95, false, Some("en")));
-        assert!(!stream_text_acceptable("   ", 0.95, false, Some("en")));
-        // Short (<= 3 words): accepted when high-confidence & !verify & not artifact.
-        assert!(stream_text_acceptable(
-            "Okay.",
-            HIGH_CONFIDENCE_SPEECH_PROB,
-            false,
-            Some("en")
-        ));
-        assert!(stream_text_acceptable(
-            "Open terminal",
-            0.85,
-            false,
-            Some("en")
-        ));
-        assert!(stream_text_acceptable(
-            "One two three",
-            0.75,
-            false,
-            Some("en")
-        ));
-        // Below threshold or verify=true: rejected for HTTP check.
-        assert!(!stream_text_acceptable(
-            "One two three",
-            0.70,
-            false,
-            Some("en")
-        ));
-        assert!(!stream_text_acceptable("Okay.", 0.61, false, Some("en")));
-        assert!(!stream_text_acceptable("Okay.", 0.90, true, Some("en")));
-        // Silence artifacts: always rejected when short even at high prob (case/punct normalized).
-        assert!(!stream_text_acceptable(
-            "Thank you.",
-            0.95,
-            false,
-            Some("en")
-        ));
-        assert!(!stream_text_acceptable(
-            "thank you!",
-            0.95,
-            false,
-            Some("en")
-        ));
-        assert!(!stream_text_acceptable(
-            "Thanks for watching.",
-            0.95,
-            false,
-            Some("en")
-        ));
-        assert!(!stream_text_acceptable("啊！", 0.95, false, Some("en")));
-        assert!(!stream_text_acceptable("嗯...", 0.95, false, Some("en")));
-        // Non-filler Chinese words pass; Chinese filler in zh mode passes unless exact pattern.
-        assert!(stream_text_acceptable("你好", 0.95, false, Some("en")));
-        assert!(stream_text_acceptable("呃...", 0.95, false, Some("zh")));
-        // Longer (> 3 words): always accepted regardless of confidence.
-        assert!(stream_text_acceptable(
-            "This has four words.",
-            0.50,
-            false,
-            Some("en")
-        ));
-    }
-
     #[tokio::test]
     async fn test_speculative_stream_starts_on_probable_holds_display_and_aligns() {
         use crate::stream_client::fake::{FakeServer, Mode};
@@ -1451,11 +1321,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_high_confidence_short_live_final_commits_without_http_or_disk_wav() {
+    async fn test_short_live_final_confirmed_by_no_speech_check_commits_without_http_or_disk_wav() {
         use crate::stream_client::fake::{FakeServer, Mode};
         use wiremock::{matchers::path, Mock, MockServer};
         let whisper = MockServer::start().await;
-        // Expect ZERO HTTP transcription calls.
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "qwen-asr"}]})),
+            )
+            .mount(&whisper)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content": "language English<asr_text>Okay."}}]
+                })),
+            )
+            .expect(1)
+            .mount(&whisper)
+            .await;
+        // Expect ZERO full HTTP transcription calls.
         Mock::given(path("/v1/audio/transcriptions"))
             .respond_with(wiremock::ResponseTemplate::new(200))
             .expect(0)
@@ -1492,6 +1378,68 @@ mod tests {
         res.expect("live final must not touch temp_dir on disk");
         assert_eq!(engine.final_by, Some("final"));
         assert_eq!(next_non_status(&mut engine, &lines).await, "C Okay.");
+    }
+
+    #[tokio::test]
+    async fn test_short_live_final_dropped_when_no_speech_check_hears_no_speech() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let whisper = MockServer::start().await;
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "qwen-asr"}]})),
+            )
+            .mount(&whisper)
+            .await;
+        // Cough/clack: even at high Silero VAD prob (0.90), the model answers
+        // `language None` and the short hallucinated live final MUST be dropped.
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content": "language None<asr_text>"}}]
+                })),
+            )
+            .expect(1)
+            .mount(&whisper)
+            .await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&whisper)
+            .await;
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let missing_temp = dir.path().join("does-not-exist");
+        let (mut engine, lines) = make_engine(dir.path(), &whisper.uri(), missing_temp);
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        engine.set_final_correction(false);
+        wait_stream_up(&mut engine).await;
+
+        feed_probs(&mut engine, &[0.9, 0.9, 0.9]);
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        let segs = feed_probs(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+        let finish = async {
+            server.wait_for(|l| l == format!("end {id}")).await;
+            server.say(serde_json::json!({
+                "type": "final",
+                "utterance": id,
+                "text": "Okay.",
+                "audio_ms": 200,
+                "decode_ms": 10
+            }));
+        };
+        let (res, ()) = tokio::join!(
+            engine.process_segment(segs.into_iter().next().unwrap()),
+            finish
+        );
+        res.expect("dropped short live final must not touch temp_dir on disk");
+        assert!(
+            lines.try_iter().all(|l| !l.starts_with("C ")),
+            "no-speech short final must never be committed"
+        );
     }
 
     #[tokio::test]

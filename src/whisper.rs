@@ -477,6 +477,45 @@ impl WhisperClient {
         .await
     }
 
+    /// Whether silence-artifact filtering and the short-result no-speech check
+    /// are enabled on this client.
+    pub(crate) fn filters_silence_artifacts(&self) -> bool {
+        self.filter_silence_artifacts
+    }
+
+    /// Segment duration threshold below which the no-speech check is overlapped
+    /// concurrently with transcription / stream final.
+    pub(crate) fn speech_check_overlap_ms(&self) -> u64 {
+        self.speech_check_overlap_ms
+    }
+
+    /// Filter silence artifacts using this client's configured rules.
+    pub(crate) fn filter_silence(&self, text: &str) -> String {
+        self.filter_silence_artifacts(text)
+    }
+
+    /// Ask the model, without a forced language, whether `wav_bytes` holds
+    /// speech at all. Same semantics as [`Self::hears_speech`], without disk I/O.
+    pub(crate) async fn hears_speech_wav(
+        &self,
+        wav_bytes: &[u8],
+        overlapped: bool,
+    ) -> Option<bool> {
+        let start = std::time::Instant::now();
+        let heard = self.hears_speech_wav_inner(wav_bytes).await;
+        info!(
+            "No-speech check took {:?} ({}): {}",
+            start.elapsed(),
+            if overlapped { "overlapped" } else { "serial" },
+            match heard {
+                Some(true) => "speech",
+                Some(false) => "no speech",
+                None => "unavailable",
+            }
+        );
+        heard
+    }
+
     /// Ask the model, without a forced language, whether the audio holds
     /// speech at all.
     ///
@@ -507,6 +546,11 @@ impl WhisperClient {
     }
 
     async fn hears_speech_inner(&self, path: &Path) -> Option<bool> {
+        let audio = tokio::fs::read(path).await.ok()?;
+        self.hears_speech_wav_inner(&audio).await
+    }
+
+    async fn hears_speech_wav_inner(&self, audio: &[u8]) -> Option<bool> {
         let model = self
             .check_model
             .get_or_init(|| async {
@@ -517,13 +561,12 @@ impl WhisperClient {
             })
             .await
             .clone()?;
-        let audio = tokio::fs::read(path).await.ok()?;
         let body = serde_json::json!({
             "model": model,
             "messages": [{
                 "role": "user",
                 "content": [{"type": "input_audio",
-                             "input_audio": {"data": BASE64.encode(&audio), "format": "wav"}}]
+                             "input_audio": {"data": BASE64.encode(audio), "format": "wav"}}]
             }],
             "max_tokens": 16,
             "temperature": 0.0,

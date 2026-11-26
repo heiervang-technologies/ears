@@ -203,6 +203,10 @@ pub struct SileroVad {
     dip_frames: usize,
     /// Highest probability of the current candidate.
     candidate_peak: f32,
+    /// Set after rejecting sustained borderline audio at `max_candidate_frames`;
+    /// cleared once probability drops below `end_threshold` so steady noise
+    /// hovering near the threshold cannot churn speculative streams every ~1 s.
+    candidate_cooldown: bool,
     silence_frames: usize,
     in_speech: bool,
     /// Probability sum/count over the voiced span of the current segment:
@@ -241,6 +245,7 @@ impl SileroVad {
             strong_frames: 0,
             dip_frames: 0,
             candidate_peak: 0.0,
+            candidate_cooldown: false,
             silence_frames: 0,
             in_speech: false,
             voiced_sum: 0.0,
@@ -287,10 +292,14 @@ impl SileroVad {
         let result = if !self.in_speech {
             let min_speech_frames =
                 (self.config.min_speech_duration_ms as usize).div_ceil(ms_per_frame.max(1));
-            let max_candidate_frames = (min_speech_frames * 3).max(32);
+            let max_candidate_frames = (min_speech_frames * 4).max(40);
             if self.speech_frames == 0 {
-                // A candidate opens only on the start threshold.
-                if probability >= start {
+                if self.candidate_cooldown {
+                    if probability < end {
+                        self.candidate_cooldown = false;
+                    }
+                } else if probability >= start {
+                    // A candidate opens only on the start threshold.
                     self.speech_frames = 1;
                     self.strong_frames = 1;
                     self.dip_frames = 0;
@@ -316,7 +325,7 @@ impl SileroVad {
                 if self.dip_frames > CANDIDATE_DIP_FRAMES {
                     rejected = true;
                     rejected_peak = self.candidate_peak;
-                    let rescue = self.speech_frames <= 16
+                    let rescue = self.speech_frames <= min_speech_frames.max(16)
                         && self.strong_frames >= RESCUE_MIN_STRONG_FRAMES
                         && self.candidate_peak >= RESCUE_MIN_PEAK;
                     info!(
@@ -355,7 +364,8 @@ impl SileroVad {
                 VadResult::Speech
             } else if self.speech_frames >= max_candidate_frames {
                 // Sustained borderline audio that never reaches confirmation:
-                // reject so candidate buffers and speculative streaming stay bounded.
+                // reject and wait for probability to fall below `end` before
+                // opening another candidate so steady noise cannot churn streams.
                 rejected = true;
                 rejected_peak = self.candidate_peak;
                 info!(
@@ -366,6 +376,7 @@ impl SileroVad {
                 self.strong_frames = 0;
                 self.dip_frames = 0;
                 self.candidate_peak = 0.0;
+                self.candidate_cooldown = true;
                 VadResult::Silence
             } else {
                 VadResult::Silence
@@ -481,6 +492,7 @@ impl SileroVad {
         self.strong_frames = 0;
         self.dip_frames = 0;
         self.candidate_peak = 0.0;
+        self.candidate_cooldown = false;
         self.silence_frames = 0;
         self.in_speech = false;
         self.early_end_ms = None;
@@ -1487,5 +1499,43 @@ mod tests {
         assert!(det.probable_or_speaking_samples().is_some());
         det.reset();
         assert!(det.probable_or_speaking_samples().is_none());
+    }
+
+    #[test]
+    fn borderline_cap_enters_cooldown_until_probability_drops_below_end() {
+        let mut vad = SileroVad::new(VadConfig {
+            speech_threshold: 0.5,
+            end_threshold: Some(0.35),
+            min_speech_duration_ms: 128,
+            ..VadConfig::default()
+        })
+        .unwrap();
+        // Open candidate with one strong frame, then hold 39 borderline frames
+        // (0.40 >= end=0.35, < start=0.50) until hitting max_candidate_frames=40.
+        assert_eq!(vad.apply_probability(0.6), VadResult::Silence);
+        assert!(vad.is_probably_speaking());
+        for _ in 0..38 {
+            assert_eq!(vad.apply_probability(0.4), VadResult::Silence);
+            assert!(vad.is_probably_speaking());
+        }
+        // Frame 40 hits the cap -> rejected and enters cooldown.
+        assert_eq!(vad.apply_probability(0.4), VadResult::Silence);
+        assert!(!vad.is_probably_speaking());
+
+        // While hovering at or above `end`, even spikes above `start` must not
+        // reopen a candidate and churn speculative streams.
+        for _ in 0..20 {
+            assert_eq!(vad.apply_probability(0.6), VadResult::Silence);
+            assert!(!vad.is_probably_speaking());
+            assert_eq!(vad.apply_probability(0.4), VadResult::Silence);
+            assert!(!vad.is_probably_speaking());
+        }
+
+        // Once probability drops below `end`, cooldown clears and the next
+        // frame >= `start` opens a new candidate normally.
+        assert_eq!(vad.apply_probability(0.1), VadResult::Silence);
+        assert!(!vad.is_probably_speaking());
+        assert_eq!(vad.apply_probability(0.6), VadResult::Silence);
+        assert!(vad.is_probably_speaking());
     }
 }

@@ -162,6 +162,16 @@ pub(crate) fn hyprland_socket_path(filename: &str) -> Option<PathBuf> {
     tmp.exists().then_some(tmp)
 }
 
+/// Whether Hyprland's `.socket.sock` exists and accepts a live Unix connection
+/// (distinguishing an active compositor from a stale socket file left after a
+/// crash).
+pub(crate) fn hyprland_socket_connectable() -> bool {
+    let Some(path) = hyprland_socket_path(".socket.sock") else {
+        return false;
+    };
+    UnixStream::connect(&path).is_ok()
+}
+
 /// Send a single request (e.g. `"j/activewindow"` or `"j/devices"`) over
 /// Hyprland's direct Unix request socket (`.socket.sock`).
 pub(crate) fn hyprland_ipc_request(request: &str, timeout: Duration) -> Option<Vec<u8>> {
@@ -293,12 +303,12 @@ impl HyprlandFocusCache {
                             if let Ok(mut guard) = cached_bg.write() {
                                 *guard = None;
                             }
+                            crate::ghost_terminal::invalidate_tmux_pane_cache();
                             connected_bg.store(true, Ordering::Release);
 
                             let mut reader = BufReader::new(stream);
                             let mut line = String::new();
                             while !stop_bg.load(Ordering::Acquire) {
-                                line.clear();
                                 match reader.read_line(&mut line) {
                                     Ok(0) => break,
                                     Ok(_) => {
@@ -307,7 +317,9 @@ impl HyprlandFocusCache {
                                             if let Ok(mut guard) = cached_bg.write() {
                                                 *guard = None;
                                             }
+                                            crate::ghost_terminal::invalidate_tmux_pane_cache();
                                         }
+                                        line.clear();
                                     }
                                     Err(e)
                                         if matches!(
@@ -328,6 +340,7 @@ impl HyprlandFocusCache {
                             if let Ok(mut guard) = cached_bg.write() {
                                 *guard = None;
                             }
+                            crate::ghost_terminal::invalidate_tmux_pane_cache();
                         }
                         Err(_) => {
                             connected_bg.store(false, Ordering::Release);
@@ -740,13 +753,17 @@ impl GhostClient {
             // Only a status query was sent: nothing can have been committed.
             Err(_) => return Delivery::NotDelivered,
         }
-        match self.send(&format!("C {}", escape(text))) {
+        let delivery = match self.send(&format!("C {}", escape(text))) {
             Ok((GhostDisplay::None, _)) => Delivery::NotDelivered,
             Ok(_) => Delivery::Delivered,
             // Could not even connect: the command never left.
             Err(GhostError::Unavailable { .. }) => Delivery::NotDelivered,
             Err(_) => Delivery::Unknown,
+        };
+        if !matches!(delivery, Delivery::NotDelivered) {
+            crate::ghost_terminal::invalidate_tmux_pane_cache();
         }
+        delivery
     }
 
     /// Clear the ghost without delivering anything.
