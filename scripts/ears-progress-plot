@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Toggle or launch the HAIos Quickshell Ears Responsiveness Progress Plot.
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "$0")"
+REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+UI_LIB="${HAIOS_UI_LIB:-$HOME/worktrees/haios-ui-progress/overlay/ui}"
+COOK_DIR="$HOME/.cache/haios-ui/cook/ears-responsiveness"
+SCENE_SRC="$REPO_DIR/extensions/progress-plot/scene.qml"
+METRICS_BIN="$REPO_DIR/scripts/ears-metrics.py"
+
+if [[ "${1:-}" == "stop" ]]; then
+    pkill -f "qs -p $COOK_DIR/scene.qml" 2>/dev/null || true
+    exit 0
+fi
+
+if [[ "${1:-}" == "toggle" ]] && pgrep -f "qs -p $COOK_DIR/scene.qml" >/dev/null 2>&1; then
+    pkill -f "qs -p $COOK_DIR/scene.qml" 2>/dev/null || true
+    exit 0
+fi
+
+# Refresh metrics immediately so the first frame is populated
+python3 "$METRICS_BIN"
+
+# Link HAIos UI design-system components + our scene
+mkdir -p "$COOK_DIR"
+ln -sf "$UI_LIB"/* "$COOK_DIR/"
+ln -sf "$SCENE_SRC" "$COOK_DIR/scene.qml"
+
+# Replace any prior instance cleanly
+pkill -f "qs -p $COOK_DIR/scene.qml" 2>/dev/null || true
+sleep 0.1
+
+export EARS_METRICS_BIN="$METRICS_BIN"
+if [[ "${1:-}" == "--fg" ]]; then
+    exec qs -p "$COOK_DIR/scene.qml"
+else
+    setsid qs -p "$COOK_DIR/scene.qml" >/dev/null 2>&1 < /dev/null &
+fi
