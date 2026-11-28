@@ -3,8 +3,10 @@
 //! Only a client descended from the focused terminal may supply pane geometry.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Where a preview too long for the cursor's pane row goes.
@@ -27,6 +29,28 @@ pub(crate) struct Pane {
     pub rows: usize,
 }
 
+/// TTL for cached `tmux list-clients` pane geometry per terminal PID.
+/// Preedit updates do not move the terminal cursor while dictating, so caching
+/// within an utterance avoids spawning `tmux` on every partial preview.
+const TMUX_PANE_CACHE_TTL: Duration = Duration::from_millis(250);
+
+struct CachedTmuxPane {
+    pid: u32,
+    pane: Option<Pane>,
+    fetched_at: Instant,
+}
+
+static TMUX_PANE_CACHE: Mutex<Option<CachedTmuxPane>> = Mutex::new(None);
+
+struct WrapCacheEntry {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    wraps: bool,
+}
+
+static ALACRITTY_WRAP_CACHE: Mutex<Option<WrapCacheEntry>> = Mutex::new(None);
+
 pub(crate) fn output(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
@@ -37,24 +61,24 @@ pub(crate) fn output(program: &str, args: &[&str]) -> Option<String> {
 }
 
 pub(crate) fn overflows(text: &str) -> Option<Overflow> {
-    let json = output("hyprctl", &["activewindow", "-j"])?;
-    let window = serde_json::from_str::<serde_json::Value>(&json).ok()?;
-    let class = window["class"].as_str()?;
+    let window = crate::ghost::hyprland_active_window()?;
     // Alacritty gives each window its own PID. Multi-window terminal servers
     // need stronger window identity before ancestry can safely select a pane.
-    if !class.eq_ignore_ascii_case("Alacritty") {
+    if !window.class.eq_ignore_ascii_case("Alacritty") {
         return None;
     }
-    let pid = window["pid"].as_u64().and_then(|p| u32::try_from(p).ok())?;
-    let clients = output(
-        "tmux",
-        &[
-            "list-clients",
-            "-F",
-            "#{client_pid} #{pane_width} #{cursor_x} #{pane_left} #{pane_height} #{cursor_y}",
-        ],
-    )?;
-    let pane = focused_pane(&clients, pid, parent_pid)?;
+    let pid = window.pid?;
+    let pane = cached_focused_pane(pid, TMUX_PANE_CACHE_TTL, &TMUX_PANE_CACHE, |pid| {
+        let clients = output(
+            "tmux",
+            &[
+                "list-clients",
+                "-F",
+                "#{client_pid} #{pane_width} #{cursor_x} #{pane_left} #{pane_height} #{cursor_y}",
+            ],
+        )?;
+        focused_pane(&clients, pid, parent_pid)
+    })?;
     if !exceeds(text, pane.width - pane.cursor_x) {
         return None;
     }
@@ -65,11 +89,81 @@ pub(crate) fn overflows(text: &str) -> Option<Overflow> {
     })
 }
 
+/// Forget the cached focused tmux pane so the next preedit wrap check queries
+/// live `cursor_x` and active pane (after a commit, key send, or focus change).
+pub(crate) fn invalidate_tmux_pane_cache() {
+    if let Ok(mut guard) = TMUX_PANE_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+fn cached_focused_pane(
+    pid: u32,
+    ttl: Duration,
+    cache: &Mutex<Option<CachedTmuxPane>>,
+    fetch: impl FnOnce(u32) -> Option<Pane>,
+) -> Option<Pane> {
+    let now = Instant::now();
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.pid == pid && now.saturating_duration_since(entry.fetched_at) < ttl {
+                return entry.pane;
+            }
+        }
+    }
+    let pane = fetch(pid);
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(CachedTmuxPane {
+            pid,
+            pane,
+            fetched_at: Instant::now(),
+        });
+    }
+    pane
+}
+
 /// Does the Alacritty config turn on `colors.preedit.wrap`?
 fn alacritty_wraps() -> bool {
-    crate::ghost_style::alacritty_config()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .is_some_and(|text| wrap_enabled(&text))
+    let Some(path) = crate::ghost_style::alacritty_config() else {
+        return false;
+    };
+    alacritty_wraps_at(&path, &ALACRITTY_WRAP_CACHE)
+}
+
+fn alacritty_wraps_at(path: &Path, cache: &Mutex<Option<WrapCacheEntry>>) -> bool {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => {
+            if let Ok(mut guard) = cache.lock() {
+                *guard = None;
+            }
+            return false;
+        }
+    };
+    let modified = meta.modified().ok();
+    let len = meta.len();
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.path == path && entry.modified == modified && entry.len == len {
+                return entry.wraps;
+            }
+        }
+    }
+
+    let wraps = std::fs::read_to_string(path)
+        .ok()
+        .is_some_and(|text| wrap_enabled(&text));
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(WrapCacheEntry {
+            path: path.to_path_buf(),
+            modified,
+            len,
+            wraps,
+        });
+    }
+    wraps
 }
 
 fn wrap_enabled(config: &str) -> bool {
@@ -445,5 +539,87 @@ mod tests {
         assert!(exceeds("a\nb", 80));
         assert!(exceeds("a\tb", 80));
         assert!(!exceeds("", 0));
+    }
+
+    #[test]
+    fn alacritty_wrap_cache_reuses_unchanged_file_and_reloads_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alacritty.toml");
+        let cache = Mutex::new(None);
+
+        std::fs::write(&path, "[colors.preedit]\nwrap = true\n").unwrap();
+        assert!(alacritty_wraps_at(&path, &cache));
+        assert!(cache.lock().unwrap().as_ref().unwrap().wraps);
+
+        // Cache hit with identical metadata returns cached value without re-reading.
+        assert!(alacritty_wraps_at(&path, &cache));
+
+        // Modifying content changes size/mtime and invalidates the cache.
+        std::fs::write(&path, "[colors.preedit]\nwrap = false\n").unwrap();
+        assert!(!alacritty_wraps_at(&path, &cache));
+        assert!(!cache.lock().unwrap().as_ref().unwrap().wraps);
+
+        // Deleting the file clears the cache and returns false.
+        std::fs::remove_file(&path).unwrap();
+        assert!(!alacritty_wraps_at(&path, &cache));
+        assert!(cache.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn tmux_pane_cache_respects_pid_and_ttl() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = Mutex::new(None);
+        let calls = AtomicUsize::new(0);
+        let p1 = pane(4, 5);
+        let p2 = pane(8, 3);
+
+        // Same PID within TTL: fetched once.
+        assert_eq!(
+            cached_focused_pane(100, Duration::from_millis(200), &cache, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Some(p1)
+            }),
+            Some(p1)
+        );
+        assert_eq!(
+            cached_focused_pane(100, Duration::from_millis(200), &cache, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Some(p2)
+            }),
+            Some(p1)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        // Different PID: immediate miss.
+        assert_eq!(
+            cached_focused_pane(200, Duration::from_millis(200), &cache, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Some(p2)
+            }),
+            Some(p2)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+
+        // TTL expired: refreshes even for the same PID.
+        std::thread::sleep(Duration::from_millis(35));
+        assert_eq!(
+            cached_focused_pane(200, Duration::from_millis(20), &cache, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                None
+            }),
+            None
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+
+        // `None` (non-tmux terminal) is also cached within TTL.
+        assert_eq!(
+            cached_focused_pane(200, Duration::from_millis(200), &cache, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Some(p1)
+            }),
+            None
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 }

@@ -70,22 +70,24 @@ impl KeyboardLayout {
         None
     }
 
-    /// Detect keyboard layout from Hyprland using hyprctl
+    /// Detect keyboard layout from Hyprland via its direct IPC socket, falling back to `hyprctl`
     fn detect_hyprland_layout() -> Option<String> {
-        // First try to get the active keyboard layout
-        // hyprctl devices -j returns JSON with keyboard info
-        let mut command = Command::new("hyprctl");
-        command
-            .args(["devices", "-j"])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let output = output_bounded(command, Duration::from_millis(300)).ok()?;
+        const TIMEOUT: Duration = Duration::from_millis(300);
 
-        if !output.status.success() {
-            return None;
-        }
+        // First try to get the active keyboard layout via Hyprland's direct
+        // IPC socket (`j/devices`), falling back to `hyprctl devices -j`.
+        let devices_json =
+            crate::ghost::hyprland_ipc_request("j/devices", TIMEOUT).or_else(|| {
+                let mut command = Command::new("hyprctl");
+                command
+                    .args(["devices", "-j"])
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                let output = output_bounded(command, TIMEOUT).ok()?;
+                output.status.success().then_some(output.stdout)
+            })?;
 
-        let json_str = String::from_utf8_lossy(&output.stdout);
+        let json_str = String::from_utf8_lossy(&devices_json);
 
         // Parse JSON to find the active keyboard layout
         // Look for "active_keymap" field in keyboards array
@@ -93,22 +95,26 @@ impl KeyboardLayout {
             return Some(layout);
         }
 
-        // Fallback: try getting the configured layout from hyprctl getoption
-        let mut command = Command::new("hyprctl");
-        command
-            .args(["getoption", "input:kb_layout", "-j"])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let output = output_bounded(command, Duration::from_millis(300)).ok()?;
-        if output.status.success() {
-            let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-            let layout = value.get("str")?.as_str()?.split(',').next()?.trim();
-            if !layout.is_empty() {
-                return Some(layout.to_string());
-            }
-        }
+        // Fallback: try getting the configured layout via direct socket or `hyprctl getoption`
+        let option_json =
+            crate::ghost::hyprland_ipc_request("j/getoption input:kb_layout", TIMEOUT).or_else(
+                || {
+                    let mut command = Command::new("hyprctl");
+                    command
+                        .args(["getoption", "input:kb_layout", "-j"])
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    let output = output_bounded(command, TIMEOUT).ok()?;
+                    output.status.success().then_some(output.stdout)
+                },
+            )?;
+        Self::parse_hyprland_kb_layout_option(&option_json)
+    }
 
-        None
+    fn parse_hyprland_kb_layout_option(json: &[u8]) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+        let layout = value.get("str")?.as_str()?.split(',').next()?.trim();
+        (!layout.is_empty()).then(|| layout.to_string())
     }
 
     /// Parse hyprctl devices JSON output to find active keyboard layout
@@ -549,12 +555,13 @@ pub(crate) fn wait_bounded(
     timeout: Duration,
 ) -> Result<std::process::ExitStatus> {
     let start = Instant::now();
-    let mut backoff = Duration::from_millis(2);
+    let mut backoff = Duration::from_micros(500);
     loop {
         if let Some(status) = child.try_wait().context("Failed to poll child process")? {
             return Ok(status);
         }
-        if start.elapsed() >= timeout {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             anyhow::bail!(
@@ -562,8 +569,8 @@ pub(crate) fn wait_bounded(
                 timeout
             );
         }
-        std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(Duration::from_millis(50));
+        std::thread::sleep(backoff.min(timeout.saturating_sub(elapsed)));
+        backoff = (backoff * 2).min(Duration::from_millis(25));
     }
 }
 
@@ -584,7 +591,7 @@ pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std:
     set_nonblocking(stdout.as_raw_fd()).context("Failed to set pipe non-blocking")?;
 
     let start = Instant::now();
-    let mut backoff = Duration::from_millis(2);
+    let mut backoff = Duration::from_micros(500);
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let mut status = None;
@@ -605,7 +612,8 @@ pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std:
             status = Some(st);
             break;
         }
-        if start.elapsed() >= timeout {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             drop(stdout);
@@ -614,8 +622,8 @@ pub(crate) fn output_bounded(mut cmd: Command, timeout: Duration) -> Result<std:
                 timeout
             );
         }
-        std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(Duration::from_millis(50));
+        std::thread::sleep(backoff.min(timeout.saturating_sub(elapsed)));
+        backoff = (backoff * 2).min(Duration::from_millis(25));
     }
 
     // Child has exited: take everything it left in the pipe. The read is
@@ -683,6 +691,43 @@ fn key_args(codes: &[u16]) -> Vec<String> {
         .collect()
 }
 
+/// Full `ydotool` argument list for a sequence of key combinations with `-d 2`
+/// (avoids ydotool's 12 ms per-event default).
+fn key_sequence_args(sequence: &[Vec<u16>]) -> Vec<String> {
+    let mut args = vec!["key".to_string(), "-d".to_string(), "2".to_string()];
+    for codes in sequence {
+        args.extend(key_args(codes));
+    }
+    args
+}
+
+/// Return true if `program` exists as an executable regular file (or symlink
+/// to one) in any directory listed in `PATH`.
+fn executable_on_path(program: &str) -> bool {
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return false;
+    };
+    executable_in_dirs(program, std::env::split_paths(&path_var))
+}
+
+fn executable_in_dirs<I, P>(program: &str, dirs: I) -> bool
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<std::path::Path>,
+{
+    use std::os::unix::fs::PermissionsExt;
+
+    for dir in dirs {
+        let candidate = dir.as_ref().join(program);
+        if let Ok(meta) = std::fs::metadata(&candidate) {
+            if meta.is_file() && (meta.permissions().mode() & 0o111) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
     // SAFETY: fcntl on a valid, owned fd with well-formed flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -726,21 +771,27 @@ impl TextInput {
         }
     }
 
-    /// Uncached probe: hyprctl answers and wtype is on PATH.
+    /// Uncached probe: live Hyprland socket (or `hyprctl version`) and `wtype` on PATH.
     fn probe_omarchy() -> bool {
         use std::process::Stdio;
 
-        let mut hyprctl = Command::new("hyprctl");
-        hyprctl
-            .arg("version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let hyprland = run_bounded(hyprctl, PROBE_TIMEOUT)
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let hyprland = crate::ghost::hyprland_socket_connectable() || {
+            let mut hyprctl = Command::new("hyprctl");
+            hyprctl
+                .arg("version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            run_bounded(hyprctl, PROBE_TIMEOUT)
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
         if !hyprland {
             return false;
+        }
+
+        if executable_on_path("wtype") {
+            return true;
         }
 
         let mut which = Command::new("which");
@@ -765,7 +816,7 @@ impl TextInput {
         settle_after_paste();
 
         let mut cmd = Command::new("ydotool");
-        cmd.args(["key", "28:1", "28:0"]) // KEY_ENTER press and release
+        cmd.args(["key", "-d", "2", "28:1", "28:0"]) // KEY_ENTER press and release
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -774,6 +825,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Enter failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -787,7 +839,7 @@ impl TextInput {
 
         let mut cmd = Command::new("ydotool");
         // KEY_LEFTSHIFT down, KEY_ENTER press and release, KEY_LEFTSHIFT up
-        cmd.args(["key", "42:1", "28:1", "28:0", "42:0"])
+        cmd.args(["key", "-d", "2", "42:1", "28:1", "28:0", "42:0"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -796,6 +848,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Shift+Enter failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -819,6 +872,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool Backspace failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -836,15 +890,7 @@ impl TextInput {
 
         settle_after_paste();
 
-        let mut args = vec!["key".to_string()];
-        if sequence.len() > 1 {
-            // ydotool waits 12 ms per event by default: a long sequence
-            // (ctrl+u*40) would take seconds.
-            args.push("--key-delay=4".to_string());
-        }
-        for codes in sequence {
-            args.extend(key_args(codes));
-        }
+        let args = key_sequence_args(sequence);
         let mut cmd = Command::new("ydotool");
         cmd.args(&args)
             .stdin(Stdio::null())
@@ -855,6 +901,7 @@ impl TextInput {
         if !status.success() {
             anyhow::bail!("ydotool key combination failed with status: {}", status);
         }
+        crate::ghost_terminal::invalidate_tmux_pane_cache();
 
         Ok(())
     }
@@ -865,7 +912,7 @@ impl TextInput {
     /// - `Wtype`: force wtype (character-by-character with inter-key delay)
     /// - `Paste`: force clipboard paste (wl-copy + Ctrl+V)
     pub fn type_text(text: &str, mode: TypingMode) -> Result<()> {
-        match mode {
+        let result = match mode {
             TypingMode::Auto => {
                 let result = if Self::is_omarchy() {
                     Self::type_with_wtype(text)
@@ -880,8 +927,12 @@ impl TextInput {
             }
             TypingMode::Wtype => Self::type_with_wtype(text),
             TypingMode::Paste => Self::paste_text(text),
-            TypingMode::None => Ok(()),
+            TypingMode::None => return Ok(()),
+        };
+        if result.is_ok() {
+            crate::ghost_terminal::invalidate_tmux_pane_cache();
         }
+        result
     }
 
     /// Type text directly using wtype (Wayland native, for Hyprland/Omarchy)
@@ -1527,5 +1578,58 @@ mod tests {
             Some("de".to_string())
         );
         assert_eq!(KeyboardLayout::layout_to_language("unknown"), None);
+    }
+
+    #[test]
+    fn key_sequence_always_passes_short_delay() {
+        assert_eq!(
+            key_sequence_args(&[vec![28]]),
+            ["key", "-d", "2", "28:1", "28:0"]
+        );
+        assert_eq!(
+            key_sequence_args(&[vec![29, 22], vec![29, 22]]),
+            ["key", "-d", "2", "29:1", "22:1", "22:0", "29:0", "29:1", "22:1", "22:0", "29:0"]
+        );
+    }
+
+    #[test]
+    fn executable_in_dirs_matches_only_executable_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin1 = dir.path().join("bin1");
+        let bin2 = dir.path().join("bin2");
+        std::fs::create_dir(&bin1).unwrap();
+        std::fs::create_dir(&bin2).unwrap();
+
+        // Directory with the same name must not match.
+        std::fs::create_dir(bin1.join("wtype")).unwrap();
+        assert!(!executable_in_dirs("wtype", [&bin1, &bin2]));
+
+        // Non-executable file must not match.
+        let non_exec = bin2.join("wtype");
+        std::fs::write(&non_exec, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!executable_in_dirs("wtype", [&bin1, &bin2]));
+
+        // Executable file matches.
+        std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(executable_in_dirs("wtype", [&bin1, &bin2]));
+    }
+
+    #[test]
+    fn parse_hyprland_kb_layout_option_takes_first_layout() {
+        assert_eq!(
+            KeyboardLayout::parse_hyprland_kb_layout_option(br#"{"str":"no,us","set":true}"#),
+            Some("no".to_string())
+        );
+        assert_eq!(
+            KeyboardLayout::parse_hyprland_kb_layout_option(br#"{"str":""}"#),
+            None
+        );
+        assert_eq!(
+            KeyboardLayout::parse_hyprland_kb_layout_option(b"not json"),
+            None
+        );
     }
 }

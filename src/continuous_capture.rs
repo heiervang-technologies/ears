@@ -54,7 +54,7 @@ impl Default for ContinuousCaptureConfig {
         Self {
             device: "default".to_string(),
             fallbacks: Vec::new(),
-            chunk_size: crate::pipeline::AUDIO_CHUNK_SAMPLES, // 100ms at 16kHz
+            chunk_size: crate::pipeline::AUDIO_CHUNK_SAMPLES, // 32ms at 16kHz
         }
     }
 }
@@ -397,7 +397,7 @@ mod tests {
         let config = ContinuousCaptureConfig::default();
         assert_eq!(config.device, "default");
         assert!(config.fallbacks.is_empty());
-        assert_eq!(config.chunk_size, 1600);
+        assert_eq!(config.chunk_size, 512);
     }
 
     #[test]

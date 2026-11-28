@@ -17,66 +17,19 @@ pub enum Ending {
     Command,
     /// A finished sentence: probably done, perhaps a pause to think.
     Finished,
+    /// An unpunctuated clause of two or more words not ending on a
+    /// continuation word, once the live stream has kept pace.
+    Clause,
 }
 
 /// Last words that promise more: a sentence that ends on one of them is
 /// someone thinking, not done.
 const GOES_ON: &[&str] = &[
-    "and",
-    "but",
-    "or",
-    "so",
-    "because",
-    "if",
-    "then",
-    "the",
-    "a",
-    "an",
-    "to",
-    "of",
-    "with",
-    "that",
-    "this",
-    "uh",
-    "um",
-    "ah",
-    "er",
-    "eh",
-    "hmm",
-    "mm",
-    "like",
-    "my",
-    "your",
-    "our",
-    "their",
-    "his",
-    "her",
-    "its",
-    "is",
-    "are",
-    "was",
-    "in",
-    "on",
-    "at",
-    "for",
-    "from",
-    "by",
-    "as",
-    "about",
-    "when",
-    "which",
-    "who",
-    "where",
-    "while",
-    "than",
-    "i",
-    "we",
-    "you",
-    "also",
-    "just",
-    "maybe",
-    "actually",
-    "basically",
+    "and", "but", "or", "because", "if", "then", "the", "a", "an", "of", "with", "without", "that",
+    "this", "uh", "um", "ah", "er", "eh", "hmm", "mm", "like", "my", "your", "our", "their", "his",
+    "her", "its", "is", "are", "was", "in", "on", "at", "for", "from", "by", "as", "about", "into",
+    "onto", "through", "between", "during", "before", "after", "when", "which", "who", "where",
+    "while", "than",
 ];
 
 /// How the live transcript ends: `raw` as the model wrote it (its
@@ -97,6 +50,48 @@ pub fn ending(raw: &str, text: &str, commands: Option<&VoiceCommands>) -> Option
     (sentence && !last.is_empty() && !GOES_ON.contains(&last.as_str())).then_some(Ending::Finished)
 }
 
+/// Extra trailing words that are fine at the end of a punctuated sentence
+/// (`"It is for you."`, `"accurately too."`), but usually indicate an
+/// unfinished thought when there is NO terminal punctuation (`"I need to"`,
+/// `"can we"`, `"so I"`, `"I just"`).
+const CLAUSE_GOES_ON: &[&str] = &[
+    "to",
+    "so",
+    "i",
+    "we",
+    "you",
+    "just",
+    "maybe",
+    "also",
+    "actually",
+    "basically",
+];
+
+/// Whether a live transcript without terminal punctuation looks like a settled
+/// clause rather than an unfinished thought: at least two words, no trailing
+/// ellipsis or continuation punctuation, and not ending in a [`GOES_ON`] or
+/// [`CLAUSE_GOES_ON`] word.
+pub fn is_clause_settled(raw: &str) -> bool {
+    let raw = raw.trim_end();
+    if raw.is_empty() || raw.ends_with("...") || raw.ends_with([',', ';', ':']) {
+        return false;
+    }
+    let mut words = raw
+        .split_whitespace()
+        .map(normalize)
+        .filter(|w| !w.is_empty());
+    if words.next().is_none() {
+        return false;
+    }
+    let Some(mut last) = words.next() else {
+        return false;
+    };
+    for word in words {
+        last = word;
+    }
+    !GOES_ON.contains(&last.as_str()) && !CLAUSE_GOES_ON.contains(&last.as_str())
+}
+
 /// The phrases that are a whole command on their own in the current mode,
 /// for [`Ending::Exact`]. A phrase only counts if no other active phrase
 /// starts with it: "over" does not when "over and out" is a phrase too,
@@ -106,6 +101,7 @@ pub fn ending(raw: &str, text: &str, commands: Option<&VoiceCommands>) -> Option
 #[derive(Debug, Clone, Default)]
 pub struct Phrases {
     complete: HashSet<String>,
+    open: Vec<String>,
     normalize: Option<fn(&str) -> String>,
 }
 
@@ -138,6 +134,7 @@ impl Phrases {
             .collect();
         Self {
             complete,
+            open,
             normalize: Some(normalize),
         }
     }
@@ -148,8 +145,27 @@ impl Phrases {
             .is_some_and(|normalize| self.complete.contains(&normalize(text)))
     }
 
+    /// Whether `text` is or starts with an open/prefix command phrase
+    /// (e.g. `"hey friend"`, `"literal ..."`, `"back ..."`), so an
+    /// unpunctuated pause should wait for the rest of the command.
+    pub fn starts_open(&self, text: &str) -> bool {
+        let Some(normalize) = self.normalize else {
+            return false;
+        };
+        let norm = normalize(text);
+        if norm.is_empty() {
+            return false;
+        }
+        self.open.iter().any(|o| {
+            norm == *o
+                || norm
+                    .strip_prefix(o.as_str())
+                    .is_some_and(|r| r.starts_with(' '))
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.complete.is_empty()
+        self.complete.is_empty() && self.open.is_empty()
     }
 }
 
@@ -306,5 +322,38 @@ mod tests {
         assert_eq!(e("So if my, uh."), None);
         assert_eq!(e("Well..."), None);
         assert_eq!(e(""), None);
+        // Common sentence-final words ("to"/"too", "so", "basically", etc.)
+        // should finish rather than dropping to max silence.
+        assert_eq!(e("I want that to."), Some(Ending::Finished));
+        assert_eq!(e("I think so."), Some(Ending::Finished));
+        assert_eq!(e("That works basically."), Some(Ending::Finished));
+        assert_eq!(e("Not actually."), Some(Ending::Finished));
+        assert_eq!(e("It is for you."), Some(Ending::Finished));
+    }
+
+    #[test]
+    fn settled_clauses_distinguish_pauses_from_hesitations() {
+        assert!(is_clause_settled("That works for me"));
+        assert!(is_clause_settled("ship it now"));
+        // Unpunctuated clauses ending on ambiguous continuation words stay patient
+        // (punctuated "I want that to." still ends via Ending::Finished above).
+        assert!(!is_clause_settled("I want that to"));
+        assert!(!is_clause_settled("I need to"));
+        assert!(!is_clause_settled("can we"));
+        // Genuine hesitation / continuation words stay unsettled.
+        assert!(!is_clause_settled("our config uh and"));
+        assert!(!is_clause_settled("check the"));
+        assert!(!is_clause_settled("because"));
+        assert!(!is_clause_settled("not typing without"));
+        assert!(!is_clause_settled("looking into"));
+        assert_eq!(
+            ending("not typing without.", "not typing without", None),
+            None
+        );
+        // Single words and trailing ellipsis / continuation punctuation stay unsettled.
+        assert!(!is_clause_settled("hello"));
+        assert!(!is_clause_settled("Well..."));
+        assert!(!is_clause_settled("I was thinking,"));
+        assert!(!is_clause_settled(""));
     }
 }

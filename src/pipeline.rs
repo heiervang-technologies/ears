@@ -2,10 +2,10 @@
 use std::{future::Future, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
 
-/// Default capture frames are 100 ms of mono 16 kHz audio.
-pub const AUDIO_CHUNK_SAMPLES: usize = 1600;
-/// Ten seconds / 640 kB of f32 PCM at the default chunk size.
-pub const AUDIO_QUEUE_CHUNKS: usize = 100;
+/// Default capture frames are 32 ms of mono 16 kHz audio, matching Silero VAD 1:1.
+pub const AUDIO_CHUNK_SAMPLES: usize = 512;
+/// ~10.2 seconds / ~655 kB of f32 PCM at the default 32 ms chunk size.
+pub const AUDIO_QUEUE_CHUNKS: usize = 320;
 
 pub fn audio_channel() -> (
     tokio::sync::mpsc::Sender<Vec<f32>>,

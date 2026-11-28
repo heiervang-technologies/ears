@@ -192,6 +192,10 @@ pub(super) struct GhostState {
     /// Settled state of the latest stream partial, for the per-tick decoder
     /// to carry on from if the stream is lost.
     pub(super) stream_state: Option<crate::continuous::DecoderState>,
+    /// Latest speculative partial received while `is_probably_speaking()` was
+    /// true (before VAD confirmed speech). Held without drawing until
+    /// `is_speaking()` flips true, or cleared on `next_utterance()`.
+    pub(super) pending_partial: Option<Partial>,
     /// Connect attempts and losses since the stream was last up, for the
     /// reconnect backoff ([`stream_backoff`]).
     pub(super) stream_failures: u32,
@@ -224,6 +228,7 @@ impl GhostState {
             stream_id: 0,
             per_tick: None,
             stream_state: None,
+            pending_partial: None,
             stream_failures: 0,
             stream_down_since: None,
             showing: false,
@@ -261,6 +266,7 @@ impl GhostState {
         self.last_partial_at = None;
         self.decoder = None;
         self.stream_state = None;
+        self.pending_partial = None;
     }
 
     /// The stream is not up (lost, or a connect attempt failed): try again
@@ -565,25 +571,27 @@ impl StreamingEngine {
         }
     }
 
-    /// Feed the utterance in progress to the ears stream: `start` at speech
-    /// onset with the replay buffer, then only new samples. Returns whether
-    /// the stream owns this utterance's partials; false means decode per
-    /// tick instead.
+    /// Feed the utterance in progress to the ears stream: `start` speculatively
+    /// at `SpeechProbable` (or confirmed speech onset) with the replay buffer,
+    /// then only new samples. Returns whether the stream owns this utterance's
+    /// partials; false means decode per tick instead.
     pub(super) fn ghost_stream_feed(&mut self) -> bool {
         if self.continuous.is_none() {
             return false;
         }
         self.ghost_stream_link();
+        let active = self.vad_detector.is_speaking() || self.vad_detector.is_probably_speaking();
         // The mode's phrases as context, worked out once per utterance.
-        let starting = self
-            .ghost
-            .as_ref()
-            .is_some_and(|g| !matches!(g.streamed, Some(s) if s.utterance == g.utterance));
+        let starting = active
+            && self
+                .ghost
+                .as_ref()
+                .is_some_and(|g| !matches!(g.streamed, Some(s) if s.utterance == g.utterance));
         let context = if starting { self.asr_context() } else { None };
         let grammar = self.guided_grammar.clone();
         let muted = self.typing_mode == TypingMode::None;
-        let samples = if self.vad_detector.is_speaking() {
-            self.vad_detector.current_segment_samples()
+        let samples = if active {
+            self.vad_detector.probable_or_speaking_samples()
         } else {
             None
         };
@@ -657,12 +665,15 @@ impl StreamingEngine {
         true
     }
 
-    /// The stream's `final` for utterance `id`, when it can be committed
-    /// as is. None (transcribe in full instead) on timeout, error, a lost
-    /// stream, or a short result: short results go through the full
-    /// transcription's no-speech check, which catches "Okay." on noise.
+    /// The stream's `final` for utterance `id`, when non-empty and not a
+    /// known silence artifact. None (transcribe in full instead) on timeout,
+    /// error, a lost stream, or an empty/silence-artifact result.
+    ///
+    /// Short results (`<= NO_SPEECH_CHECK_MAX_WORDS`) are still verified by the
+    /// model's in-memory no-speech check in `process_segment` before commit.
     pub(super) async fn ghost_stream_final(&mut self, id: u64) -> Option<String> {
         use crate::stream_client::StreamEvent;
+        let whisper = self.whisper_client.clone();
         let ghost = self.ghost.as_mut()?;
         let StreamLink::Up(session) = &mut ghost.stream else {
             return None;
@@ -671,9 +682,8 @@ impl StreamingEngine {
         loop {
             match tokio::time::timeout_at(deadline, session.recv()).await {
                 Ok(Some(StreamEvent::Final { utterance, text })) if utterance == id => {
-                    let text = text.trim().to_string();
-                    let words = text.split_whitespace().count();
-                    return (words > crate::whisper::NO_SPEECH_CHECK_MAX_WORDS).then_some(text);
+                    let filtered = whisper.filter_silence(&text);
+                    return (!filtered.is_empty()).then_some(filtered);
                 }
                 Ok(Some(StreamEvent::Error { utterance, .. })) if utterance == Some(id) => {
                     return None
@@ -724,6 +734,7 @@ impl StreamingEngine {
         let bash = self.guided_grammar.is_some();
         let commands = (!bash).then(|| self.commands.clone());
         let speaking = self.vad_detector.is_speaking();
+        let probable = self.vad_detector.is_probably_speaking();
         let standby = self.mode.is_standby();
         let say_echo = self.say_echo.enabled.then(|| self.say_echo.clone());
         let say_playing = self.say_playing.clone();
@@ -740,7 +751,20 @@ impl StreamingEngine {
         let Some(ghost) = self.ghost.as_mut() else {
             return;
         };
+        let mut ready = Vec::new();
+        if speaking {
+            if let Some(pending) = ghost.pending_partial.take() {
+                if pending.utterance == ghost.utterance {
+                    ready.push(pending);
+                }
+            }
+        } else if !probable {
+            ghost.pending_partial = None;
+        }
         while let Ok(partial) = ghost.partial_rx.try_recv() {
+            ready.push(partial);
+        }
+        for partial in ready {
             let Partial {
                 utterance,
                 result,
@@ -764,8 +788,25 @@ impl StreamingEngine {
                     spec.model = Some(model.to_string());
                 }
             }
-            if utterance != ghost.utterance || !speaking {
+            if utterance != ghost.utterance {
                 continue; // stale: that utterance already ended
+            }
+            if !speaking {
+                // Speculative stream partial arrived before VAD confirmed
+                // speech: hold the latest one so the instant `is_speaking()`
+                // flips true it displays immediately, without flashing on
+                // rejected candidates.
+                if probable && streamed {
+                    ghost.pending_partial = Some(Partial {
+                        utterance,
+                        result,
+                        decoder,
+                        unsupported,
+                        streamed,
+                        frozen_bytes,
+                    });
+                }
+                continue;
             }
             if !streamed {
                 ghost.decoder = decoder;
@@ -1039,5 +1080,412 @@ impl StreamingEngine {
         if let Some(ghost) = self.ghost.as_mut() {
             ghost.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::progressive_typing::ProgressiveTypingConfig;
+    use crate::streaming::StreamingConfig;
+    use crate::vad::{SpeechSegment, VadConfig, SILERO_FRAME_SIZE};
+    use crate::whisper::WhisperClient;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn fake_ghost_addon(dir: &std::path::Path) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let path = dir.join("ghost.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut w = stream.try_clone().unwrap();
+                for line in std::io::BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let reply: &[u8] = if line == "S" {
+                        b"OK preedit TestApp\n"
+                    } else {
+                        b"OK preedit\n"
+                    };
+                    let _ = tx.send(line);
+                    let _ = w.write_all(reply);
+                }
+            }
+        });
+        (path, rx)
+    }
+
+    fn make_engine(
+        dir: &std::path::Path,
+        whisper_url: &str,
+        temp_dir: PathBuf,
+    ) -> (StreamingEngine, std::sync::mpsc::Receiver<String>) {
+        let mut engine = StreamingEngine::new(
+            Arc::new(WhisperClient::new(whisper_url)),
+            StreamingConfig::default(),
+            VadConfig {
+                min_speech_duration_ms: 96,
+                max_silence_duration_ms: 96,
+                pre_speech_buffer_ms: 64,
+                ..VadConfig::default()
+            },
+            ProgressiveTypingConfig::default(),
+            temp_dir,
+        )
+        .unwrap();
+        engine.typing_mode = TypingMode::Wtype;
+        let (path, lines) = fake_ghost_addon(dir);
+        engine.set_ghost_client(Some(crate::ghost::GhostClient::with_focus_probe(
+            path,
+            || Some("TestApp".to_string()),
+        )));
+        assert_eq!(lines.recv().unwrap(), "S", "probe on enable");
+        (engine, lines)
+    }
+
+    fn stream_spec(url: &str) -> crate::continuous::ContinuousSpec {
+        crate::continuous::ContinuousSpec {
+            server_url: url.into(),
+            api_key: None,
+            model: Some("Qwen/Qwen3-ASR-1.7B".into()),
+            language: Some("en".into()),
+            context: None,
+            rollback_words: None,
+            min_step_ms: None,
+        }
+    }
+
+    fn feed_probs(engine: &mut StreamingEngine, probs: &[f32]) -> Vec<SpeechSegment> {
+        let mut segs = Vec::new();
+        for &p in probs {
+            let outcome = engine.vad_detector.inject_probability(p);
+            if let Some(seg) = engine.handle_vad_outcome(outcome) {
+                segs.push(seg);
+            }
+        }
+        segs
+    }
+
+    async fn tick(engine: &mut StreamingEngine) {
+        engine.ghost_poll_partials();
+        engine.ghost_maybe_start_partial();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    async fn wait_stream_up(engine: &mut StreamingEngine) {
+        for _ in 0..400 {
+            if matches!(engine.ghost.as_ref().unwrap().stream, StreamLink::Up(_)) {
+                return;
+            }
+            tick(engine).await;
+        }
+        panic!("stream never came up");
+    }
+
+    async fn next_non_status(
+        engine: &mut StreamingEngine,
+        lines: &std::sync::mpsc::Receiver<String>,
+    ) -> String {
+        for _ in 0..400 {
+            tick(engine).await;
+            if let Some(line) = lines.try_iter().find(|l| l != "S") {
+                return line;
+            }
+        }
+        panic!("no ghost command received");
+    }
+
+    #[tokio::test]
+    async fn test_speculative_stream_starts_on_probable_holds_display_and_aligns() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) =
+            make_engine(dir.path(), "http://127.0.0.1:9", dir.path().to_path_buf());
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        engine.set_final_correction(false);
+        wait_stream_up(&mut engine).await;
+
+        // Pre-fill pre-speech buffer with 2 silence frames.
+        feed_probs(&mut engine, &[0.0, 0.0]);
+        // First probable frame starts the stream speculatively (not yet confirmed).
+        feed_probs(&mut engine, &[0.9]);
+        assert!(engine.vad_detector.is_probably_speaking());
+        assert!(!engine.vad_detector.is_speaking());
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        // Pre-speech (2 frames) + first probable frame (1 frame) = 3 frames sent.
+        assert_eq!(
+            engine.ghost.as_ref().unwrap().streamed.unwrap().sent,
+            3 * SILERO_FRAME_SIZE
+        );
+
+        // A speculative partial arrives while still probable: held, NOT drawn yet.
+        server.say(serde_json::json!({
+            "type": "partial",
+            "utterance": id,
+            "seq": 1,
+            "text": "hello",
+            "stable_chars": 0,
+            "audio_ms": 96,
+            "decode_ms": 10
+        }));
+        for _ in 0..40 {
+            tick(&mut engine).await;
+            if engine.ghost.as_ref().unwrap().pending_partial.is_some() {
+                break;
+            }
+        }
+        assert!(engine.ghost.as_ref().unwrap().pending_partial.is_some());
+        assert!(
+            lines.try_iter().all(|l| l == "S"),
+            "speculative partial must not be drawn before confirmation"
+        );
+
+        // Feed frames 2 & 3: frame 3 confirms speech, held partial displays immediately.
+        feed_probs(&mut engine, &[0.9, 0.9]);
+        assert!(engine.vad_detector.is_speaking());
+        assert_eq!(next_non_status(&mut engine, &lines).await, "P hello");
+        assert!(engine.ghost.as_ref().unwrap().pending_partial.is_none());
+        assert_eq!(
+            engine.ghost.as_ref().unwrap().streamed.unwrap().sent,
+            5 * SILERO_FRAME_SIZE
+        );
+
+        // End the segment and verify exact byte alignment across probable -> confirmed -> end.
+        let segs = feed_probs(&mut engine, &[0.0, 0.0, 0.0]);
+        assert_eq!(segs.len(), 1);
+        let seg = segs.into_iter().next().unwrap();
+        let total = seg.samples.len();
+        let finish = async {
+            server.wait_for(|l| l == format!("end {id}")).await;
+            server.say(serde_json::json!({
+                "type": "final",
+                "utterance": id,
+                "text": "Hello.",
+                "audio_ms": 224,
+                "decode_ms": 15
+            }));
+        };
+        let (res, ()) = tokio::join!(engine.process_segment(seg), finish);
+        res.unwrap();
+        assert_eq!(server.audio_bytes(), 2 * total);
+        assert_eq!(next_non_status(&mut engine, &lines).await, "C Hello.");
+        assert_eq!(server.starts(), vec![id]);
+    }
+
+    #[tokio::test]
+    async fn test_speculative_stream_cancels_cleanly_on_speech_rejected() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) =
+            make_engine(dir.path(), "http://127.0.0.1:9", dir.path().to_path_buf());
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        wait_stream_up(&mut engine).await;
+
+        // Trigger speculative start on a single blip.
+        feed_probs(&mut engine, &[0.9]);
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+
+        // Server pushes a speculative partial before rejection.
+        server.say(serde_json::json!({
+            "type": "partial",
+            "utterance": id,
+            "seq": 1,
+            "text": "blip",
+            "stable_chars": 0,
+            "audio_ms": 32,
+            "decode_ms": 5
+        }));
+        for _ in 0..40 {
+            tick(&mut engine).await;
+            if engine.ghost.as_ref().unwrap().pending_partial.is_some() {
+                break;
+            }
+        }
+
+        // Candidate rejected: stream cancelled, pending partial dropped, nothing drawn.
+        feed_probs(&mut engine, &[0.0, 0.0, 0.0, 0.0]);
+        server.wait_for(|l| l == format!("cancel {id}")).await;
+        assert!(engine.ghost.as_ref().unwrap().pending_partial.is_none());
+        assert!(
+            lines.try_iter().all(|l| l == "S"),
+            "rejected candidate must not draw anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_short_live_final_confirmed_by_no_speech_check_commits_without_http_or_disk_wav() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let whisper = MockServer::start().await;
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "qwen-asr"}]})),
+            )
+            .mount(&whisper)
+            .await;
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content": "language English<asr_text>Okay."}}]
+                })),
+            )
+            .expect(1)
+            .mount(&whisper)
+            .await;
+        // Expect ZERO full HTTP transcription calls.
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&whisper)
+            .await;
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        // Point temp_dir at a non-existent path: any disk WAV creation would fail!
+        let missing_temp = dir.path().join("does-not-exist");
+        let (mut engine, lines) = make_engine(dir.path(), &whisper.uri(), missing_temp);
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        engine.set_final_correction(false);
+        wait_stream_up(&mut engine).await;
+
+        feed_probs(&mut engine, &[0.9, 0.9, 0.9]);
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        let segs = feed_probs(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+        let finish = async {
+            server.wait_for(|l| l == format!("end {id}")).await;
+            server.say(serde_json::json!({
+                "type": "final",
+                "utterance": id,
+                "text": "Okay.",
+                "audio_ms": 200,
+                "decode_ms": 10
+            }));
+        };
+        let (res, ()) = tokio::join!(
+            engine.process_segment(segs.into_iter().next().unwrap()),
+            finish
+        );
+        res.expect("live final must not touch temp_dir on disk");
+        assert_eq!(engine.final_by, Some("final"));
+        assert_eq!(next_non_status(&mut engine, &lines).await, "C Okay.");
+    }
+
+    #[tokio::test]
+    async fn test_short_live_final_dropped_when_no_speech_check_hears_no_speech() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let whisper = MockServer::start().await;
+        Mock::given(path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": [{"id": "qwen-asr"}]})),
+            )
+            .mount(&whisper)
+            .await;
+        // Cough/clack: even at high Silero VAD prob (0.90), the model answers
+        // `language None` and the short hallucinated live final MUST be dropped.
+        Mock::given(path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content": "language None<asr_text>"}}]
+                })),
+            )
+            .expect(1)
+            .mount(&whisper)
+            .await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&whisper)
+            .await;
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let missing_temp = dir.path().join("does-not-exist");
+        let (mut engine, lines) = make_engine(dir.path(), &whisper.uri(), missing_temp);
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        engine.set_final_correction(false);
+        wait_stream_up(&mut engine).await;
+
+        feed_probs(&mut engine, &[0.9, 0.9, 0.9]);
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        let segs = feed_probs(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+        let finish = async {
+            server.wait_for(|l| l == format!("end {id}")).await;
+            server.say(serde_json::json!({
+                "type": "final",
+                "utterance": id,
+                "text": "Okay.",
+                "audio_ms": 200,
+                "decode_ms": 10
+            }));
+        };
+        let (res, ()) = tokio::join!(
+            engine.process_segment(segs.into_iter().next().unwrap()),
+            finish
+        );
+        res.expect("dropped short live final must not touch temp_dir on disk");
+        assert!(
+            lines.try_iter().all(|l| !l.starts_with("C ")),
+            "no-speech short final must never be committed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_silence_artifact_short_final_still_falls_back_to_http() {
+        use crate::stream_client::fake::{FakeServer, Mode};
+        use wiremock::{matchers::path, Mock, MockServer};
+        let whisper = MockServer::start().await;
+        Mock::given(path("/v1/audio/transcriptions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "Real words from http."})),
+            )
+            .expect(1)
+            .mount(&whisper)
+            .await;
+        let server = FakeServer::start(Mode::Normal).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut engine, lines) = make_engine(dir.path(), &whisper.uri(), dir.path().to_path_buf());
+        engine.set_continuous(Some(stream_spec(&server.url)));
+        engine.set_final_correction(false);
+        wait_stream_up(&mut engine).await;
+
+        feed_probs(&mut engine, &[0.9, 0.9, 0.9]);
+        tick(&mut engine).await;
+        server.wait_for(|l| l.starts_with("start ")).await;
+        let id = server.starts()[0];
+        let segs = feed_probs(&mut engine, &[0.9, 0.0, 0.0, 0.0]);
+        let finish = async {
+            server.wait_for(|l| l == format!("end {id}")).await;
+            server.say(serde_json::json!({
+                "type": "final",
+                "utterance": id,
+                "text": "Thank you.",
+                "audio_ms": 200,
+                "decode_ms": 10
+            }));
+        };
+        let (res, ()) = tokio::join!(
+            engine.process_segment(segs.into_iter().next().unwrap()),
+            finish
+        );
+        res.unwrap();
+        assert_eq!(engine.final_by, Some("http"));
+        assert_eq!(
+            next_non_status(&mut engine, &lines).await,
+            "C Real words from http."
+        );
     }
 }

@@ -233,8 +233,8 @@ struct MicLevels {
     speech_power: f32,
     /// Speech power as the detector heard it, after the gain.
     gained_speech_power: f32,
-    noise_chunks: u32,
-    speech_chunks: u32,
+    noise_samples: u64,
+    speech_samples: u64,
     /// Smoothed fraction of clipped samples.
     clip_rate: f32,
 }
@@ -262,23 +262,44 @@ fn mic_log_due(
     }
 }
 
-/// Capture chunks (100 ms) of each kind before their level is judged.
-const MIC_SETTLE_CHUNKS: u32 = 20;
+/// Duration (2 s at 16 kHz) of each kind of audio before its level is judged.
+const MIC_SETTLE_SAMPLES: u64 = 2 * crate::pcm::SAMPLE_RATE as u64;
 
-/// Weight of a louder quiet chunk in the noise floor, in dB (time constant
-/// ~50 s): five seconds 30 dB above the floor lift it by about 3 dB.
-const NOISE_RISE: f32 = 0.002;
+/// Reference step size (100 ms) for the per-step EMA weights below.
+const MIC_EMA_REF_SAMPLES: f32 = (crate::pcm::SAMPLE_RATE / 10) as f32;
+
+/// Per-100 ms weight of a louder quiet chunk in the noise floor, in dB (time
+/// constant ~50 s): five seconds 30 dB above the floor lift it by about 3 dB.
+const NOISE_RISE_100MS: f32 = 0.002;
+const NOISE_FALL_100MS: f32 = 0.2;
+const SPEECH_ALPHA_100MS: f32 = 0.1;
+const CLIP_ALPHA_100MS: f32 = 0.05;
+
+/// Convert a 100 ms EMA step weight to the equivalent weight for a chunk of
+/// `samples` samples so time constants stay invariant across capture chunk
+/// sizes (e.g. 32 ms vs 100 ms).
+fn ema_alpha(alpha_100ms: f32, samples: usize) -> f32 {
+    let ratio = samples as f32 / MIC_EMA_REF_SAMPLES;
+    1.0 - (1.0 - alpha_100ms).powf(ratio)
+}
 
 impl MicLevels {
-    /// One capture chunk of raw input; `gain` is the gain the detector
-    /// applies to it.
-    fn observe(&mut self, rms: f32, clipped: f32, speaking: bool, gain: f32) {
+    /// One capture chunk of raw input (`samples` samples long); `gain` is the
+    /// gain the detector applies to it.
+    fn observe(&mut self, rms: f32, clipped: f32, samples: usize, speaking: bool, gain: f32) {
+        if samples == 0 {
+            return;
+        }
         if speaking {
             let power = rms * rms;
-            let alpha = if self.speech_chunks == 0 { 1.0 } else { 0.1 };
+            let alpha = if self.speech_samples == 0 {
+                1.0
+            } else {
+                ema_alpha(SPEECH_ALPHA_100MS, samples)
+            };
             self.speech_power += alpha * (power - self.speech_power);
             self.gained_speech_power += alpha * (power * gain * gain - self.gained_speech_power);
-            self.speech_chunks = self.speech_chunks.saturating_add(1);
+            self.speech_samples = self.speech_samples.saturating_add(samples as u64);
         } else {
             // A floor tracker, in dB so a loud burst weighs no more than its
             // level: falls within about half a second, rises over about a
@@ -288,20 +309,20 @@ impl MicLevels {
             // faster rise let conversation lift the floor to the speech
             // level. Leaving digital silence (unmuting) is immediate.
             let db = crate::pcm::dbfs(rms);
-            let alpha = match self.noise_chunks {
+            let alpha = match self.noise_samples {
                 0 => 1.0,
-                _ if db < self.noise_db => 0.2,
+                _ if db < self.noise_db => ema_alpha(NOISE_FALL_100MS, samples),
                 _ if self.noise_db <= crate::mic_check::DEAD_DBFS => 1.0,
-                _ => NOISE_RISE,
+                _ => ema_alpha(NOISE_RISE_100MS, samples),
             };
             self.noise_db += alpha * (db - self.noise_db);
-            self.noise_chunks = self.noise_chunks.saturating_add(1);
+            self.noise_samples = self.noise_samples.saturating_add(samples as u64);
         }
-        self.clip_rate += 0.05 * (clipped - self.clip_rate);
+        self.clip_rate += ema_alpha(CLIP_ALPHA_100MS, samples) * (clipped - self.clip_rate);
     }
 
     fn noise_dbfs(&self) -> f32 {
-        if self.noise_chunks == 0 {
+        if self.noise_samples == 0 {
             crate::pcm::dbfs(0.0)
         } else {
             self.noise_db
@@ -325,9 +346,9 @@ impl MicLevels {
     /// the raw levels, loudness on the speech as the detector heard it.
     fn warning(&self) -> Option<&'static str> {
         use crate::mic_check as mc;
-        let noise_known = self.noise_chunks >= MIC_SETTLE_CHUNKS;
-        let speech_known = self.speech_chunks >= MIC_SETTLE_CHUNKS;
-        if noise_known && self.noise_dbfs() <= mc::DEAD_DBFS && self.speech_chunks == 0 {
+        let noise_known = self.noise_samples >= MIC_SETTLE_SAMPLES;
+        let speech_known = self.speech_samples >= MIC_SETTLE_SAMPLES;
+        if noise_known && self.noise_dbfs() <= mc::DEAD_DBFS && self.speech_samples == 0 {
             return Some("mic silent");
         }
         if self.clip_rate > mc::MAX_CLIPPED {
@@ -461,6 +482,7 @@ impl PipelineHealth {
             s.levels.observe(
                 rms,
                 clipped as f32 / samples.len() as f32,
+                samples.len(),
                 s.speaking,
                 s.gain,
             );
@@ -890,7 +912,8 @@ mod tests {
         // Too little audio to judge yet.
         health.captured(&[0.0; 1600]);
         assert_eq!(health.snapshot().mic_warning, None);
-        for _ in 0..MIC_SETTLE_CHUNKS {
+        let settle_100ms = (MIC_SETTLE_SAMPLES / 1600) as usize;
+        for _ in 0..settle_100ms {
             health.captured(&[0.0; 1600]);
         }
         assert_eq!(health.snapshot().mic_warning, Some("mic silent"));
@@ -901,7 +924,7 @@ mod tests {
             health.captured(&chunk(0.001));
         }
         health.frame(0.9, 0.5, 5, true, None);
-        for _ in 0..MIC_SETTLE_CHUNKS {
+        for _ in 0..settle_100ms {
             health.captured(&chunk(0.1));
         }
         let snap = health.snapshot();
@@ -937,13 +960,65 @@ mod tests {
         assert!(value.get("levels").is_none());
     }
 
+    #[test]
+    fn mic_levels_are_invariant_to_chunk_size() {
+        // 512-sample (32 ms) chunks and 1600-sample (100 ms) chunks must settle
+        // after the same 2 s duration and reach the same EMA values over the
+        // same wall-clock audio span.
+        let mut fast = MicLevels::default();
+        let mut slow = MicLevels::default();
+
+        // 20 * 512 samples = 0.64 s must NOT be settled yet.
+        for _ in 0..20 {
+            fast.observe(0.0, 0.0, 512, false, 1.0);
+        }
+        assert_eq!(fast.warning(), None);
+
+        // 64,000 samples (4.0 s) is an exact multiple of both 1600 (40 chunks)
+        // and 512 (125 chunks).
+        fast = MicLevels::default();
+        // Establish initial floor (-60 dBFS) and speech (-20 dBFS) on both.
+        fast.observe(0.001, 0.0, 512, false, 1.0);
+        slow.observe(0.001, 0.0, 1600, false, 1.0);
+        fast.observe(0.1, 0.0, 512, true, 1.0);
+        slow.observe(0.1, 0.0, 1600, true, 1.0);
+
+        // 4.0 s of loud background (+34 dB above floor) + clipping + quiet speech.
+        for _ in 0..125 {
+            fast.observe(0.05, 0.1, 512, false, 1.0);
+            fast.observe(0.01, 0.1, 512, true, 1.0);
+        }
+        for _ in 0..40 {
+            slow.observe(0.05, 0.1, 1600, false, 1.0);
+            slow.observe(0.01, 0.1, 1600, true, 1.0);
+        }
+        assert!(
+            (fast.noise_dbfs() - slow.noise_dbfs()).abs() < 0.05,
+            "noise_db mismatch: {} vs {}",
+            fast.noise_dbfs(),
+            slow.noise_dbfs()
+        );
+        assert!(
+            (fast.speech_dbfs() - slow.speech_dbfs()).abs() < 0.05,
+            "speech_db mismatch: {} vs {}",
+            fast.speech_dbfs(),
+            slow.speech_dbfs()
+        );
+        assert!(
+            (fast.clip_rate - slow.clip_rate).abs() < 0.005,
+            "clip_rate mismatch: {} vs {}",
+            fast.clip_rate,
+            slow.clip_rate
+        );
+    }
+
     /// Settled levels: `noise` and `speech` raw dBFS, speech heard at `gain`.
     fn levels(noise: f32, speech: f32, gain: f32) -> MicLevels {
         let rms = |dbfs: f32| 10f32.powf(dbfs / 20.0);
         let mut l = MicLevels::default();
-        for _ in 0..MIC_SETTLE_CHUNKS {
-            l.observe(rms(noise), 0.0, false, gain);
-            l.observe(rms(speech), 0.0, true, gain);
+        for _ in 0..(MIC_SETTLE_SAMPLES / 1600) {
+            l.observe(rms(noise), 0.0, 1600, false, gain);
+            l.observe(rms(speech), 0.0, 1600, true, gain);
         }
         l
     }

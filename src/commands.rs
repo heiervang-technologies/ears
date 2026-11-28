@@ -134,6 +134,169 @@ impl VoiceCommands {
 
     /// Offer `heard` to the steering command. True when it acted.
     pub async fn steer(&self, heard: &str) -> bool {
+        if is_voice_cmd_handle(&self.steer) {
+            if let Some(handled) = self.steer_persistent(heard).await {
+                return handled;
+            }
+        }
+        self.steer_oneshot(heard).await
+    }
+
+    /// Offer `heard` to a persistent `<prog> serve` worker. Returns `None` if
+    /// `serve` is unsupported for this command or if the request failed before
+    /// reaching the worker (caller falls back to one-shot).
+    async fn steer_persistent(&self, heard: &str) -> Option<bool> {
+        self.steer_persistent_with_ready_timeout(heard, STEER_SERVE_READY_TIMEOUT)
+            .await
+    }
+
+    async fn steer_persistent_with_ready_timeout(
+        &self,
+        heard: &str,
+        ready_timeout: std::time::Duration,
+    ) -> Option<bool> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        enum SteerIoError {
+            Write(std::io::Error),
+            Read(std::io::Error),
+        }
+
+        let program = self.steer.first()?;
+        let extra_args = self.steer.get(2..).unwrap_or(&[]);
+        let slot = steer_worker_slot(&self.steer);
+        let mut state = slot.lock().await;
+
+        // If a running worker exited between utterances, reap it and respawn.
+        if let SteerWorkerState::Running(worker) = &mut *state {
+            if worker.has_exited() {
+                if let SteerWorkerState::Running(dead) = std::mem::replace(
+                    &mut *state,
+                    SteerWorkerState::Idle {
+                        transient_failures: 0,
+                    },
+                ) {
+                    dead.kill_and_reap().await;
+                }
+            }
+        }
+
+        match &*state {
+            SteerWorkerState::Unsupported => return None,
+            SteerWorkerState::Idle { transient_failures } => {
+                let failures = *transient_failures;
+                match spawn_steer_worker_with_timeout(program, extra_args, ready_timeout).await {
+                    SpawnSteerResult::Ready(worker) => *state = SteerWorkerState::Running(worker),
+                    SpawnSteerResult::Unsupported => {
+                        *state = SteerWorkerState::Unsupported;
+                        return None;
+                    }
+                    SpawnSteerResult::Transient => {
+                        let next = failures.saturating_add(1);
+                        if next >= MAX_STEER_TRANSIENT_FAILURES {
+                            tracing::warn!(
+                                program,
+                                attempts = next,
+                                "Persistent steer worker failed handshake repeatedly; latching one-shot fallback"
+                            );
+                            *state = SteerWorkerState::Unsupported;
+                        } else {
+                            *state = SteerWorkerState::Idle {
+                                transient_failures: next,
+                            };
+                        }
+                        return None;
+                    }
+                }
+            }
+            SteerWorkerState::Running(_) => {}
+        }
+
+        let SteerWorkerState::Running(worker) = &mut *state else {
+            return None;
+        };
+
+        let mut payload = serde_json::to_string(&serde_json::json!({ "text": heard }))
+            .unwrap_or_else(|_| "{\"text\":\"\"}".to_string());
+        payload.push('\n');
+
+        let limit = std::time::Duration::from_millis(self.steer_timeout_ms);
+        let reply = tokio::time::timeout(limit, async {
+            worker
+                .stdin
+                .write_all(payload.as_bytes())
+                .await
+                .map_err(SteerIoError::Write)?;
+            worker.stdin.flush().await.map_err(SteerIoError::Write)?;
+            let mut line = String::new();
+            let n = worker
+                .stdout
+                .read_line(&mut line)
+                .await
+                .map_err(SteerIoError::Read)?;
+            if n == 0 {
+                return Err(SteerIoError::Read(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "steer worker closed stdout",
+                )));
+            }
+            Ok::<String, SteerIoError>(line)
+        })
+        .await;
+
+        let idle = SteerWorkerState::Idle {
+            transient_failures: 0,
+        };
+        match reply {
+            Ok(Ok(line)) => match line.trim() {
+                "1" => Some(true),
+                "0" => Some(false),
+                other => {
+                    tracing::warn!(
+                        reply = other,
+                        "Steering worker returned unexpected reply; respawning next utterance"
+                    );
+                    if let SteerWorkerState::Running(bad) = std::mem::replace(&mut *state, idle) {
+                        bad.kill_and_reap().await;
+                    }
+                    Some(false)
+                }
+            },
+            Ok(Err(SteerIoError::Write(error))) => {
+                tracing::warn!(
+                    %error,
+                    "Steering worker stdin write failed; falling back to one-shot"
+                );
+                if let SteerWorkerState::Running(bad) = std::mem::replace(&mut *state, idle) {
+                    bad.kill_and_reap().await;
+                }
+                None
+            }
+            Ok(Err(SteerIoError::Read(error))) => {
+                // Request was already flushed to the worker, which may have
+                // executed a non-idempotent side effect before exiting/failing.
+                // Tear down so the next utterance respawns, but do NOT re-run
+                // one-shot for this utterance.
+                tracing::warn!(
+                    %error,
+                    "Steering worker failed after receiving request; not re-running one-shot"
+                );
+                if let SteerWorkerState::Running(bad) = std::mem::replace(&mut *state, idle) {
+                    bad.kill_and_reap().await;
+                }
+                Some(false)
+            }
+            Err(_) => {
+                tracing::warn!("Steering command took over {:?}; typing instead", limit);
+                if let SteerWorkerState::Running(hung) = std::mem::replace(&mut *state, idle) {
+                    hung.kill_and_reap().await;
+                }
+                Some(false)
+            }
+        }
+    }
+
+    async fn steer_oneshot(&self, heard: &str) -> bool {
         let Some((program, args)) = self.steer.split_first() else {
             return false;
         };
@@ -163,6 +326,170 @@ impl VoiceCommands {
                 tracing::warn!("Steering command took over {:?}; typing instead", limit);
                 false
             }
+        }
+    }
+}
+
+const STEER_SERVE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+const STEER_REAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+const MAX_STEER_TRANSIENT_FAILURES: u32 = 2;
+
+enum SpawnSteerResult {
+    Ready(Box<SteerChild>),
+    Unsupported,
+    Transient,
+}
+
+/// Whether `steer` argv qualifies for the persistent `<prog> serve` worker:
+/// `[<...voice-cmd>, "handle", ...]`.
+fn is_voice_cmd_handle(argv: &[String]) -> bool {
+    let Some(program) = argv.first() else {
+        return false;
+    };
+    if argv.get(1).map(String::as_str) != Some("handle") {
+        return false;
+    }
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.ends_with("voice-cmd"))
+}
+
+struct SteerChild {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::BufReader<tokio::process::ChildStdout>,
+}
+
+impl SteerChild {
+    async fn kill_and_reap(mut self) {
+        drop(self.stdin);
+        drop(self.stdout);
+        let _ = self.child.start_kill();
+        let _ = tokio::time::timeout(STEER_REAP_TIMEOUT, self.child.wait()).await;
+    }
+
+    fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+    }
+}
+
+enum SteerWorkerState {
+    /// Not yet started, or torn down after an error/timeout (respawns next call).
+    /// `transient_failures` counts consecutive startup handshake timeouts/errors
+    /// so a persistently slow or broken `serve` latches `Unsupported` instead of
+    /// stalling every utterance.
+    Idle { transient_failures: u32 },
+    /// Resident `<prog> serve` child ready for JSON-line queries.
+    Running(Box<SteerChild>),
+    /// `<prog> serve` did not print `READY` on startup: always use one-shot.
+    Unsupported,
+}
+
+type SteerWorkerSlot = std::sync::Arc<tokio::sync::Mutex<SteerWorkerState>>;
+type SteerWorkerMap = std::collections::HashMap<Vec<String>, SteerWorkerSlot>;
+
+fn steer_worker_slot(key: &[String]) -> SteerWorkerSlot {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static WORKERS: OnceLock<Mutex<SteerWorkerMap>> = OnceLock::new();
+    let map = WORKERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(key.to_vec())
+        .or_insert_with(|| {
+            Arc::new(tokio::sync::Mutex::new(SteerWorkerState::Idle {
+                transient_failures: 0,
+            }))
+        })
+        .clone()
+}
+
+async fn spawn_steer_worker_with_timeout(
+    program: &str,
+    extra_args: &[String],
+    ready_timeout: std::time::Duration,
+) -> SpawnSteerResult {
+    use tokio::io::AsyncBufReadExt;
+
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.arg("serve")
+        .args(extra_args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let mut child = {
+        let mut attempt = 0u8;
+        loop {
+            match cmd.spawn() {
+                Ok(child) => break child,
+                Err(error) if error.raw_os_error() == Some(26) && attempt < 5 => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        program,
+                        "Persistent steer worker did not start; falling back to one-shot"
+                    );
+                    return SpawnSteerResult::Transient;
+                }
+            }
+        }
+    };
+    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.start_kill();
+        let _ = tokio::time::timeout(STEER_REAP_TIMEOUT, child.wait()).await;
+        return SpawnSteerResult::Transient;
+    };
+    let mut worker = SteerChild {
+        child,
+        stdin,
+        stdout: tokio::io::BufReader::new(stdout),
+    };
+    let mut line = String::new();
+    match tokio::time::timeout(ready_timeout, worker.stdout.read_line(&mut line)).await {
+        Ok(Ok(n)) if n > 0 && line.trim() == "READY" => {
+            tracing::debug!(program, "Persistent steer worker ready");
+            SpawnSteerResult::Ready(Box::new(worker))
+        }
+        Ok(Ok(0)) => {
+            tracing::debug!(
+                program,
+                "Steer serve exited before READY; falling back to one-shot"
+            );
+            worker.kill_and_reap().await;
+            SpawnSteerResult::Unsupported
+        }
+        Ok(Ok(_)) => {
+            tracing::debug!(
+                program,
+                banner = line.trim(),
+                "Steer serve printed unexpected banner; falling back to one-shot"
+            );
+            worker.kill_and_reap().await;
+            SpawnSteerResult::Unsupported
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(
+                %error,
+                program,
+                "Steer serve handshake failed; falling back to one-shot"
+            );
+            worker.kill_and_reap().await;
+            SpawnSteerResult::Transient
+        }
+        Err(_) => {
+            tracing::debug!(
+                program,
+                "Steer serve did not print READY within {:?}; falling back to one-shot",
+                ready_timeout
+            );
+            worker.kill_and_reap().await;
+            SpawnSteerResult::Transient
         }
     }
 }
@@ -946,6 +1273,241 @@ mod tests {
         assert!(!commands.steer("5").await, "a slow command loses to typing");
         commands.steer = vec!["/nonexistent/steer".into()];
         assert!(!commands.steer("x").await);
+    }
+
+    async fn shutdown_steer_worker(key: &[String]) {
+        let slot = steer_worker_slot(key);
+        let mut state = slot.lock().await;
+        if let SteerWorkerState::Running(worker) = std::mem::replace(
+            &mut *state,
+            SteerWorkerState::Idle {
+                transient_failures: 0,
+            },
+        ) {
+            worker.kill_and_reap().await;
+        }
+    }
+
+    fn write_executable(path: &std::path::Path, content: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, content).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn persistent_steer_worker_reuses_one_process_for_fast_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawns = dir.path().join("spawns");
+        let script = dir.path().join("mock-voice-cmd");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = 'serve' ]; then\n\
+                     printf '1\\n' >> {}\n\
+                     printf 'READY\\n'\n\
+                     while IFS= read -r line; do\n\
+                         case \"$line\" in\n\
+                             *'\"text\":\"click search\"'*) printf '1\\n' ;;\n\
+                             *) printf '0\\n' ;;\n\
+                         esac\n\
+                     done\n\
+                     exit 0\n\
+                 fi\n\
+                 exit 1\n",
+                spawns.display()
+            ),
+        );
+        let commands = VoiceCommands {
+            steer: vec![script.display().to_string(), "handle".into()],
+            ..Default::default()
+        };
+        // First call spawns the resident worker and completes handshake.
+        assert!(commands.steer("click search").await);
+        // Subsequent queries reuse the resident stdio pipe in sub-millisecond time.
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            assert!(!commands.steer("just dictating some words").await);
+            assert!(commands.steer("click search").await);
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(10),
+            "10 warm persistent steer queries should take <10ms total, took {:?}",
+            elapsed
+        );
+        let spawn_count = std::fs::read_to_string(&spawns).unwrap().lines().count();
+        assert_eq!(spawn_count, 1, "worker must be spawned once and reused");
+        shutdown_steer_worker(&commands.steer).await;
+    }
+
+    #[tokio::test]
+    async fn persistent_steer_worker_falls_back_when_serve_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let serve_attempts = dir.path().join("serve_attempts");
+        let script = dir.path().join("legacy-voice-cmd");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = 'serve' ]; then\n\
+                     printf '1\\n' >> {}\n\
+                     exit 2\n\
+                 fi\n\
+                 [ \"$1\" = 'handle' ] && [ \"$2\" = 'click search' ]\n",
+                serve_attempts.display()
+            ),
+        );
+        let commands = VoiceCommands {
+            steer: vec![script.display().to_string(), "handle".into()],
+            ..Default::default()
+        };
+        assert!(commands.steer("click search").await);
+        assert!(!commands.steer("hello world").await);
+        assert!(commands.steer("click search").await);
+        let attempts = std::fs::read_to_string(&serve_attempts)
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(
+            attempts, 1,
+            "serve should be probed once then cached as unsupported"
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_steer_worker_respawns_after_timeout_and_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawns = dir.path().join("spawns");
+        let script = dir.path().join("flaky-voice-cmd");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = 'serve' ]; then\n\
+                     printf '1\\n' >> {}\n\
+                     printf 'READY\\n'\n\
+                     while IFS= read -r line; do\n\
+                         case \"$line\" in\n\
+                             *hang*) sleep 5 ;;\n\
+                             *crash*) exit 1 ;;\n\
+                             *click*) printf '1\\n' ;;\n\
+                             *) printf '0\\n' ;;\n\
+                         esac\n\
+                     done\n\
+                     exit 0\n\
+                 fi\n\
+                 exit 1\n",
+                spawns.display()
+            ),
+        );
+        let commands = VoiceCommands {
+            steer: vec![script.display().to_string(), "handle".into()],
+            steer_timeout_ms: 250,
+            ..Default::default()
+        };
+        assert!(commands.steer("click search").await);
+        // Timeout kills and reaps worker #1 and returns false.
+        assert!(!commands.steer("hang now").await);
+        // Next utterance transparently respawns worker #2 and succeeds.
+        assert!(commands.steer("click search").await);
+        // Crash/EOF tears down worker #2 and returns false.
+        assert!(!commands.steer("crash now").await);
+        // Next utterance transparently respawns worker #3 and succeeds.
+        assert!(commands.steer("click search").await);
+        let spawn_count = std::fs::read_to_string(&spawns).unwrap().lines().count();
+        assert_eq!(spawn_count, 3, "expected initial spawn + 2 respawns");
+        shutdown_steer_worker(&commands.steer).await;
+    }
+
+    #[tokio::test]
+    async fn persistent_steer_worker_latches_unsupported_after_ready_timeouts() {
+        let dir = tempfile::tempdir().unwrap();
+        let serve_attempts = dir.path().join("serve_attempts");
+        let script = dir.path().join("slow-voice-cmd");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = 'serve' ]; then\n\
+                     printf '1\\n' >> {}\n\
+                     sleep 5\n\
+                     exit 0\n\
+                 fi\n\
+                 exit 0\n",
+                serve_attempts.display()
+            ),
+        );
+        let commands = VoiceCommands {
+            steer: vec![script.display().to_string(), "handle".into()],
+            ..Default::default()
+        };
+        let fast = std::time::Duration::from_millis(60);
+        // First MAX_STEER_TRANSIENT_FAILURES attempts time out and return None,
+        // then subsequent calls must stay latched Unsupported without respawning.
+        for _ in 0..(MAX_STEER_TRANSIENT_FAILURES + 3) {
+            assert_eq!(
+                commands
+                    .steer_persistent_with_ready_timeout("click search", fast)
+                    .await,
+                None
+            );
+        }
+        let attempts = std::fs::read_to_string(&serve_attempts)
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(
+            attempts, MAX_STEER_TRANSIENT_FAILURES as usize,
+            "slow serve should latch Unsupported after MAX_STEER_TRANSIENT_FAILURES"
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_steer_worker_eof_after_write_does_not_rerun_oneshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let invocations = dir.path().join("invocations");
+        let script = dir.path().join("crash-after-read-voice-cmd");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = 'serve' ]; then\n\
+                     printf 'READY\\n'\n\
+                     while IFS= read -r line; do\n\
+                         printf 'serve\\n' >> {0}\n\
+                         case \"$line\" in\n\
+                             *crash*) exit 1 ;;\n\
+                             *) printf '1\\n' ;;\n\
+                         esac\n\
+                     done\n\
+                     exit 0\n\
+                 fi\n\
+                 printf 'oneshot\\n' >> {0}\n\
+                 exit 0\n",
+                invocations.display()
+            ),
+        );
+        let commands = VoiceCommands {
+            steer: vec![script.display().to_string(), "handle".into()],
+            steer_timeout_ms: 500,
+            ..Default::default()
+        };
+        assert!(commands.steer("click search").await);
+        // Worker reads request, records "serve", then exits (EOF on stdout).
+        // steer() must return false and MUST NOT fall back to one-shot.
+        assert!(!commands.steer("crash now").await);
+        let log: Vec<String> = std::fs::read_to_string(&invocations)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            log,
+            vec!["serve", "serve"],
+            "EOF after request was written must not re-run non-idempotent one-shot: {log:?}"
+        );
+        shutdown_steer_worker(&commands.steer).await;
     }
 
     #[test]

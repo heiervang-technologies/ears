@@ -1213,20 +1213,79 @@ fn test_final_from_partial_needs_coverage() {
     );
     assert_eq!(check(F::Settled, tail(2800, 500, text), 7, 700), None);
     assert_eq!(check(F::Settled, tail(2800, 20, text), 7, 200), None);
-    // Another stream utterance, or a result short enough for the
-    // no-speech check.
+    // Another stream utterance or a filtered silence artifact is rejected.
     assert_eq!(check(F::Covered, tail(3100, 20, text), 8, 700), None);
-    assert_eq!(check(F::Covered, tail(3100, 20, "Okay."), 7, 700), None);
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Thank you."), 7, 700),
+        None
+    );
+    // Short results require full coverage (not `Settled` lag estimate) and
+    // are still verified by the in-memory no-speech check before commit.
+    assert_eq!(check(F::Settled, tail(2800, 20, "Okay."), 7, 700), None);
+    assert_eq!(
+        check(F::Covered, tail(3100, 20, "Okay."), 7, 700),
+        Some("decoded to the end of speech")
+    );
 }
 
 #[tokio::test]
-async fn test_short_live_final_goes_through_the_full_transcription() {
+async fn test_short_live_final_uses_no_speech_check_without_full_retranscription() {
+    use crate::stream_client::fake::{FakeServer, Mode};
+    use wiremock::{matchers::path, Mock, MockServer};
     let dir = tempfile::tempdir().unwrap();
-    let (mut engine, lines, server, _whisper) = live_final_engine(dir.path(), 1).await;
-    speak_and_finish(&mut engine, &server, Some("Okay.")).await;
-    assert_eq!(
-        next_cmd_ticking(&mut engine, &lines).await,
-        "C from the full transcription."
+    let whisper = MockServer::start().await;
+    // Expect 0 full HTTP /v1/audio/transcriptions calls; verification happens
+    // via /v1/chat/completions in-memory instead.
+    Mock::given(path("/v1/audio/transcriptions"))
+        .respond_with(transcription("from the full transcription."))
+        .expect(0)
+        .mount(&whisper)
+        .await;
+    Mock::given(path("/v1/models"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data": [{"id": "qwen-asr"}]})),
+        )
+        .mount(&whisper)
+        .await;
+    Mock::given(path("/v1/chat/completions"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "language None<asr_text>"}}]
+            })),
+        )
+        .expect(1)
+        .mount(&whisper)
+        .await;
+    let server = FakeServer::start(Mode::Normal).await;
+    let (mut engine, lines) = ghost_engine_at(dir.path(), &whisper.uri());
+    engine.set_continuous(Some(spec_at(&server.url)));
+    engine.set_final_correction(false);
+    tick_until(&mut engine, stream_up).await;
+
+    feed(&mut engine, &[0.55, 0.55, 0.55]);
+    ghost_tick(&mut engine).await;
+    server.wait_for(|l| l.starts_with("start ")).await;
+    let id = server.starts()[0];
+    let segs = feed(&mut engine, &[0.55, 0.0, 0.0, 0.0]);
+    let finish = async {
+        server.wait_for(|l| l == format!("end {id}")).await;
+        server.say(serde_json::json!({
+            "type": "final",
+            "utterance": id,
+            "text": "Okay.",
+            "audio_ms": 1000,
+            "decode_ms": 40
+        }));
+    };
+    let (result, ()) = tokio::join!(
+        engine.process_segment(segs.into_iter().next().unwrap()),
+        finish
+    );
+    result.unwrap();
+    assert!(
+        lines.try_iter().all(|l| !l.starts_with("C ")),
+        "no-speech short final must be dropped without committing"
     );
 }
 

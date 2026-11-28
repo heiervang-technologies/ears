@@ -103,7 +103,9 @@ async fn handle_connection(
                                     session_active = false;
                                     // Send ~1s of silence to flush the VAD pipeline
                                     // (forces speech segment to end via silence timeout)
-                                    for _ in 0..10 {
+                                    let flush_chunks = (crate::pcm::SAMPLE_RATE as usize)
+                                        .div_ceil(crate::pipeline::AUDIO_CHUNK_SAMPLES);
+                                    for _ in 0..flush_chunks {
                                         audio_tx.send(vec![0.0; crate::pipeline::AUDIO_CHUNK_SAMPLES]).await?;
                                     }
                                 }
@@ -238,8 +240,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Should receive a silence flush (16000 samples of zeros)
-        for _ in 0..10 {
+        // Should receive a silence flush (~1s / >= 16000 samples of zeros)
+        let flush_chunks =
+            (crate::pcm::SAMPLE_RATE as usize).div_ceil(crate::pipeline::AUDIO_CHUNK_SAMPLES);
+        for _ in 0..flush_chunks {
             let silence = audio_rx.recv().await.expect("Should receive silence flush");
             assert_eq!(silence.len(), crate::pipeline::AUDIO_CHUNK_SAMPLES);
             assert!(silence.iter().all(|&s| s == 0.0));
@@ -256,8 +260,10 @@ mod tests {
             .send(Message::Text(r#"{"type":"start"}"#.into()))
             .await
             .unwrap();
-        // 104 chunks exceed the 100-chunk queue; use multi-chunk messages.
-        for group in 0..26 {
+        // Exceed the bounded queue; use multi-chunk messages.
+        let total_chunks = crate::pipeline::AUDIO_QUEUE_CHUNKS + 4;
+        let groups = total_chunks / 4;
+        for group in 0..groups {
             let mut bytes = Vec::new();
             for chunk in group * 4..group * 4 + 4 {
                 for _ in 0..crate::pipeline::AUDIO_CHUNK_SAMPLES {
@@ -275,7 +281,7 @@ mod tests {
         .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(audio_rx.len(), crate::pipeline::AUDIO_QUEUE_CHUNKS);
-        for chunk in 0..104 {
+        for chunk in 0..groups * 4 {
             let samples = tokio::time::timeout(std::time::Duration::from_secs(2), audio_rx.recv())
                 .await
                 .unwrap()
@@ -297,7 +303,7 @@ mod tests {
             .send(Message::Text(r#"{"type":"start"}"#.into()))
             .await
             .unwrap();
-        for _ in 0..110 {
+        for _ in 0..crate::pipeline::AUDIO_QUEUE_CHUNKS + 10 {
             write
                 .send(Message::Binary(vec![
                     0;
