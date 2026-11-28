@@ -143,6 +143,25 @@ impl Subtitles {
         self.write_with(heard, heard.len(), true, false, extra);
     }
 
+    /// Utterance discarded for a user-visible reason (e.g. `text_fields_only`
+    /// when no text field is focused). Leaves `command = false` so the overlay
+    /// does not pulse as a command, while still showing the reason via `action`.
+    pub fn dropped(&mut self, mode: Mode, heard: &str, reason: &str) {
+        if !self.modes.contains(&mode) {
+            return;
+        }
+        let heard = heard.trim();
+        if heard.is_empty() {
+            self.clear();
+            return;
+        }
+        let mut extra = serde_json::Map::new();
+        if !reason.is_empty() {
+            extra.insert("action".into(), reason.into());
+        }
+        self.write_with(heard, heard.len(), true, false, extra);
+    }
+
     fn write(&mut self, text: &str, settled: usize, final_: bool, command: bool) {
         self.write_with(text, settled, final_, command, serde_json::Map::new());
     }
@@ -333,5 +352,11 @@ mod tests {
         assert_eq!(line["command"], false);
         s.missed(Mode::Command, "", None);
         assert_eq!(read(dir.path())["text"], "");
+        s.dropped(Mode::Dictation, "hello world", "no text field in hover");
+        let line = read(dir.path());
+        assert_eq!(line["text"], "hello world");
+        assert_eq!(line["action"], "no text field in hover");
+        assert_eq!(line["command"], false);
+        assert_eq!(line["final"], true);
     }
 }

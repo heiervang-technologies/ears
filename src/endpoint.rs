@@ -25,10 +25,11 @@ pub enum Ending {
 /// Last words that promise more: a sentence that ends on one of them is
 /// someone thinking, not done.
 const GOES_ON: &[&str] = &[
-    "and", "but", "or", "because", "if", "then", "the", "a", "an", "of", "with", "that", "this",
-    "uh", "um", "ah", "er", "eh", "hmm", "mm", "like", "my", "your", "our", "their", "his", "her",
-    "its", "is", "are", "was", "in", "on", "at", "for", "from", "by", "as", "about", "when",
-    "which", "who", "where", "while", "than",
+    "and", "but", "or", "because", "if", "then", "the", "a", "an", "of", "with", "without", "that",
+    "this", "uh", "um", "ah", "er", "eh", "hmm", "mm", "like", "my", "your", "our", "their", "his",
+    "her", "its", "is", "are", "was", "in", "on", "at", "for", "from", "by", "as", "about", "into",
+    "onto", "through", "between", "during", "before", "after", "when", "which", "who", "where",
+    "while", "than",
 ];
 
 /// How the live transcript ends: `raw` as the model wrote it (its
@@ -343,6 +344,12 @@ mod tests {
         assert!(!is_clause_settled("our config uh and"));
         assert!(!is_clause_settled("check the"));
         assert!(!is_clause_settled("because"));
+        assert!(!is_clause_settled("not typing without"));
+        assert!(!is_clause_settled("looking into"));
+        assert_eq!(
+            ending("not typing without.", "not typing without", None),
+            None
+        );
         // Single words and trailing ellipsis / continuation punctuation stay unsettled.
         assert!(!is_clause_settled("hello"));
         assert!(!is_clause_settled("Well..."));

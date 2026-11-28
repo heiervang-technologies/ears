@@ -1405,11 +1405,12 @@ impl StreamingEngine {
                 let field = self.text_field_focused();
                 let class = crate::ghost::hyprland_active_class();
                 if self.commands.route(field, class.as_deref()) == crate::commands::Route::Drop {
-                    self.ghost_clear();
-                    self.discard(&format!(
+                    let reason = format!(
                         "no text field in {}",
                         class.as_deref().unwrap_or("the focused window")
-                    ));
+                    );
+                    self.ghost_clear();
+                    self.discard_showing(&transcript, &reason);
                     return Ok(());
                 }
             }
@@ -1679,6 +1680,16 @@ impl StreamingEngine {
         info!("Segment discarded: {}", reason);
         if let Some(subtitles) = self.subtitles.as_mut() {
             subtitles.clear();
+        }
+        self.send_event(StreamingEvent::SegmentDiscarded {
+            reason: reason.to_string(),
+        });
+    }
+
+    fn discard_showing(&mut self, heard: &str, reason: &str) {
+        info!("Segment discarded: {}", reason);
+        if let Some(subtitles) = self.subtitles.as_mut() {
+            subtitles.dropped(crate::subtitles::Mode::Dictation, heard, reason);
         }
         self.send_event(StreamingEvent::SegmentDiscarded {
             reason: reason.to_string(),
